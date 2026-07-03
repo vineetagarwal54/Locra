@@ -44,13 +44,15 @@ Locra runs a quantized vision-language model entirely on your Android device. Po
 
 > Full offline pipeline. Every box runs on the device.
 
-![Phase 1 HLD](docs/hld-phase1.png)
+<img width="1672" height="941" alt="Locra_HLD" src="https://github.com/user-attachments/assets/61874699-4816-486a-82a5-cd2c89c3b126" />
+
 
 ### Inference Lifecycle
 
 > Single-flight lock, streamed tokens, graceful OOM handling.
 
-![Inference Lifecycle](docs/inference-lifecycle.png)
+<img width="1672" height="941" alt="Locra_LLD" src="https://github.com/user-attachments/assets/8441fce6-079c-4fdc-8078-8ec5810566c2" />
+
 
 ---
 
