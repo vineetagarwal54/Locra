@@ -70,6 +70,39 @@ Templates requiring updates:
     criteria.
 
 Follow-up TODOs: none new.
+
+------------------------------------------------------------------------------
+
+Version change: 1.1.0 → 1.2.0
+
+Modified principles: N/A (no existing principle redefined)
+
+Added sections:
+  - Core Principle XI (Single Theme Source): all color, spacing, radius, and
+    typography-scale values MUST be imported from `src/constants/theme.ts`; no
+    hardcoded hex values or magic numbers in `StyleSheet.create()`. Codifies the
+    already-present `src/constants/theme.ts` (current accent `#7C5CFC`, electric
+    violet) as the single, propagating source of design tokens.
+  - Development Workflow: Constitution Check gate now evaluates against all
+    ELEVEN principles; code-review checklist gains a design-token check (no
+    hardcoded colors/magic numbers in StyleSheet, every screen/component
+    references `theme.*` only).
+
+Rationale for MINOR bump (not MAJOR): a new principle is added; no existing
+principle is redefined or removed. Principle XI is a MUST-level discipline but
+is NOT added to the NON-NEGOTIABLE blocking set (I, II, VI, VII), which is
+reserved for app-safety-critical guarantees.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — Constitution Check gate is generic
+    ("[Gates determined based on constitution file]") and defers to this file;
+    future /speckit-plan runs must enumerate all eleven principles in that gate.
+  - ✅ .specify/templates/spec-template.md — no constitution-specific references;
+    compatible as-is.
+  - ✅ .specify/templates/tasks-template.md — no constitution-specific references;
+    compatible as-is. Screen/component tasks must reference `theme.*` per XI.
+
+Follow-up TODOs: none new.
 -->
 
 # Locra Constitution
@@ -189,6 +222,21 @@ independently testable and the UI safely replaceable; violating them under
 time pressure compounds technical debt in the most safety-critical part of
 the app.
 
+### XI. Single Theme Source
+
+All color, spacing, radius, and typography-scale values MUST be imported from
+`src/constants/theme.ts`. Hardcoded hex values are not permitted anywhere in the
+UI, and magic numbers MUST NOT appear inside `StyleSheet.create()` calls for any
+value the theme defines (colors, spacing, radii, font sizes). Every screen and
+component MUST reference `theme.*` only, so that changing a value in
+`theme.ts` — for example the current accent `#7C5CFC` (electric violet) —
+propagates everywhere automatically with no per-file edits.
+
+**Rationale**: A single source of design tokens makes retheming a one-line
+change, keeps the app visually consistent by construction, and makes drift
+(a stray hex, an off-scale margin) mechanically detectable in review rather
+than a matter of taste.
+
 ## Technology Constraints
 
 - React Native 0.76+ with the New Architecture enabled, targeting Android
@@ -214,7 +262,7 @@ the app.
 ## Development Workflow
 
 - Every `/speckit-plan` Constitution Check gate MUST evaluate the feature
-  against all ten principles above before Phase 0 research begins, and again
+  against all eleven principles above before Phase 0 research begins, and again
   after Phase 1 design.
 - A violation of a NON-NEGOTIABLE principle (I, II, VI, VII) blocks the plan;
   it MUST be redesigned, not justified away in Complexity Tracking.
@@ -223,8 +271,10 @@ the app.
   alternative is insufficient.
 - Code review MUST confirm: no network calls were added to the inference
   path, the single-flight lock is respected end-to-end, tests precede
-  implementation for inference/model-lifecycle code, and the architecture
-  boundaries in Principle X are intact.
+  implementation for inference/model-lifecycle code, the architecture
+  boundaries in Principle X are intact, and no hardcoded colors or magic
+  numbers were introduced in `StyleSheet.create()` calls — every screen and
+  component references `theme.*` only (Principle XI).
 - Before installing any new native dependency (any package whose `android/`
   directory contains a `CMakeLists.txt` or its own native `build.gradle`),
   verify it does not hard-require NDK 27+ by inspecting those files for an
@@ -254,4 +304,4 @@ constitution via the Constitution Check gate. Use `CLAUDE.md` and
 `AGENTS.md` for day-to-day runtime development guidance derived from these
 principles.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-04
+**Version**: 1.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-04

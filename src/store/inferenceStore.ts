@@ -89,6 +89,8 @@ export interface InferenceStoreState extends InferenceState {
   /** Rejects if a request is already in-flight (single-flight, FR-006). */
   submit: (request: InferenceRequest) => Promise<void>;
   cancel: () => void;
+  /** Flags the most recently completed session as a bad answer (US4, FR-016). */
+  flagCurrentSession: (note?: string) => void;
 }
 
 export const useInferenceStore = create<InferenceStoreState>(() => ({
@@ -101,6 +103,7 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
     return queue.submit(request);
   },
   cancel: (): void => queue.cancel(),
+  flagCurrentSession: (note?: string): void => flagLastSavedSession(note),
 }));
 
 // Mirror every queue transition into the store so screens re-render, and persist
@@ -142,6 +145,15 @@ function historyStoreSaveStub(session: QASession): void {
 /** Dev/inspection hook for the stubbed save sink; removed when T031 wires real history. */
 export function __getLastSavedSession(): QASession | null {
   return lastSavedSession;
+}
+
+function flagLastSavedSession(note?: string): void {
+  // TODO(T033): replace with `useHistoryStore.getState().setFlag(id, true, note)`
+  // once the real MMKV-backed history store exists. For now flag the in-memory
+  // stub in place so the Answer screen's report action is fully wired.
+  if (lastSavedSession !== null) {
+    lastSavedSession = { ...lastSavedSession, flagged: true, flagNote: note ?? null };
+  }
 }
 
 function saveCompletedSession(request: InferenceRequest, state: InferenceState): void {
