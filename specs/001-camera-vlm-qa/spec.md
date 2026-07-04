@@ -1,0 +1,162 @@
+# Feature Specification: Camera Vision Q&A (Phase 1)
+
+**Feature Branch**: `001-camera-vlm-qa`
+
+**Created**: 2026-07-03
+
+**Status**: Draft
+
+**Input**: User description: "Build Locra Phase 1 — an Android app where a user captures a still image with their camera, types a question about it, and receives a streamed answer from a vision-language model running entirely on their device. Core user journey: open app, camera is ready, user points at something, types a question, taps submit, sees a streamed answer with performance metrics below it. The app must work in airplane mode from first inference onward. No network call is made during or after inference. No account, no login, no API key, no data leaves the device. The app has five screens: camera and prompt input, streamed answer with metrics, local Q&A history, model download and setup, and a benchmark visualization screen. The single hardest engineering problem in Phase 1 is memory-safe inference on a constrained Android device."
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Ask a question about what the camera sees (Priority: P1)
+
+A user opens the app, points the camera at something in the physical world, types a question about it, submits, and watches the answer stream in with performance metrics shown below it — entirely without an internet connection.
+
+**Why this priority**: This is the complete core loop and the entire reason the app exists. Without it there is no product; every other screen exists to support, protect, or explain this loop.
+
+**Independent Test**: With a compatible model already installed and the device verified compatible, capture an image, type a question, submit, and confirm a streamed answer with all performance metrics appears — verified while the device is in airplane mode.
+
+**Acceptance Scenarios**:
+
+1. **Given** the app is open with the camera ready and the model loaded, **When** the user captures an image, types a question, and taps submit, **Then** a streamed answer appears along with model load time, image preprocessing time, first-token latency, tokens per second, and total wall time.
+2. **Given** the device is in airplane mode, **When** the user completes the full capture-question-answer flow, **Then** the answer is produced successfully with no network activity at any point.
+3. **Given** an inference is currently streaming, **When** the user attempts to submit a new question, **Then** the system prevents the new submission until the current inference finishes or is cancelled.
+4. **Given** an inference is in progress, **When** the user cancels it, **Then** streaming stops immediately, no partial answer is saved to history, and the app returns to a ready state for a new request.
+
+---
+
+### User Story 2 - Get set up on a new or incompatible device (Priority: P2)
+
+A user launches the app for the first time, or on a device that cannot run the model, or with a missing/corrupted model file, and is guided to a clear setup or download screen instead of encountering a crash or a stuck screen.
+
+**Why this priority**: Without this, unsupported devices crash outright and any user whose model is missing or corrupted has no path forward. This protects every user's first impression of the app.
+
+**Independent Test**: Launch the app on a device profile below minimum requirements, and separately with the model file missing or corrupted, and confirm each situation routes to the correct screen without a crash.
+
+**Acceptance Scenarios**:
+
+1. **Given** a device that does not meet minimum memory or OS requirements, **When** the app launches, **Then** the user sees a setup screen explaining the device is unsupported, and no crash occurs.
+2. **Given** a device that meets requirements but has no model installed, **When** the app launches, **Then** the user is routed to a download screen.
+3. **Given** a previously downloaded model file has become corrupted, **When** the app attempts to load it, **Then** the user is routed to the download screen rather than experiencing a crash.
+4. **Given** a model download is interrupted, **When** the user reopens the app, **Then** the download resumes without restarting from zero.
+
+---
+
+### User Story 3 - Review and manage past questions (Priority: P3)
+
+A user revisits a local history of previous Q&A sessions and deletes entries they no longer want kept on the device.
+
+**Why this priority**: Reinforces the local-only promise and lets users control their own device storage, but the app is still usable end-to-end without it.
+
+**Independent Test**: Complete several ask flows, open the history screen, confirm entries appear with their metrics, delete one entry and then clear all history, and confirm the list updates immediately each time.
+
+**Acceptance Scenarios**:
+
+1. **Given** the user has completed several Q&A sessions, **When** they open history, **Then** all past sessions are listed with their questions, answers, and performance metrics.
+2. **Given** a history entry exists, **When** the user deletes it, **Then** it no longer appears in history and is not recoverable through the app.
+3. **Given** the user clears all history, **When** they reopen the history screen, **Then** it shows an empty state rather than an error.
+
+---
+
+### User Story 4 - Flag a bad answer (Priority: P4)
+
+After receiving an answer, a user marks it as incorrect or unhelpful without navigating away from the current screen.
+
+**Why this priority**: A quality-feedback signal for the user's own record; valuable but not required for the app's core function to work.
+
+**Independent Test**: After receiving an answer, trigger the report action and confirm the session is marked as flagged without leaving the current screen and without any network activity.
+
+**Acceptance Scenarios**:
+
+1. **Given** an answer is displayed, **When** the user triggers the report action, **Then** the session is marked as flagged without navigating away from the current screen.
+2. **Given** a session has been flagged, **When** the user later views it in history, **Then** it is visibly marked as flagged.
+
+---
+
+### User Story 5 - See performance trends (Priority: P5)
+
+A user opens a benchmark screen and sees the recorded performance metrics visualized across their past sessions.
+
+**Why this priority**: Informational and useful for understanding device performance, but the least critical to the app's primary purpose.
+
+**Independent Test**: After several completed inferences, open the benchmark screen and confirm all five performance metrics are visualized or summarized across those sessions.
+
+**Acceptance Scenarios**:
+
+1. **Given** multiple completed Q&A sessions exist, **When** the user opens the benchmark screen, **Then** they see model load time, image preprocessing time, first-token latency, tokens per second, and total wall time visualized across those sessions.
+2. **Given** no sessions have been recorded yet, **When** the user opens the benchmark screen, **Then** it shows an empty, informational state rather than an error.
+
+---
+
+### Edge Cases
+
+- What happens when the user submits a question with no image captured, or an empty/blank question?
+- What happens when the app is backgrounded or the device is rotated while an inference is in progress?
+- What happens when the device runs out of memory mid-inference?
+- What happens when free device storage is insufficient to complete a model download?
+- How does the system behave when camera permission is denied or revoked?
+- How does the system decide compatibility for a device that sits right at the minimum memory threshold?
+- What happens if the model file passes integrity verification but the device still fails to load it (e.g., an unexpected runtime failure)?
+- How does history behave once it grows very large — does browsing remain responsive?
+- What happens if the user toggles airplane mode on or off during an active session (should have no effect, since no step of the flow depends on connectivity)?
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+- **FR-001**: System MUST allow the user to capture a still image using the device camera from the primary screen.
+- **FR-002**: System MUST allow the user to enter a free-text question associated with the captured image before submitting.
+- **FR-003**: System MUST allow the user to submit the captured image and question together as a single inference request.
+- **FR-004**: System MUST produce the answer using only on-device processing; no step of image capture, preprocessing, model inference, or answer generation may depend on network connectivity.
+- **FR-005**: System MUST display the answer as it is generated (streamed) rather than only after generation completes.
+- **FR-006**: System MUST prevent a new inference request from starting while a previous inference is still in progress; the user must wait for it to finish or cancel it first.
+- **FR-007**: System MUST allow the user to cancel an in-progress inference, after which the system returns to a ready state with no residual partial output.
+- **FR-008**: System MUST record, for every completed inference, the model load time, image preprocessing time, first-token latency, tokens generated per second, and total wall-clock time.
+- **FR-009**: System MUST display the recorded performance metrics to the user alongside the corresponding answer.
+- **FR-010**: System MUST check device compatibility (available memory and OS support) before attempting to load the model.
+- **FR-011**: System MUST present a dedicated setup screen, rather than crashing or hanging, when the device does not meet compatibility requirements, and MUST explain why inference is unavailable.
+- **FR-012**: System MUST detect when the on-device model is missing or fails integrity verification and route the user to a download screen instead of attempting inference.
+- **FR-013**: System MUST allow the user to download the required on-device model from the setup/download screen and MUST verify the downloaded model's integrity before making it available for inference.
+- **FR-014**: System MUST support resuming an interrupted model download without restarting the download from zero.
+- **FR-015**: System MUST persist a local record (history) of each completed Q&A session, including the question, the answer, and its performance metrics.
+- **FR-016**: System MUST allow the user to browse their local Q&A history.
+- **FR-017**: System MUST allow the user to delete an individual Q&A history entry and MUST allow the user to clear all history.
+- **FR-018**: Deleted history entries MUST NOT be recoverable through the app after deletion.
+- **FR-019**: System MUST allow the user to flag a specific answer as incorrect or unhelpful directly from the answer view, without leaving the app or requiring network access.
+- **FR-020**: System MUST provide a benchmark screen that visualizes recorded performance metrics across multiple past sessions.
+- **FR-021**: System MUST NOT require account creation, login, or an API key at any point in the app.
+- **FR-022**: System MUST NOT transmit captured images, questions, answers, flags/reports, or usage metrics to any external service at any time.
+- **FR-023**: System MUST respond to an out-of-memory condition during inference by returning to a clean, usable UI state with a clear error message rather than crashing.
+- **FR-024**: System MUST prevent submission of a request that is missing a captured image or contains an empty question.
+
+### Key Entities
+
+- **Q&A Session**: A single ask-and-answer interaction — holds a reference to the captured image, the question text, the generated answer text, a timestamp, its status (completed, cancelled, or errored), and whether it has been flagged.
+- **Performance Metrics**: The measured timing/throughput data for one Q&A Session — model load time, image preprocessing time, first-token latency, tokens per second, and total wall time.
+- **On-Device Model**: The installed vision-language model asset — tracks its download status, integrity/verification status, and whether it is currently available for inference.
+- **Device Compatibility Result**: The outcome of the compatibility check performed before model load — whether the device is supported, and the reason when it is not.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A user can go from capturing an image to seeing a completed streamed answer entirely while the device is in airplane mode, with zero network activity detected at any point in the flow.
+- **SC-002**: On a device that does not meet minimum requirements, the app never crashes on launch and instead shows an explanatory setup screen, in 100% of launch attempts.
+- **SC-003**: When the on-device model is missing or fails integrity verification, the user is routed to a download screen instead of experiencing a crash, in 100% of such cases.
+- **SC-004**: 100% of completed inferences display all five performance metrics (model load time, image preprocessing time, first-token latency, tokens per second, total wall time) to the user.
+- **SC-005**: A user can find and delete any past Q&A session from local history in two actions or fewer, and it never reappears afterward.
+- **SC-006**: A user can flag an answer as incorrect in a single action without leaving the answer screen.
+- **SC-007**: A user can view performance trends across their recorded sessions without leaving the app or needing any external tool.
+- **SC-008**: Across a sustained sequence of 50 consecutive ask attempts on a supported device, every attempt ends in either a delivered answer or a graceful, explained error state — never an application crash.
+
+## Assumptions
+
+- Phase 1 ships with a single selectable on-device vision-language model; choosing between multiple models is out of scope for this feature.
+- Flagging an answer as bad stores the flag and any accompanying note locally only; no report is transmitted anywhere, consistent with the zero-network requirement.
+- No cap on local history size is enforced in Phase 1; the user manages device storage by deleting entries manually.
+- Exactly one image may be attached per question; multi-image questions are out of scope (per the stated Phase 1 scope boundaries).
+- The question is entered as typed text; voice input is out of scope for Phase 1.
+- Downloading the on-device model is the only point in the app's lifecycle that uses network access; once the model is present and verified, every subsequent capture-question-answer flow is fully offline.
+- "Unsupported device" is determined by a compatibility check (available memory and OS version) performed at launch, before any model load is attempted; the exact thresholds are a planning/implementation decision, not a product decision.
