@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "locra-scaffold",
-    "slug": "locra-scaffold",
+    "name": "locra",
+    "slug": "locra",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -16,10 +16,19 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.locra.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9f543c30-f28d-4c1a-aaa0-eb01dc4527d4"
+      }
     }
   }
 }

@@ -35,6 +35,41 @@ Templates requiring updates:
 Follow-up TODOs:
   - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md and AGENTS.md do not yet exist;
     create them and link back to this constitution once written.
+
+------------------------------------------------------------------------------
+
+Version change: 1.0.0 → 1.1.0
+
+Modified principles: N/A (no existing principle redefined)
+
+Added sections:
+  - Technology Constraints: pinned NDK version (26.3.11579264) recorded as a
+    project-wide constraint, discovered during Phase 1 setup (T001–T006) when
+    `react-native-executorch`'s prebuilt native libraries and React Native's
+    own Fabric headers were found to require conflicting NDK major versions
+    (26 vs. 27) — see `specs/001-camera-vlm-qa/research.md` "Phase 1 Setup
+    Findings" for the full investigation.
+  - Development Workflow: new mandatory pre-install check — before adding any
+    native dependency (any package with an `android/` directory containing a
+    `CMakeLists.txt` or native `build.gradle`), verify it does not hard-require
+    NDK 27+ by inspecting that file, since this project is permanently pinned
+    to NDK 26.3.11579264 for local/EAS builds to succeed at all.
+
+Rationale for MINOR bump (not MAJOR): no existing principle was redefined or
+removed; this is materially expanded guidance (a new, concrete build
+constraint plus a corresponding workflow gate) rather than a backward-
+incompatible change to prior principles.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — no structural change needed; the
+    Technical Context / Build Strategy sections in an individual feature's
+    plan.md are where the concrete NDK pin gets restated per-feature.
+  - ✅ .specify/templates/tasks-template.md — no structural change needed;
+    task authors adding a native-dependency-install task should reference the
+    new Development Workflow bullet when scoping that task's acceptance
+    criteria.
+
+Follow-up TODOs: none new.
 -->
 
 # Locra Constitution
@@ -166,6 +201,15 @@ the app.
 - A physical Android device with 6GB+ RAM is required for meaningful
   inference testing; emulator results are not authoritative for latency or
   memory behavior.
+- The Android NDK version is pinned project-wide to **26.3.11579264**.
+  `react-native-executorch`'s prebuilt native libraries require NDK 26's
+  libc++ ABI and fail to link under NDK 27; conversely, NDK 26's libc++
+  cannot compile some C++20 features present in React Native's own core
+  Fabric headers and in other native dependencies without a patch. This is
+  a real, load-bearing constraint discovered by direct build investigation
+  (`specs/001-camera-vlm-qa/research.md`, "Phase 1 Setup Findings"), not an
+  arbitrary preference — do not bump this version to resolve an unrelated
+  build issue without re-verifying both sides of this conflict.
 
 ## Development Workflow
 
@@ -181,6 +225,14 @@ the app.
   path, the single-flight lock is respected end-to-end, tests precede
   implementation for inference/model-lifecycle code, and the architecture
   boundaries in Principle X are intact.
+- Before installing any new native dependency (any package whose `android/`
+  directory contains a `CMakeLists.txt` or its own native `build.gradle`),
+  verify it does not hard-require NDK 27+ by inspecting those files for an
+  explicit `ndkVersion` or NDK-version-gated build logic. This project is
+  pinned to NDK 26.3.11579264 (see Technology Constraints); a dependency
+  that only works on NDK 27+ will break the existing build the same way
+  `react-native-executorch` broke under NDK 27, and this MUST be caught
+  before the dependency is added, not after a failed build.
 
 ## Governance
 
@@ -202,4 +254,4 @@ constitution via the Constitution Check gate. Use `CLAUDE.md` and
 `AGENTS.md` for day-to-day runtime development guidance derived from these
 principles.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-03
+**Version**: 1.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-04

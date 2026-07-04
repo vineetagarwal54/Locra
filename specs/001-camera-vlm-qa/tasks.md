@@ -42,12 +42,12 @@ Single React Native project (no backend) per `plan.md`'s Project Structure:
 **Purpose**: Get a bootable Expo Dev Client app with the New Architecture and all
 Phase 1 dependencies installed, before any feature code is written.
 
-- [ ] T001 Initialize the Expo Dev Client React Native project pinned to RN 0.81–0.85 (confirmed decision — not 0.76) with the New Architecture enabled (`newArchEnabled` in `app.json`/`gradle.properties`), per constitution Principle VII and `plan.md` Technical Context
-- [ ] T002 [P] Configure TypeScript strict mode repo-wide in `tsconfig.json` (`"strict": true`, no `any` allowed) per constitution Principle V
-- [ ] T003 [P] Configure ESLint/Prettier for the project in `.eslintrc.js` / `.prettierrc`
-- [ ] T004 Install Phase 1 dependencies in `package.json`: `react-native-executorch`, `react-native-executorch-expo-resource-fetcher`, `expo-file-system`, `expo-asset`, `react-native-vision-camera`, `react-native-mmkv`, `zustand`, `@react-navigation/native` (+ native-stack), `react-native-reanimated`, `react-native-device-info`, `expo-crypto` — versions matching the RN 0.81–0.85 / Expo SDK band verified in `research.md` at install time
-- [ ] T005 Call `initExecutorch({ resourceFetcher: ExpoResourceFetcher })` exactly once at app entry, before any screen mounts, in `App.tsx` (or `index.ts`) — per `research.md`'s "Initialization sequence" decision; without this every `useLLM` call throws
-- [ ] T006 [P] Set up the React Navigation native-stack with five placeholder route components (`CaptureScreen`, `AnswerScreen`, `HistoryScreen`, `ModelSetupScreen`, `BenchmarkScreen`) in `src/screens/*.tsx` and `src/navigation/AppNavigator.tsx` — stub content only, no logic yet, so later tasks fill in real screens in place
+- [X] T001 Initialize the Expo Dev Client React Native project pinned to RN 0.81–0.85 (confirmed decision — not 0.76) with the New Architecture enabled (`newArchEnabled` in `app.json`/`gradle.properties`), per constitution Principle VII and `plan.md` Technical Context
+- [X] T002 [P] Configure TypeScript strict mode repo-wide in `tsconfig.json` (`"strict": true`, no `any` allowed) per constitution Principle V
+- [X] T003 [P] Configure ESLint/Prettier for the project in `.eslintrc.js` / `.prettierrc`
+- [X] T004 Install Phase 1 dependencies in `package.json`: `react-native-executorch`, `react-native-executorch-expo-resource-fetcher`, `expo-file-system`, `expo-asset`, `react-native-vision-camera`, `react-native-mmkv`, `zustand`, `@react-navigation/native` (+ native-stack), `react-native-reanimated`, `react-native-device-info`, `expo-crypto` — versions matching the RN 0.81–0.85 / Expo SDK band verified in `research.md` at install time
+- [X] T005 Call `initExecutorch({ resourceFetcher: ExpoResourceFetcher })` exactly once at app entry, before any screen mounts, in `App.tsx` (or `index.ts`) — per `research.md`'s "Initialization sequence" decision; without this every `useLLM` call throws
+- [X] T006 [P] Set up the React Navigation native-stack with five placeholder route components (`CaptureScreen`, `AnswerScreen`, `HistoryScreen`, `ModelSetupScreen`, `BenchmarkScreen`) in `src/screens/*.tsx` and `src/navigation/AppNavigator.tsx` — stub content only, no logic yet, so later tasks fill in real screens in place
 
 **Checkpoint**: App builds and runs on a physical Android device, navigates between five empty screens, `initExecutorch` succeeds at startup.
 
