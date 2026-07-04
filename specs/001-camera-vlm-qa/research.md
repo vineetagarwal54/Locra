@@ -236,3 +236,113 @@ into UI) even though the hook technically lives in the React tree.
 | Required companion packages | `react-native-executorch-expo-resource-fetcher`, `expo-file-system`, `expo-asset` |
 | Minimum Android version | 13 (API 33) — conflicts with existing README's API 26 claim (see Flagged Risk 2) |
 | Expo SDK version | 54/55 per docs, but `main`'s resource fetcher wants 56+ or its `/legacy` import — verify against the installed version (see Flagged Risk 3) |
+
+## Phase 1 Setup Findings (verified 2026-07-04, during T001–T006)
+
+These findings were discovered while actually building the scaffold on a physical
+Windows machine — not from docs, but from reproducing native build failures directly
+and inspecting installed package sources and NDK headers. They supersede the Expo
+SDK/RN pin implied by the initial scaffold (Expo SDK 57 / RN 0.86.0) with the values
+below, and they resolve Flagged Risk 1 concretely rather than leaving it as a range.
+
+### Finding: react-native-executorch's prebuilt native libs require NDK 26, not 27
+
+**Finding**: `react-native-executorch` 0.9.2 bundles prebuilt OpenCV/KleidiCV static
+libraries (`libopencv_core.a`, `libkleidicv_hal.a`) under
+`android/third-party/android/libs/`. These were built against NDK 26.x's libc++ ABI.
+Linking them under NDK 27.x fails with `undefined symbol:
+std::__ndk1::__libcpp_verbose_abort(char const*, ...)` — confirmed by direct
+`ld.lld` link errors, not a guess from docs.
+
+**Decision**: Pin `ndkVersion` to `26.3.11579264` for every native module in the
+Android project (not just the app module — `react-native-executorch`'s own Gradle
+module doesn't declare an `ndkVersion`, so it silently falls back to whichever NDK
+AGP resolves as default — 27.x on Expo SDK 56/57 — unless forced). Implemented as a
+root `android/build.gradle` `ext { ndkVersion = "26.3.11579264" }` plus a
+`subprojects { afterEvaluate { ... } }` hook forcing every subproject onto it.
+
+**Impact**: This is a real, permanent constraint on every future native dependency
+in this project (see the new constitution requirement) — not a one-time workaround.
+
+### Finding: NDK 26's libc++ conflicts with React Native's own core headers
+
+**Finding**: `ReactCommon/react/renderer/core/graphicsConversions.h` (a header
+shared by every Fabric-based native view component — confirmed present, byte-for-byte
+identical in both RN 0.85.3 and RN 0.86.0) calls `std::format(...)`. NDK 26.3's
+libc++ compiles this out by default (`_LIBCPP_HAS_NO_INCOMPLETE_FORMAT` is defined
+unconditionally in that NDK's `__config` unless `_LIBCPP_ENABLE_EXPERIMENTAL` is set),
+while NDK 27's libc++ ships it unconditionally. This surfaces as a hard compile error
+in any native module that includes this header for a custom Fabric view component
+(observed via `react-native-nitro-image`, pulled in transitively by
+`react-native-vision-camera`).
+
+**Decision**: Patch the one line (`std::format("{}%", dimension.value)` →
+`std::to_string(dimension.value) + "%"`) directly in
+`node_modules/react-native/ReactCommon/react/renderer/core/graphicsConversions.h`,
+applied automatically via `scripts/patch-react-native.js` wired as the npm
+`postinstall` script (not `patch-package`, which fails on this Windows machine's git
+diff step independent of this issue).
+
+**Alternatives considered**: Using NDK 27 instead (rejected — reintroduces the
+executorch prebuilt-lib link failure above; the two constraints are mutually
+exclusive on any single NDK version tested).
+
+### Finding: Expo SDK 57 / RN 0.86.0 is outside react-native-executorch's supported band
+
+**Finding**: Flagged Risk 1 (above) already established that ExecuTorch's own
+compatibility table excludes RN 0.86; the initial scaffold (T001) nonetheless
+pinned Expo SDK 57, which bundles RN 0.86.0 exclusively — there is no way to run
+Expo SDK 57 against an earlier RN version. Expo SDK 56.0.14 bundles RN 0.85.3
+exactly, which is both within ExecuTorch's supported band and matches
+`react-native-vision-camera`'s own tested `react-native` devDependency (0.85.3).
+
+**Decision**: Downgrade the scaffold to Expo SDK 56.0.14 / RN 0.85.3.
+
+**Verification note**: downgrading RN version alone did **not** resolve the NDK 26
+vs. 27 conflict above — the `graphicsConversions.h` `std::format` call and the
+executorch prebuilt-lib ABI requirement are both present identically under RN 0.85.3
+and RN 0.86.0. The NDK pin + header patch (above) are what actually resolve it,
+independent of RN version.
+
+### Finding: react-native-nitro-modules and react-native-nitro-image are peer, not transitive, dependencies
+
+**Finding**: `react-native-mmkv` and `react-native-vision-camera` both declare
+`react-native-nitro-modules` (and, for vision-camera, `react-native-nitro-image`) as
+`peerDependencies`, not regular `dependencies`. npm's automatic peer-dependency
+installation is not reliable across every install in this environment — it can leave
+a package directory present in `node_modules` but empty of a real `package.json`
+(observed after a partial `rm -rf node_modules` interrupted by a Windows file lock).
+
+**Decision**: Install `react-native-nitro-modules` and `react-native-nitro-image`
+explicitly as direct dependencies in `package.json` rather than relying on implicit
+peer auto-install.
+
+### Decision: production and development builds via EAS Build, not local Gradle
+
+**Decision**: This machine cannot produce a working local Android build at all —
+every NDK version tested satisfies at most one of the two conflicting native
+constraints above (see the two Findings above). Local Windows Gradle builds are
+therefore permanently out of scope for this project, not a temporarily broken
+workaround. `npx expo run:android` / local `gradlew assembleDebug` MUST NOT be relied
+upon as a build-verification step going forward.
+
+**Rationale**: EAS Build runs on Expo's own Linux CI with a version-pinned toolchain
+per Expo SDK; it was verified to produce an installable, working build (Samsung S26
+Ultra, model SM-S948U1) with the exact dependency set in this document, including
+the NDK-26-only reanimated/worklets pair (`react-native-reanimated@4.3.1` +
+`react-native-worklets@0.8.3` — the versions `expo install --fix` resolves natively
+for Expo SDK 56, without the manual reanimated version bump this machine's local
+build investigation explored and then reverted).
+
+**Alternatives considered**: Continuing to chase a local-Gradle-compatible NDK/library
+combination — rejected after confirming (a) no single NDK version satisfies both
+conflicting native constraints, and (b) a linker-flag relaxation attempt
+(`-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--allow-shlib-undefined`) made the build worse by
+replacing CMake's default linker flags outright rather than appending to them,
+dropping essential C++ runtime linkage entirely.
+
+**Local development workflow**: `npx expo start --dev-client --clear`, device
+connected via USB with `adb reverse tcp:8081 tcp:8081` — Metro/JS-only iteration
+does not require a local native build once an EAS-built dev client APK is installed
+on the device. `app.json`'s `runtimeVersion` policy is set to `sdkVersion` so EAS
+builds and the JS bundle stay compatible without a native rebuild on every JS change.
