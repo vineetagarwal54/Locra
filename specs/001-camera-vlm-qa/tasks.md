@@ -62,10 +62,10 @@ touches model loading."
 
 **⚠️ CRITICAL**: No user story work may begin until this phase is complete.
 
-- [ ] T007 [P] Define shared TypeScript types (`QASession`, `PerformanceMetrics`, `OnDeviceModel`, `DeviceCompatibilityResult`, `InferenceState`, `InferenceRequest`, `ModelState`) in `src/types/models.ts`, matching `data-model.md` field-for-field
-- [ ] T008 [P] Create the single MMKV storage instance in `src/storage/mmkv.ts` — the only file in the project permitted to import `react-native-mmkv` directly (constitution Principle VIII: no AsyncStorage, no SQLite)
-- [ ] T009 [P] Write unit tests for device compatibility evaluation in `tests/unit/model/DeviceCompatibility.test.ts`, covering: sufficient RAM + Android 13+ → `isSupported: true`; insufficient RAM → `isSupported: false` with a non-null `reason`; OS below API 33 → `isSupported: false` with a non-null `reason`; a thrown device-info read → `isSupported: false` with a `reason`, never a thrown error (must fail before T010 exists)
-- [ ] T010 Implement `checkDeviceCompatibility()` in `src/model/DeviceCompatibility.ts` using `react-native-device-info` (total RAM) and `Platform.Version` (Android API 33 minimum, confirmed decision), satisfying `contracts/model-lifecycle.contract.md` and making T009 pass
+- [X] T007 [P] Define shared TypeScript types (`QASession`, `PerformanceMetrics`, `OnDeviceModel`, `DeviceCompatibilityResult`, `InferenceState`, `InferenceRequest`, `ModelState`) in `src/types/models.ts`, matching `data-model.md` field-for-field
+- [X] T008 [P] Create the single MMKV storage instance in `src/storage/mmkv.ts` — the only file in the project permitted to import `react-native-mmkv` directly (constitution Principle VIII: no AsyncStorage, no SQLite)
+- [X] T009 [P] Write unit tests for device compatibility evaluation in `tests/unit/model/DeviceCompatibility.test.ts`, covering: sufficient RAM + Android 13+ → `isSupported: true`; insufficient RAM → `isSupported: false` with a non-null `reason`; OS below API 33 → `isSupported: false` with a non-null `reason`; a thrown device-info read → `isSupported: false` with a `reason`, never a thrown error (must fail before T010 exists)
+- [X] T010 Implement `checkDeviceCompatibility()` in `src/model/DeviceCompatibility.ts` using `react-native-device-info` (total RAM) and `Platform.Version` (Android API 33 minimum, confirmed decision), satisfying `contracts/model-lifecycle.contract.md` and making T009 pass
 
 **Checkpoint**: Device compatibility gate implemented and tested. Every later phase that touches model loading depends on `T010`.
 
