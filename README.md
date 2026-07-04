@@ -33,7 +33,7 @@ Locra runs a quantized vision-language model entirely on your Android device. Po
 | Inference | Image + text → streamed answer |
 | Network calls | **Zero** (verified by airplane-mode test suite) |
 | Storage | MMKV — local history, settings, benchmarks |
-| Min Android | API 26 (Android 8.0) |
+| Min Android | API 33 (Android 12) |
 | Target Android | API 35 (Android 15) |
 
 ---
@@ -103,7 +103,7 @@ Every inference records model load time, image preprocessing time, first-token l
 ## Tech stack
 
 ```
-React Native 0.76+          Cross-platform mobile (Android target)
+React Native 0.81+          Cross-platform mobile (Android target)
 TypeScript                  Strict mode throughout
 Expo Dev Client             Custom dev build (required for ExecuTorch)
 React Native ExecuTorch     On-device ML inference (New Architecture only)
