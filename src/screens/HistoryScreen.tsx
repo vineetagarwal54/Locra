@@ -38,6 +38,11 @@ export function HistoryScreen({ navigation }: Props) {
     clear();
   }, [clear, sessions.length]);
 
+  const onOpenBenchmarks = useCallback((): void => {
+    void haptics.tap();
+    navigation.navigate('Benchmark');
+  }, [navigation]);
+
   const renderItem: ListRenderItem<HistorySession> = useCallback(
     ({ item }): ReactElement => (
       <HistoryItem
@@ -75,6 +80,20 @@ export function HistoryScreen({ navigation }: Props) {
           onPress={onClear}
         >
           <Text style={styles.clearButtonLabel}>Clear</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.benchmarkRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open benchmarks"
+          style={({ pressed }) => [
+            styles.benchmarkButton,
+            pressed && styles.benchmarkButtonPressed,
+          ]}
+          onPress={onOpenBenchmarks}
+        >
+          <Text style={styles.benchmarkButtonLabel}>Benchmarks</Text>
         </Pressable>
       </View>
 
@@ -230,6 +249,28 @@ const styles = StyleSheet.create({
   clearButtonLabel: {
     color: theme.accent,
     fontSize: theme.fontSizeSm,
+    fontWeight: '700',
+  },
+  benchmarkRow: {
+    paddingHorizontal: theme.space4,
+    paddingBottom: theme.space3,
+  },
+  benchmarkButton: {
+    minHeight: theme.space6 * 2,
+    justifyContent: 'center',
+    paddingHorizontal: theme.space4,
+    paddingVertical: theme.space2,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+  },
+  benchmarkButtonPressed: {
+    backgroundColor: theme.surface3,
+  },
+  benchmarkButtonLabel: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
     fontWeight: '700',
   },
   listContent: {
