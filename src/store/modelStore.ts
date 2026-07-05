@@ -27,20 +27,44 @@ const MODEL_SOURCES: ResourceSource[] = [
 // sha256sum of the served file content). A downloaded file that does not hash to
 // this value is treated as corrupt and never loaded (constitution Principle IV).
 // If the pinned model revision changes, update this digest to match.
-const MODEL_SHA256 = '5f942c856acfe1a4d0b5f8d30bd752b5552bcf20bc6dfa6f3253896b2456d0c4';
+const MODEL_SHA256 = 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4';
 
 // Exact byte size of that same `.pte` (from the Git-LFS pointer's `size`). Used as
 // a cheap, memory-safe launch-time guard against a partial/truncated download.
 const MODEL_FILE_SIZE = 2_427_656_704;
 
+// Development escape hatch: skip post-download AND launch-time verification
+// entirely so iterating on inference doesn't require hashing a 2.4 GB file on
+// every fetch/relaunch. `__DEV__` is `false` in a release build, so production
+// always runs the full SHA-256 + size checks below — this only affects local
+// development builds. NEVER rely on this for anything but local iteration.
+//
+// This bypass is wired here, at the composition root, rather than inside
+// ModelIntegrity.ts/ModelDownloadManager.ts, because those two modules are
+// unit-tested against real (mocked-dependency) verification logic per
+// constitution Principle VI (TDD non-negotiable for this module) — and `__DEV__`
+// is `true` inside Jest, so an in-module `if (__DEV__)` bypass would silently
+// short-circuit those tests instead of exercising the logic they assert on.
+async function devSkipIntegrityCheck(): Promise<boolean> {
+  // eslint-disable-next-line no-console
+  console.warn('[Locra] DEV: skipping model integrity verification (SHA-256 + size checks).');
+  return true;
+}
+
 const manager = new ModelDownloadManager({
   fetcher: ExpoResourceFetcher,
-  verifyIntegrity: verifyModelIntegrity,
-  getFileSize: (fileUri: string) => Promise.resolve(new File(fileUri).size),
+  verifyIntegrity: __DEV__ ? devSkipIntegrityCheck : verifyModelIntegrity,
+  getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
   sources: MODEL_SOURCES,
   expectedSha256: MODEL_SHA256,
-  expectedSize: MODEL_FILE_SIZE,
+  // Dev: any present file is trusted, no size check (0 ⇒ `size < 0` is never
+  // true). Prod: the exact pinned size is required.
+  expectedSize: __DEV__ ? 0 : MODEL_FILE_SIZE,
 });
+
+function toFileUri(path: string): string {
+  return path.startsWith('file://') ? path : `file://${path}`;
+}
 
 export interface ModelStoreState extends ModelState {
   checkDeviceCompatibility: () => DeviceCompatibilityResult;

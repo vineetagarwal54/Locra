@@ -17,7 +17,11 @@ const YIELD_EVERY_CHUNKS = 8; // let the JS thread breathe roughly every 64 MB
 
 export async function verifyModelIntegrity(fileUri: string, expectedSha256: string): Promise<boolean> {
   try {
-    const file = new File(fileUri);
+    // ExpoResourceFetcher's fetch() hands back RAW filesystem paths (it strips the
+    // `file://` prefix), but expo-file-system's File requires a `file://` URI.
+    // Without this normalization the file reads as empty and the digest is the
+    // hash of zero bytes — which never matches the pinned value.
+    const file = new File(toFileUri(fileUri));
     if (!file.exists) {
       return false;
     }
@@ -47,4 +51,8 @@ export async function verifyModelIntegrity(fileUri: string, expectedSha256: stri
   } catch {
     return false;
   }
+}
+
+function toFileUri(path: string): string {
+  return path.startsWith('file://') ? path : `file://${path}`;
 }

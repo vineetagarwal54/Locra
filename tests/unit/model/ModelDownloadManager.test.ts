@@ -127,16 +127,27 @@ describe('ModelDownloadManager', () => {
       expect(manager.isReadyForInference()).toBe(true);
     });
 
-    it('deletes a partial download (size mismatch) and reports not-ready', async () => {
+    it('deletes a truncated download (fewer bytes than expected) and reports not-ready', async () => {
       const { manager, listDownloadedModels, getFileSize, deleteResources } = makeHarness();
       listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
-      getFileSize.mockResolvedValue(EXPECTED_SIZE - 1024); // truncated / interrupted download
+      getFileSize.mockResolvedValue(EXPECTED_SIZE - 1024); // interrupted / partial download
 
       await manager.reconcile();
 
       expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
       expect(manager.getState().downloadStatus).toBe('not_started');
       expect(manager.isReadyForInference()).toBe(false);
+    });
+
+    it('trusts a complete file at or above the expected size (never false-deletes)', async () => {
+      const { manager, listDownloadedModels, getFileSize, deleteResources } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
+      getFileSize.mockResolvedValue(EXPECTED_SIZE + 4096);
+
+      await manager.reconcile();
+
+      expect(deleteResources).not.toHaveBeenCalled();
+      expect(manager.isReadyForInference()).toBe(true);
     });
 
     it('reports not-ready when no model is present on disk', async () => {
