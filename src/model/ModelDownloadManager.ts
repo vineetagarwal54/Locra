@@ -1,5 +1,7 @@
 import type { ModelState } from '../types/models';
 
+import type { ModelConfig } from './ModelConfig';
+
 // Wraps a resource fetcher's download lifecycle and runs a SHA-256 integrity
 // check after every fetch. Constitution Principle X: self-contained model
 // lifecycle — no imports from inference or screens. Dependencies (the fetcher
@@ -29,11 +31,10 @@ export interface ModelDownloadManagerDeps {
   verifyIntegrity: (fileUri: string, expectedSha256: string) => Promise<boolean>;
   /** Bytes on disk for a given path (injected so this module stays native-free). */
   getFileSize: (fileUri: string) => Promise<number>;
+  /** Fetches fresh expected hash/size at the start of each download attempt. */
+  getModelConfig: () => Promise<ModelConfig>;
   /** Model + tokenizer + config sources, in order; `sources[0]` is the `.pte`. */
   sources: ResourceSource[];
-  expectedSha256: string;
-  /** Exact byte size of the pinned `.pte`, used as the launch-time partial-file guard. */
-  expectedSize: number;
 }
 
 const INITIAL_STATE: ModelState = {
@@ -46,6 +47,7 @@ const INITIAL_STATE: ModelState = {
 export class ModelDownloadManager {
   private state: ModelState = { ...INITIAL_STATE };
   private readonly listeners = new Set<(state: ModelState) => void>();
+  private lastModelConfig: ModelConfig | null = null;
 
   constructor(private readonly deps: ModelDownloadManagerDeps) {}
 
@@ -71,12 +73,16 @@ export class ModelDownloadManager {
       integrityVerified: false,
       error: null,
     });
+    let didStartFetch = false;
     try {
+      const config = await this.deps.getModelConfig();
+      this.lastModelConfig = config;
+      didStartFetch = true;
       const { paths } = await this.deps.fetcher.fetch(
         (progress) => this.setState({ downloadProgress: progress }),
         ...this.deps.sources
       );
-      const verified = await this.deps.verifyIntegrity(paths[0], this.deps.expectedSha256);
+      const verified = await this.deps.verifyIntegrity(paths[0], config.expectedSha256);
       if (verified) {
         this.setState({
           downloadStatus: 'downloaded',
@@ -96,7 +102,9 @@ export class ModelDownloadManager {
         error: 'The downloaded model failed its integrity check.',
       });
     } catch (error) {
-      await this.safeDelete();
+      if (didStartFetch) {
+        await this.safeDelete();
+      }
       this.setState({
         downloadStatus: 'failed',
         integrityVerified: false,
@@ -123,16 +131,15 @@ export class ModelDownloadManager {
         this.setState({ ...INITIAL_STATE });
         return;
       }
-      // Cheap, memory-safe guard against a partial/truncated download (e.g. the
-      // app was killed mid-fetch). A partial download is strictly SMALLER than
-      // the complete file, so we reject only when the on-disk size falls short of
-      // the pinned size — this catches truncated files without ever false-deleting
-      // a complete one that happens to be at (or above) the expected size.
-      const size = await this.deps.getFileSize(models[0]);
-      if (size < this.deps.expectedSize) {
-        await this.safeDelete();
-        this.setState({ ...INITIAL_STATE });
-        return;
+      // Cheap, memory-safe guard against a partial/truncated download, using the
+      // remote size metadata fetched during this JS session.
+      if (this.lastModelConfig !== null) {
+        const size = await this.deps.getFileSize(models[0]);
+        if (size < this.lastModelConfig.expectedSize) {
+          await this.safeDelete();
+          this.setState({ ...INITIAL_STATE });
+          return;
+        }
       }
       this.setState({
         downloadStatus: 'downloaded',

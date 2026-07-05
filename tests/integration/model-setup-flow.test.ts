@@ -47,6 +47,10 @@ describe('model setup integration flow', () => {
     const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
     const verifyIntegrity = jest.fn(async () => true);
     const getFileSize = jest.fn(async () => EXPECTED_SIZE);
+    const getModelConfig = jest.fn(async () => ({
+      expectedSha256: EXPECTED_HASH,
+      expectedSize: EXPECTED_SIZE,
+    }));
     const manager = new ModelDownloadManager({
       fetcher: {
         fetch,
@@ -58,9 +62,8 @@ describe('model setup integration flow', () => {
       },
       verifyIntegrity,
       getFileSize,
+      getModelConfig,
       sources: SOURCES,
-      expectedSha256: EXPECTED_HASH,
-      expectedSize: EXPECTED_SIZE,
     });
 
     await manager.reconcile();
@@ -69,6 +72,7 @@ describe('model setup integration flow', () => {
 
     const download = manager.startDownload();
     expect(manager.getState().downloadStatus).toBe('downloading');
+    await Promise.resolve();
     expect(manager.getState().downloadProgress).toBe(0.24);
 
     await manager.pauseDownload();
@@ -82,6 +86,7 @@ describe('model setup integration flow', () => {
     fetchDeferred.resolve(fetchResult());
     await download;
 
+    expect(getModelConfig).toHaveBeenCalledTimes(1);
     expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH);
     expect(deleteResources).not.toHaveBeenCalled();
     expect(manager.getState().downloadStatus).toBe('downloaded');

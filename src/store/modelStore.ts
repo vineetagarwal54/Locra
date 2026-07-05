@@ -1,9 +1,13 @@
-import { File } from 'expo-file-system';
-import { LFM2_5_VL_1_6B_QUANTIZED } from 'react-native-executorch';
+import { createDownloadTask, setConfig } from '@kesha-antonov/react-native-background-downloader';
+import { Directory, File } from 'expo-file-system';
+import { documentDirectory } from 'expo-file-system/legacy';
+import { LFM2_5_VL_1_6B_QUANTIZED, ResourceFetcherUtils } from 'react-native-executorch';
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher';
 import { create } from 'zustand';
 
+import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
 import { checkDeviceCompatibility } from '../model/DeviceCompatibility';
+import { fetchModelConfig } from '../model/ModelConfig';
 import { ModelDownloadManager, type ResourceSource } from '../model/ModelDownloadManager';
 import { verifyModelIntegrity } from '../model/ModelIntegrity';
 import type { IModelLifecycle } from '../types/interfaces';
@@ -22,16 +26,9 @@ const MODEL_SOURCES: ResourceSource[] = [
   LFM2_5_VL_1_6B_QUANTIZED.tokenizerConfigSource,
 ];
 
-// Pinned SHA-256 of the LFM2.5-VL-1.6B (quantized) `.pte`, taken from the model
-// repo's Git-LFS object id at revision v0.9.0 (the LFS `oid` equals the
-// sha256sum of the served file content). A downloaded file that does not hash to
-// this value is treated as corrupt and never loaded (constitution Principle IV).
-// If the pinned model revision changes, update this digest to match.
-const MODEL_SHA256 = 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4';
-
-// Exact byte size of that same `.pte` (from the Git-LFS pointer's `size`). Used as
-// a cheap, memory-safe launch-time guard against a partial/truncated download.
-const MODEL_FILE_SIZE = 2_427_656_704;
+// Remote config is fetched once per download attempt (FR-028), so hash/size
+// metadata can rotate without a new app binary.
+const MODEL_CONFIG_ENDPOINT = `https://locra.app/models/${LFM2_5_VL_1_6B_QUANTIZED.modelName}.json`;
 
 // Development escape hatch: skip post-download AND launch-time verification
 // entirely so iterating on inference doesn't require hashing a 2.4 GB file on
@@ -51,15 +48,77 @@ async function devSkipIntegrityCheck(): Promise<boolean> {
   return true;
 }
 
+// ── Background download (T047, FR-025) ──────────────────────────────────────
+// A true Android background download (foreground service + Android 14/16 UIDT +
+// persistent notification) via @kesha-antonov/react-native-background-downloader.
+// It writes each file to the EXACT path react-native-executorch expects
+// (`RNEDirectory + getFilenameFromUri(url)`), so `useLLM`'s ExpoResourceFetcher —
+// still the adapter registered with `initExecutorch` — finds the files already
+// present and never re-downloads them. Kept behind the `ResourceFetcherLike` seam,
+// so `ModelDownloadManager`/`IModelLifecycle` are unchanged.
+const RNE_DOWNLOAD_DIR = `${(documentDirectory ?? '').replace(/^file:\/\//, '')}react-native-executorch/`;
+
+setConfig({
+  showNotificationsEnabled: true,
+  notificationsGrouping: {
+    enabled: true,
+    mode: 'summaryOnly',
+    texts: {
+      downloadTitle: 'Downloading Locra model',
+      downloadProgress: 'Downloading… {progress}%',
+    },
+  },
+});
+
+const backgroundFetcher = new BackgroundDownloadFetcher({
+  createDownloadTask: (cfg) => {
+    const task = createDownloadTask({ id: cfg.id, url: cfg.url, destination: cfg.destination });
+    const adapter: BgDownloadTask = {
+      id: task.id,
+      progress: (handler) => {
+        task.progress(handler);
+        return adapter;
+      },
+      done: (handler) => {
+        task.done(() => handler());
+        return adapter;
+      },
+      error: (handler) => {
+        task.error((params) => handler(params));
+        return adapter;
+      },
+      start: () => task.start(),
+      pause: () => task.pause(),
+      resume: () => task.resume(),
+      stop: () => task.stop(),
+    };
+    return adapter;
+  },
+  destinationForUrl: (url) => `${RNE_DOWNLOAD_DIR}${ResourceFetcherUtils.getFilenameFromUri(url)}`,
+  fileExists: (absolutePath) => new File(toFileUri(absolutePath)).exists,
+  deleteFileIfExists: async (absolutePath) => {
+    const file = new File(toFileUri(absolutePath));
+    if (file.exists) {
+      file.delete();
+    }
+  },
+  // Reuse ExpoResourceFetcher's own listing so the directory scanned is identical.
+  listDownloadedFiles: () => ExpoResourceFetcher.listDownloadedFiles(),
+  ensureDownloadDir: () => {
+    const dir = new Directory(toFileUri(RNE_DOWNLOAD_DIR));
+    if (!dir.exists) {
+      dir.create();
+    }
+    return Promise.resolve();
+  },
+});
+
 const manager = new ModelDownloadManager({
-  fetcher: ExpoResourceFetcher,
+  fetcher: backgroundFetcher,
   verifyIntegrity: __DEV__ ? devSkipIntegrityCheck : verifyModelIntegrity,
   getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
+  getModelConfig: () => fetchModelConfig(MODEL_CONFIG_ENDPOINT),
   sources: MODEL_SOURCES,
-  expectedSha256: MODEL_SHA256,
-  // Dev: any present file is trusted, no size check (0 ⇒ `size < 0` is never
-  // true). Prod: the exact pinned size is required.
-  expectedSize: __DEV__ ? 0 : MODEL_FILE_SIZE,
 });
 
 function toFileUri(path: string): string {

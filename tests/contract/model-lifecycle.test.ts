@@ -36,6 +36,10 @@ function makeManager() {
   const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
   const verifyIntegrity = jest.fn(async () => true);
   const getFileSize = jest.fn(async () => EXPECTED_SIZE);
+  const getModelConfig = jest.fn(async () => ({
+    expectedSha256: EXPECTED_HASH,
+    expectedSize: EXPECTED_SIZE,
+  }));
   const manager = new ModelDownloadManager({
     fetcher: {
       fetch,
@@ -47,9 +51,8 @@ function makeManager() {
     },
     verifyIntegrity,
     getFileSize,
+    getModelConfig,
     sources: SOURCES,
-    expectedSha256: EXPECTED_HASH,
-    expectedSize: EXPECTED_SIZE,
   });
 
   return {
@@ -61,6 +64,7 @@ function makeManager() {
     listDownloadedModels,
     verifyIntegrity,
     getFileSize,
+    getModelConfig,
   };
 }
 
@@ -143,6 +147,8 @@ describe('Model lifecycle contract', () => {
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.isReadyForInference()).toBe(true);
 
+    await manager.startDownload();
+    deleteResources.mockClear();
     getFileSize.mockResolvedValue(EXPECTED_SIZE - 1);
     await manager.reconcile();
     expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
