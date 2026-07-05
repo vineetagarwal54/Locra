@@ -54,21 +54,26 @@ export function AppNavigator() {
     (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
   );
 
-  // Reconcile the on-device model against disk BEFORE resolving the initial route,
-  // so a returning user with a ready model goes straight to Capture and a
-  // deleted/corrupt model routes to ModelSetup. resolveInitialRoute() reads a
-  // synchronous snapshot, so it must run only after reconciliation settles.
+  // Reattach native background downloads before filesystem reconciliation, so
+  // an in-progress model download survives process death and routes to setup.
+  // resolveInitialRoute() reads a synchronous snapshot, so it must run only
+  // after bootstrap settles.
   const [bootstrapped, setBootstrapped] = useState(false);
   useEffect(() => {
     let active = true;
-    void useModelStore
-      .getState()
-      .reconcile()
-      .finally(() => {
-        if (active) {
-          setBootstrapped(true);
-        }
-      });
+    async function bootstrapModelState(): Promise<void> {
+      const modelStore = useModelStore.getState();
+      const reattached = await modelStore.reattachExistingDownload();
+      if (!reattached) {
+        await modelStore.reconcile();
+      }
+    }
+
+    void bootstrapModelState().finally(() => {
+      if (active) {
+        setBootstrapped(true);
+      }
+    });
     return () => {
       active = false;
     };

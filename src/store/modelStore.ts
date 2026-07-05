@@ -1,4 +1,8 @@
-import { createDownloadTask, setConfig } from '@kesha-antonov/react-native-background-downloader';
+import {
+  createDownloadTask,
+  getExistingDownloadTasks,
+  setConfig,
+} from '@kesha-antonov/react-native-background-downloader';
 import { Directory, File } from 'expo-file-system';
 import { documentDirectory } from 'expo-file-system/legacy';
 import { LFM2_5_VL_1_6B_QUANTIZED, ResourceFetcherUtils } from 'react-native-executorch';
@@ -71,29 +75,8 @@ setConfig({
 });
 
 const backgroundFetcher = new BackgroundDownloadFetcher({
-  createDownloadTask: (cfg) => {
-    const task = createDownloadTask({ id: cfg.id, url: cfg.url, destination: cfg.destination });
-    const adapter: BgDownloadTask = {
-      id: task.id,
-      progress: (handler) => {
-        task.progress(handler);
-        return adapter;
-      },
-      done: (handler) => {
-        task.done(() => handler());
-        return adapter;
-      },
-      error: (handler) => {
-        task.error((params) => handler(params));
-        return adapter;
-      },
-      start: () => task.start(),
-      pause: () => task.pause(),
-      resume: () => task.resume(),
-      stop: () => task.stop(),
-    };
-    return adapter;
-  },
+  createDownloadTask: (cfg) =>
+    toBgDownloadTask(createDownloadTask({ id: cfg.id, url: cfg.url, destination: cfg.destination })),
   destinationForUrl: (url) => `${RNE_DOWNLOAD_DIR}${ResourceFetcherUtils.getFilenameFromUri(url)}`,
   fileExists: (absolutePath) => new File(toFileUri(absolutePath)).exists,
   deleteFileIfExists: async (absolutePath) => {
@@ -111,6 +94,10 @@ const backgroundFetcher = new BackgroundDownloadFetcher({
     }
     return Promise.resolve();
   },
+  getExistingDownloadTasks: async () => {
+    const tasks = await getExistingDownloadTasks();
+    return tasks.map(toBgDownloadTask);
+  },
 });
 
 const manager = new ModelDownloadManager({
@@ -127,6 +114,8 @@ function toFileUri(path: string): string {
 
 export interface ModelStoreState extends ModelState {
   checkDeviceCompatibility: () => DeviceCompatibilityResult;
+  /** Reattach native background downloads that survived process death. */
+  reattachExistingDownload: () => Promise<boolean>;
   /** Reconcile in-memory readiness against the model on disk (call once at launch). */
   reconcile: () => Promise<void>;
   startDownload: () => Promise<void>;
@@ -139,6 +128,7 @@ export interface ModelStoreState extends ModelState {
 export const useModelStore = create<ModelStoreState>(() => ({
   ...manager.getState(),
   checkDeviceCompatibility,
+  reattachExistingDownload: () => manager.reattachExistingDownload(),
   reconcile: () => manager.reconcile(),
   startDownload: () => manager.startDownload(),
   pauseDownload: () => manager.pauseDownload(),
@@ -169,3 +159,34 @@ export const modelLifecycle: IModelLifecycle = {
   resumeDownload: () => manager.resumeDownload(),
   cancelDownload: () => manager.cancelDownload(),
 };
+
+type NativeDownloadTask =
+  | ReturnType<typeof createDownloadTask>
+  | Awaited<ReturnType<typeof getExistingDownloadTasks>>[number];
+
+function toBgDownloadTask(task: NativeDownloadTask): BgDownloadTask {
+  const adapter: BgDownloadTask = {
+    id: task.id,
+    state: task.state,
+    bytesDownloaded: task.bytesDownloaded,
+    bytesTotal: task.bytesTotal,
+    destination: 'destination' in task ? task.destination : undefined,
+    progress: (handler) => {
+      task.progress(handler);
+      return adapter;
+    },
+    done: (handler) => {
+      task.done(() => handler());
+      return adapter;
+    },
+    error: (handler) => {
+      task.error((params) => handler(params));
+      return adapter;
+    },
+    start: () => task.start(),
+    pause: () => task.pause(),
+    resume: () => task.resume(),
+    stop: () => task.stop(),
+  };
+  return adapter;
+}

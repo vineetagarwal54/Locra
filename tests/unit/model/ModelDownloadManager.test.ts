@@ -1,4 +1,4 @@
-import { ModelDownloadManager } from '../../../src/model/ModelDownloadManager';
+import { ModelDownloadManager, type ReattachedDownload } from '../../../src/model/ModelDownloadManager';
 import type { ModelDownloadStatus } from '../../../src/types/models';
 
 // The manager wraps ExpoResourceFetcher (fetch / pause / resume / cancel /
@@ -32,6 +32,8 @@ function defer<T>(): Deferred<T> {
   });
   return { promise, resolve, reject };
 }
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 function successfulFetchResult(): FetchResult {
   return {
@@ -183,6 +185,49 @@ describe('ModelDownloadManager', () => {
     // The delete must happen BEFORE the terminal 'failed' state is published.
     expect(statusAtDelete).not.toBe('failed');
     expect(manager.getState().downloadStatus).toBe('failed');
+  });
+
+  it('reattaches an existing native download and verifies it when completion arrives', async () => {
+    const downloadDeferred = defer<FetchResult>();
+    const reattached: ReattachedDownload = {
+      status: 'downloading',
+      progress: 0.42,
+      promise: downloadDeferred.promise,
+    };
+    const reattachExistingDownloads = jest.fn(async () => reattached);
+    const verifyIntegrity = jest.fn(async () => true);
+    const getModelConfig = jest.fn(async () => ({
+      expectedSha256: EXPECTED_HASH,
+      expectedSize: EXPECTED_SIZE,
+    }));
+    const manager = new ModelDownloadManager({
+      fetcher: {
+        fetch: jest.fn(async () => successfulFetchResult()),
+        reattachExistingDownloads,
+        pauseFetching: jest.fn(async () => {}),
+        resumeFetching: jest.fn(async () => {}),
+        cancelFetching: jest.fn(async () => {}),
+        deleteResources: jest.fn(async () => {}),
+        listDownloadedModels: jest.fn(async (): Promise<string[]> => []),
+      },
+      verifyIntegrity,
+      getFileSize: jest.fn(async () => EXPECTED_SIZE),
+      getModelConfig,
+      sources: SOURCES,
+    });
+
+    await expect(manager.reattachExistingDownload()).resolves.toBe(true);
+    expect(reattachExistingDownloads).toHaveBeenCalledWith(expect.any(Function), ...SOURCES);
+    expect(manager.getState().downloadStatus).toBe('downloading');
+    expect(manager.getState().downloadProgress).toBe(0.42);
+
+    downloadDeferred.resolve(successfulFetchResult());
+    await flush();
+
+    expect(getModelConfig).toHaveBeenCalledTimes(1);
+    expect(verifyIntegrity).toHaveBeenCalledWith(LOCAL_MODEL_PATH, EXPECTED_HASH);
+    expect(manager.getState().downloadStatus).toBe('downloaded');
+    expect(manager.getState().integrityVerified).toBe(true);
   });
 
   describe('reconcile (launch-time disk reconciliation)', () => {

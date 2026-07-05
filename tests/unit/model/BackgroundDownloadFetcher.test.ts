@@ -10,7 +10,13 @@ const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 
 
 // A controllable fake of a kesha DownloadTask. Chainable handler registration,
 // with test-driven begin/progress/done/error triggers.
-function fakeTask(id: string): BgDownloadTask & {
+function fakeTask(
+  id: string,
+  state: BgDownloadTask['state'] = 'PENDING',
+  bytesDownloaded = 0,
+  bytesTotal = 0,
+  destination?: string
+): BgDownloadTask & {
   emitProgress: (bytesDownloaded: number, bytesTotal: number) => void;
   emitDone: () => void;
   emitError: (e: unknown) => void;
@@ -24,6 +30,10 @@ function fakeTask(id: string): BgDownloadTask & {
   let onError: (e: unknown) => void = () => {};
   const task = {
     id,
+    state,
+    bytesDownloaded,
+    bytesTotal,
+    destination,
     progress(h: (p: { bytesDownloaded: number; bytesTotal: number }) => void) {
       onProgress = h;
       return task;
@@ -40,8 +50,15 @@ function fakeTask(id: string): BgDownloadTask & {
     pause: jest.fn(async () => {}),
     resume: jest.fn(async () => {}),
     stop: jest.fn(async () => {}),
-    emitProgress: (bytesDownloaded: number, bytesTotal: number) => onProgress({ bytesDownloaded, bytesTotal }),
-    emitDone: () => onDone(),
+    emitProgress: (nextBytesDownloaded: number, nextBytesTotal: number) => {
+      task.bytesDownloaded = nextBytesDownloaded;
+      task.bytesTotal = nextBytesTotal;
+      onProgress({ bytesDownloaded: nextBytesDownloaded, bytesTotal: nextBytesTotal });
+    },
+    emitDone: () => {
+      task.state = 'DONE';
+      onDone();
+    },
     emitError: (e: unknown) => onError(e),
   };
   return task;
@@ -73,6 +90,7 @@ function makeHarness(overrides: Partial<BackgroundDownloadFetcherDeps> = {}) {
     deleteFileIfExists: jest.fn(async () => {}),
     listDownloadedFiles: jest.fn(async () => []),
     ensureDownloadDir: jest.fn(async () => {}),
+    getExistingDownloadTasks: jest.fn(async () => []),
     ...overrides,
   };
   const fetcher = new BackgroundDownloadFetcher(deps);
@@ -215,5 +233,55 @@ describe('BackgroundDownloadFetcher', () => {
     const { fetcher } = makeHarness({ listDownloadedFiles });
 
     await expect(fetcher.listDownloadedModels()).resolves.toEqual([MODEL_DEST]);
+  });
+
+  it('reattaches an existing native task by destination id without starting a new task', async () => {
+    const existingTask = fakeTask('example.test_vl_1_6b_model.pte', 'DOWNLOADING', 25, 100, MODEL_DEST);
+    const getExistingDownloadTasks = jest.fn(async () => [existingTask]);
+    const { fetcher, createDownloadTask } = makeHarness({ getExistingDownloadTasks });
+    const progress: number[] = [];
+
+    const reattached = await fetcher.reattachExistingDownloads((p) => progress.push(p), MODEL_URL);
+
+    expect(reattached).not.toBeNull();
+    expect(reattached?.status).toBe('downloading');
+    expect(reattached?.progress).toBe(0.25);
+    expect(createDownloadTask).not.toHaveBeenCalled();
+    expect(existingTask.start).not.toHaveBeenCalled();
+
+    existingTask.emitProgress(50, 100);
+    existingTask.emitDone();
+
+    await expect(reattached?.promise).resolves.toEqual({
+      paths: [MODEL_DEST],
+      wasDownloaded: [true],
+    });
+    expect(progress).toContain(0.5);
+  });
+
+  it('reattaches a paused native task so pause/resume/cancel controls can target it', async () => {
+    const existingTask = fakeTask('example.test_vl_1_6b_model.pte', 'PAUSED', 10, 100, MODEL_DEST);
+    const getExistingDownloadTasks = jest.fn(async () => [existingTask]);
+    const { fetcher } = makeHarness({ getExistingDownloadTasks });
+
+    const reattached = await fetcher.reattachExistingDownloads(() => {}, MODEL_URL);
+
+    expect(reattached?.status).toBe('paused');
+
+    await fetcher.pauseFetching(MODEL_URL);
+    await fetcher.resumeFetching(MODEL_URL);
+    await fetcher.cancelFetching(MODEL_URL);
+
+    expect(existingTask.pause).toHaveBeenCalled();
+    expect(existingTask.resume).toHaveBeenCalled();
+    expect(existingTask.stop).toHaveBeenCalled();
+    await expect(reattached?.promise).rejects.toThrow(/cancelled/i);
+  });
+
+  it('returns null when no matching native tasks need reattachment', async () => {
+    const getExistingDownloadTasks = jest.fn(async () => []);
+    const { fetcher } = makeHarness({ getExistingDownloadTasks });
+
+    await expect(fetcher.reattachExistingDownloads(() => {}, MODEL_URL)).resolves.toBeNull();
   });
 });
