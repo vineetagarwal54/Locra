@@ -1,4 +1,4 @@
-import { verifyModelIntegrity } from '../../../src/model/ModelIntegrity';
+import { File } from 'expo-file-system';
 
 // expo-file-system pulls in a native module unavailable under Jest, so File is
 // mocked. js-sha256 is pure JS, so it runs for real — the tests hash a known
@@ -8,7 +8,7 @@ jest.mock('expo-file-system', () => ({
   FileMode: { ReadOnly: 'r' },
 }));
 
-import { File } from 'expo-file-system';
+import { verifyModelIntegrity } from '../../../src/model/ModelIntegrity';
 
 const MockFile = File as unknown as jest.Mock;
 
@@ -75,7 +75,9 @@ describe('verifyModelIntegrity (streaming SHA-256)', () => {
   it('is case-insensitive about the pinned digest', async () => {
     primeFile({ exists: true, bytes: ABC_BYTES });
 
-    await expect(verifyModelIntegrity('file:///model.pte', ABC_SHA256.toUpperCase())).resolves.toBe(true);
+    await expect(verifyModelIntegrity('file:///model.pte', ABC_SHA256.toUpperCase())).resolves.toBe(
+      true
+    );
   });
 
   it('verifies false when the streamed file hash does not match', async () => {

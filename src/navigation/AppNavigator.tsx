@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useState } from 'react';
 
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
+import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
 import { AnswerScreen } from '../screens/AnswerScreen';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
@@ -10,8 +11,8 @@ import { CaptureScreen } from '../screens/CaptureScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { ModelSetupScreen } from '../screens/ModelSetupScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
-import { storage } from '../storage/mmkv';
 import { useModelStore } from '../store/modelStore';
+import { hasCompletedWelcome } from '../store/onboardingStore';
 
 export type RootStackParamList = {
   Welcome: undefined;
@@ -39,8 +40,7 @@ const Benchmark = withErrorBoundary(BenchmarkScreen);
 //   3. Onboarded, model ready → Capture
 // Returning users with a ready model land straight on the camera.
 function resolveInitialRoute(): keyof RootStackParamList {
-  const hasSeenWelcome = storage.getBoolean('hasSeenWelcome') ?? false;
-  if (!hasSeenWelcome) {
+  if (!hasCompletedWelcome()) {
     return 'Welcome';
   }
   if (!useModelStore.getState().isReadyForInference()) {
@@ -50,6 +50,10 @@ function resolveInitialRoute(): keyof RootStackParamList {
 }
 
 export function AppNavigator() {
+  const engineReady = useModelStore(
+    (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
+  );
+
   // Reconcile the on-device model against disk BEFORE resolving the initial route,
   // so a returning user with a ready model goes straight to Capture and a
   // deleted/corrupt model routes to ModelSetup. resolveInitialRoute() reads a
@@ -82,6 +86,7 @@ export function AppNavigator() {
 
   return (
     <NavigationContainer>
+      {engineReady ? <InferenceEngineHost /> : null}
       <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
         <Stack.Screen name="Capture" component={Capture} />

@@ -74,7 +74,7 @@ export class ModelDownloadManager {
     try {
       const { paths } = await this.deps.fetcher.fetch(
         (progress) => this.setState({ downloadProgress: progress }),
-        ...this.deps.sources,
+        ...this.deps.sources
       );
       const verified = await this.deps.verifyIntegrity(paths[0], this.deps.expectedSha256);
       if (verified) {
@@ -146,21 +146,38 @@ export class ModelDownloadManager {
   }
 
   async pauseDownload(): Promise<void> {
+    if (this.state.downloadStatus !== 'downloading') {
+      try {
+        await this.deps.fetcher.pauseFetching(...this.deps.sources);
+      } catch {
+        // Nothing active to pause.
+      }
+      return;
+    }
+
+    this.setState({ downloadStatus: 'paused' });
     try {
       await this.deps.fetcher.pauseFetching(...this.deps.sources);
-      this.setState({ downloadStatus: 'paused' });
     } catch {
-      // Nothing active to pause — absorb ResourceFetcherAlreadyPaused into a
-      // safe no-op (model-lifecycle.contract.md preconditions).
+      this.setState({ downloadStatus: 'downloading' });
     }
   }
 
   async resumeDownload(): Promise<void> {
+    if (this.state.downloadStatus !== 'paused') {
+      try {
+        await this.deps.fetcher.resumeFetching(...this.deps.sources);
+      } catch {
+        // Nothing paused to resume.
+      }
+      return;
+    }
+
+    this.setState({ downloadStatus: 'downloading' });
     try {
       await this.deps.fetcher.resumeFetching(...this.deps.sources);
-      this.setState({ downloadStatus: 'downloading' });
     } catch {
-      // Nothing paused to resume — absorb ResourceFetcherAlreadyOngoing.
+      this.setState({ downloadStatus: 'paused' });
     }
   }
 
@@ -191,5 +208,7 @@ export class ModelDownloadManager {
 }
 
 function toMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim() !== '' ? error.message : 'Model download failed.';
+  return error instanceof Error && error.message.trim() !== ''
+    ? error.message
+    : 'Model download failed.';
 }

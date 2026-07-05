@@ -12,11 +12,36 @@ const EXPECTED_SIZE = 2_427_656_704;
 const LOCAL_MODEL_PATH = '/local/react-native-executorch/model.pte';
 const LOCAL_TOKENIZER_PATH = '/local/react-native-executorch/tokenizer.json';
 
-function makeHarness() {
-  const fetch = jest.fn(async () => ({
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+interface FetchResult {
+  paths: string[];
+  wasDownloaded: boolean[];
+}
+
+function defer<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function successfulFetchResult(): FetchResult {
+  return {
     paths: [LOCAL_MODEL_PATH, LOCAL_TOKENIZER_PATH],
     wasDownloaded: [true, true],
-  }));
+  };
+}
+
+function makeHarness() {
+  const fetch = jest.fn(async () => successfulFetchResult());
   const pauseFetching = jest.fn(async () => {});
   const resumeFetching = jest.fn(async () => {});
   const cancelFetching = jest.fn(async () => {});
@@ -26,7 +51,14 @@ function makeHarness() {
   const getFileSize = jest.fn(async () => EXPECTED_SIZE);
 
   const manager = new ModelDownloadManager({
-    fetcher: { fetch, pauseFetching, resumeFetching, cancelFetching, deleteResources, listDownloadedModels },
+    fetcher: {
+      fetch,
+      pauseFetching,
+      resumeFetching,
+      cancelFetching,
+      deleteResources,
+      listDownloadedModels,
+    },
     verifyIntegrity,
     getFileSize,
     sources: SOURCES,
@@ -85,11 +117,50 @@ describe('ModelDownloadManager', () => {
     await expect(manager.pauseDownload()).resolves.toBeUndefined();
   });
 
+  it('publishes paused immediately while the native pause request settles', async () => {
+    const { manager, fetch, pauseFetching } = makeHarness();
+    const fetchDeferred = defer<FetchResult>();
+    const pauseDeferred = defer<void>();
+    fetch.mockReturnValue(fetchDeferred.promise);
+    pauseFetching.mockReturnValue(pauseDeferred.promise);
+
+    const startPromise = manager.startDownload();
+    expect(manager.getState().downloadStatus).toBe('downloading');
+
+    const pausePromise = manager.pauseDownload();
+    expect(manager.getState().downloadStatus).toBe('paused');
+
+    pauseDeferred.resolve();
+    await pausePromise;
+    fetchDeferred.resolve(successfulFetchResult());
+    await startPromise;
+  });
+
   it('resumeDownload() no-ops safely when there is nothing active to resume', async () => {
     const { manager, resumeFetching } = makeHarness();
     resumeFetching.mockRejectedValue(new Error('ResourceFetcherAlreadyOngoing'));
 
     await expect(manager.resumeDownload()).resolves.toBeUndefined();
+  });
+
+  it('publishes downloading immediately while the native resume request settles', async () => {
+    const { manager, fetch, resumeFetching } = makeHarness();
+    const fetchDeferred = defer<FetchResult>();
+    const resumeDeferred = defer<void>();
+    fetch.mockReturnValue(fetchDeferred.promise);
+
+    const startPromise = manager.startDownload();
+    await manager.pauseDownload();
+    expect(manager.getState().downloadStatus).toBe('paused');
+
+    resumeFetching.mockReturnValue(resumeDeferred.promise);
+    const resumePromise = manager.resumeDownload();
+    expect(manager.getState().downloadStatus).toBe('downloading');
+
+    resumeDeferred.resolve();
+    await resumePromise;
+    fetchDeferred.resolve(successfulFetchResult());
+    await startPromise;
   });
 
   it('deletes the corrupt file before reporting failed (clean re-download guarantee)', async () => {
