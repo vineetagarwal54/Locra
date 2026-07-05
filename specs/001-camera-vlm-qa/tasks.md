@@ -128,14 +128,14 @@ touches model loading."
 
 ### Tests for User Story 3
 
-- [ ] T028 [P] [US3] Unit tests for the history store in `tests/unit/history/HistoryStore.test.ts` against a test MMKV instance: `save` persists a terminal-state session; `list` returns newest-first; `delete` removes an entry such that a later `get` returns `null`; `clear` empties the list; `setFlag` on a nonexistent id no-ops rather than throwing — per `contracts/history-store.contract.md`
+- [X] T028 [P] [US3] Unit tests for the history store in `tests/unit/history/HistoryStore.test.ts` against a test MMKV instance: `save` persists a terminal-state session; `list` returns newest-first; `delete` removes an entry such that a later `get` returns `null`; `clear` empties the list; `setFlag` on a nonexistent id no-ops rather than throwing — per `contracts/history-store.contract.md`
 
 ### Implementation for User Story 3
 
-- [ ] T029 [US3] Implement `HistoryStore` in `src/history/HistoryStore.ts` (MMKV-backed, using the T008 instance), satisfying T028
-- [ ] T030 [US3] Create the `historyStore` (Zustand) in `src/store/historyStore.ts` wrapping `HistoryStore` for screen consumption; depends on T029
-- [ ] T031 [US3] Wire `inferenceStore` (T018) to call `historyStore.save()` with the completed `QASession` + `PerformanceMetrics` on every `'completed'` transition (FR-015) in `src/store/inferenceStore.ts`; depends on T018, T030
-- [ ] T032 [US3] Implement `HistoryScreen.tsx` in `src/screens/HistoryScreen.tsx` — list with question/answer/metrics, delete-one, clear-all, and an empty state; depends on T030
+- [X] T029 [US3] Implement `HistoryStore` in `src/history/HistoryStore.ts` (MMKV-backed, using the T008 instance), satisfying T028
+- [X] T030 [US3] Create the `historyStore` (Zustand) in `src/store/historyStore.ts` wrapping `HistoryStore` for screen consumption; depends on T029
+- [X] T031 [US3] Wire `inferenceStore` (T018) to call `historyStore.save()` with the completed `QASession` + `PerformanceMetrics` on every `'completed'` transition (FR-015) in `src/store/inferenceStore.ts`; depends on T018, T030
+- [X] T032 [US3] Implement `HistoryScreen.tsx` in `src/screens/HistoryScreen.tsx` — list with question/answer/metrics, delete-one, clear-all, and an empty state; depends on T030
 
 **Checkpoint**: Completed sessions are now persisted and fully manageable from the History screen.
 
