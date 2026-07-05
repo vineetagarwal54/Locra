@@ -5,6 +5,7 @@ import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
 
+import { useHistoryStore } from './historyStore';
 import { useModelStore } from './modelStore';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,40 +132,38 @@ queue.subscribe((state: InferenceState) => {
 // routes through the store action (so `lastRequest` is captured); `subscribe`
 // and `getState` read straight from the queue — the source of truth.
 export const inferenceQueue: IInferenceQueue = {
-  submit: (request: InferenceRequest): Promise<void> => useInferenceStore.getState().submit(request),
+  submit: (request: InferenceRequest): Promise<void> =>
+    useInferenceStore.getState().submit(request),
   cancel: (): void => useInferenceStore.getState().cancel(),
   subscribe: (listener: (state: InferenceState) => void): (() => void) => queue.subscribe(listener),
   getState: (): InferenceState => queue.getState(),
 };
 
-// ── History persistence (stub) ──────────────────────────────────────────────
-// FR-015 says every completed session is saved. The MMKV-backed HistoryStore and
-// its Zustand wrapper arrive in US3 (T029-T031); until then this in-memory stub
-// stands in so the completion→save wiring is exercised and ready to swap.
+// ── History persistence ─────────────────────────────────────────────────────
+// FR-015 says every completed session is saved locally. Cancelled/errored
+// sessions are intentionally not persisted in Phase 1 history.
 
 let lastSavedSession: QASession | null = null;
 
-function historyStoreSaveStub(session: QASession): void {
-  // TODO(T031): replace with `useHistoryStore.getState().save(session)`.
+function saveToHistoryStore(session: QASession): void {
   lastSavedSession = session;
+  useHistoryStore.getState().save(session);
 }
 
-/** Dev/inspection hook for the stubbed save sink; removed when T031 wires real history. */
+/** Dev/inspection hook for tests and local debugging. */
 export function __getLastSavedSession(): QASession | null {
   return lastSavedSession;
 }
 
 function flagLastSavedSession(note?: string): void {
-  // TODO(T033): replace with `useHistoryStore.getState().setFlag(id, true, note)`
-  // once the real MMKV-backed history store exists. For now flag the in-memory
-  // stub in place so the Answer screen's report action is fully wired.
   if (lastSavedSession !== null) {
     lastSavedSession = { ...lastSavedSession, flagged: true, flagNote: note ?? null };
+    useHistoryStore.getState().setFlag(lastSavedSession.id, true, note);
   }
 }
 
 function saveCompletedSession(request: InferenceRequest, state: InferenceState): void {
-  historyStoreSaveStub({
+  saveToHistoryStore({
     id: generateSessionId(),
     createdAt: Date.now(),
     imagePath: request.imagePath,
