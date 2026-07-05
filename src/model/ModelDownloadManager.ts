@@ -13,11 +13,23 @@ import type { ModelConfig } from './ModelConfig';
 // without importing the native package.
 export type ResourceSource = string | number | object;
 
+export type ReattachedDownloadStatus = 'downloading' | 'paused';
+
+export interface ReattachedDownload {
+  status: ReattachedDownloadStatus;
+  progress: number;
+  promise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>;
+}
+
 export interface ResourceFetcherLike {
   fetch(
     callback?: (progress: number) => void,
     ...sources: ResourceSource[]
   ): Promise<{ paths: string[]; wasDownloaded: boolean[] }>;
+  reattachExistingDownloads?(
+    callback?: (progress: number) => void,
+    ...sources: ResourceSource[]
+  ): Promise<ReattachedDownload | null>;
   pauseFetching(...sources: ResourceSource[]): Promise<void>;
   resumeFetching(...sources: ResourceSource[]): Promise<void>;
   cancelFetching(...sources: ResourceSource[]): Promise<void>;
@@ -78,29 +90,13 @@ export class ModelDownloadManager {
       const config = await this.deps.getModelConfig();
       this.lastModelConfig = config;
       didStartFetch = true;
-      const { paths } = await this.deps.fetcher.fetch(
-        (progress) => this.setState({ downloadProgress: progress }),
-        ...this.deps.sources
+      await this.finishDownload(
+        this.deps.fetcher.fetch(
+          (progress) => this.setState({ downloadProgress: progress }),
+          ...this.deps.sources
+        ),
+        config
       );
-      const verified = await this.deps.verifyIntegrity(paths[0], config.expectedSha256);
-      if (verified) {
-        this.setState({
-          downloadStatus: 'downloaded',
-          downloadProgress: 1,
-          integrityVerified: true,
-          error: null,
-        });
-        return;
-      }
-      // Corrupt bytes: clear the partial file BEFORE reporting 'failed' so the
-      // next startDownload() is always a clean re-download, never a resume of
-      // corrupt bytes (model-lifecycle.contract.md postconditions).
-      await this.safeDelete();
-      this.setState({
-        downloadStatus: 'failed',
-        integrityVerified: false,
-        error: 'The downloaded model failed its integrity check.',
-      });
     } catch (error) {
       if (didStartFetch) {
         await this.safeDelete();
@@ -110,6 +106,33 @@ export class ModelDownloadManager {
         integrityVerified: false,
         error: toMessage(error),
       });
+    }
+  }
+
+  async reattachExistingDownload(): Promise<boolean> {
+    if (!this.deps.fetcher.reattachExistingDownloads) {
+      return false;
+    }
+
+    try {
+      const reattached = await this.deps.fetcher.reattachExistingDownloads(
+        (progress) => this.setState({ downloadProgress: progress }),
+        ...this.deps.sources
+      );
+      if (!reattached) {
+        return false;
+      }
+
+      this.setState({
+        downloadStatus: reattached.status,
+        downloadProgress: reattached.progress,
+        integrityVerified: false,
+        error: null,
+      });
+      void this.finishReattachedDownload(reattached.promise);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -204,6 +227,54 @@ export class ModelDownloadManager {
     } catch {
       // Best-effort cleanup; a delete failure must not mask the real outcome.
     }
+  }
+
+  private async finishReattachedDownload(
+    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>
+  ): Promise<void> {
+    try {
+      const config = await this.deps.getModelConfig();
+      this.lastModelConfig = config;
+      await this.finishDownload(downloadPromise, config);
+    } catch (error) {
+      try {
+        await this.deps.fetcher.cancelFetching(...this.deps.sources);
+      } catch {
+        // Nothing active to cancel.
+      }
+      await this.safeDelete();
+      this.setState({
+        downloadStatus: 'failed',
+        integrityVerified: false,
+        error: toMessage(error),
+      });
+    }
+  }
+
+  private async finishDownload(
+    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
+    config: ModelConfig
+  ): Promise<void> {
+    const { paths } = await downloadPromise;
+    const verified = await this.deps.verifyIntegrity(paths[0], config.expectedSha256);
+    if (verified) {
+      this.setState({
+        downloadStatus: 'downloaded',
+        downloadProgress: 1,
+        integrityVerified: true,
+        error: null,
+      });
+      return;
+    }
+    // Corrupt bytes: clear the partial file BEFORE reporting 'failed' so the
+    // next startDownload() is always a clean re-download, never a resume of
+    // corrupt bytes (model-lifecycle.contract.md postconditions).
+    await this.safeDelete();
+    this.setState({
+      downloadStatus: 'failed',
+      integrityVerified: false,
+      error: 'The downloaded model failed its integrity check.',
+    });
   }
 
   private setState(patch: Partial<ModelState>): void {
