@@ -96,4 +96,20 @@ describe('verifyModelIntegrity (streaming SHA-256)', () => {
 
     await expect(verifyModelIntegrity('file:///unreadable.pte', ABC_SHA256)).resolves.toBe(false);
   });
+
+  it('normalizes a raw filesystem path (as returned by fetch()) to a file:// URI', async () => {
+    primeFile({ exists: true, bytes: ABC_BYTES });
+
+    await verifyModelIntegrity('/data/user/0/com.locra.app/cache/model.pte', ABC_SHA256);
+
+    expect(MockFile).toHaveBeenCalledWith('file:///data/user/0/com.locra.app/cache/model.pte');
+  });
+
+  it('leaves an existing file:// URI unchanged', async () => {
+    primeFile({ exists: true, bytes: ABC_BYTES });
+
+    await verifyModelIntegrity('file:///already/a/uri/model.pte', ABC_SHA256);
+
+    expect(MockFile).toHaveBeenCalledWith('file:///already/a/uri/model.pte');
+  });
 });

@@ -124,10 +124,12 @@ export class ModelDownloadManager {
         return;
       }
       // Cheap, memory-safe guard against a partial/truncated download (e.g. the
-      // app was killed mid-fetch): a file whose size doesn't match the pinned
-      // model size is discarded rather than trusted as ready.
+      // app was killed mid-fetch). A partial download is strictly SMALLER than
+      // the complete file, so we reject only when the on-disk size falls short of
+      // the pinned size — this catches truncated files without ever false-deleting
+      // a complete one that happens to be at (or above) the expected size.
       const size = await this.deps.getFileSize(models[0]);
-      if (size !== this.deps.expectedSize) {
+      if (size < this.deps.expectedSize) {
         await this.safeDelete();
         this.setState({ ...INITIAL_STATE });
         return;
