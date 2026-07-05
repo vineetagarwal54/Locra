@@ -17,13 +17,13 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useInferenceStore } from '../store/inferenceStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Answer'>;
+type InferenceStatus = ReturnType<typeof useInferenceStore.getState>['status'];
 
-const THUMB_SIZE = 80;
+const THUMB_SIZE = 84;
 const ANSWER_LINE_HEIGHT_RATIO = 1.6;
 const CURSOR_WIDTH = 2;
-const CURSOR_HEIGHT = 14;
+const CURSOR_HEIGHT = 16;
 const CURSOR_BLINK_MS = 1000;
-// A neutral placeholder blurhash shown until the thumbnail decodes.
 const THUMB_BLURHASH = 'L6Pj0^jE.AyE_3t7t7R**0o#DgR4';
 
 export function AnswerScreen({ navigation, route }: Props) {
@@ -38,11 +38,13 @@ export function AnswerScreen({ navigation, route }: Props) {
 
   const [flagged, setFlagged] = useState(false);
 
-  const isGenerating = status === 'streaming' || status === 'preprocessing' || status === 'loading_model';
+  const isGenerating =
+    status === 'streaming' || status === 'preprocessing' || status === 'loading_model';
   const isCompleted = status === 'completed';
   const isErrored = status === 'errored';
+  const hasResponse = response.trim() !== '';
+  const flagDisabled = !isCompleted || flagged;
 
-  // Terminal-state haptics (constitution Principle III cues).
   useEffect(() => {
     if (isCompleted) {
       void haptics.success();
@@ -51,7 +53,6 @@ export function AnswerScreen({ navigation, route }: Props) {
     }
   }, [isCompleted, isErrored]);
 
-  // Blinking streaming cursor (opacity 1 → 0 → 1) while a generation is live.
   const cursorOpacity = useSharedValue(1);
   useEffect(() => {
     if (isGenerating) {
@@ -63,12 +64,20 @@ export function AnswerScreen({ navigation, route }: Props) {
   }, [isGenerating, cursorOpacity]);
   const cursorStyle = useAnimatedStyle(() => ({ opacity: cursorOpacity.value }));
 
+  const onBack = (): void => {
+    void haptics.tap();
+    navigation.goBack();
+  };
+
   const onCancel = (): void => {
     cancel();
     void haptics.tap();
   };
 
   const onFlag = (): void => {
+    if (flagDisabled) {
+      return;
+    }
     flagCurrentSession();
     void haptics.tap();
     setFlagged(true);
@@ -76,22 +85,53 @@ export function AnswerScreen({ navigation, route }: Props) {
 
   const metricPills = metrics
     ? [
-        { key: 'firstToken', label: 'First token', value: `${Math.round(metrics.firstTokenLatencyMs)} ms` },
-        { key: 'tokensPerSec', label: 'Tok/sec', value: metrics.tokensPerSecond.toFixed(1) },
+        {
+          key: 'modelLoad',
+          label: 'Model load',
+          value: `${Math.round(metrics.modelLoadTimeMs)} ms`,
+        },
+        {
+          key: 'preprocess',
+          label: 'Preprocess',
+          value: `${Math.round(metrics.preprocessingTimeMs)} ms`,
+        },
+        {
+          key: 'firstToken',
+          label: 'First token',
+          value: `${Math.round(metrics.firstTokenLatencyMs)} ms`,
+        },
+        { key: 'tokensPerSec', label: 'Tokens/sec', value: metrics.tokensPerSecond.toFixed(1) },
         { key: 'total', label: 'Total', value: `${Math.round(metrics.totalWallTimeMs)} ms` },
-        { key: 'preprocess', label: 'Preprocess', value: `${Math.round(metrics.preprocessingTimeMs)} ms` },
       ]
     : [];
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" style={styles.headerButton} onPress={navigation.goBack}>
-          <Text style={styles.headerGlyph}>‹</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to camera"
+          style={styles.backButton}
+          onPress={onBack}
+        >
+          <Text style={styles.backLabel}>Camera</Text>
         </Pressable>
-        <Text style={styles.title}>Answer</Text>
-        <Pressable accessibilityRole="button" style={styles.headerButton} onPress={onFlag}>
-          <Text style={styles.flagGlyph}>⚑</Text>
+        <Text style={styles.title}>{isGenerating ? 'Looking' : 'Answer'}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={flagged ? 'Answer flagged' : 'Flag bad answer'}
+          disabled={flagDisabled}
+          style={({ pressed }) => [
+            styles.flagButton,
+            flagged && styles.flagButtonActive,
+            pressed && !flagDisabled && styles.flagButtonPressed,
+            flagDisabled && !flagged && styles.flagButtonDisabled,
+          ]}
+          onPress={onFlag}
+        >
+          <Text style={[styles.flagLabel, flagged && styles.flagLabelActive]}>
+            {flagged ? 'Flagged' : 'Flag'}
+          </Text>
         </Pressable>
       </View>
 
@@ -100,36 +140,54 @@ export function AnswerScreen({ navigation, route }: Props) {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.promptRow}>
+        <View style={styles.promptCard}>
           <Image
             style={styles.thumb}
-            source={{ uri: `file://${imagePath}` }}
+            source={{ uri: toPreviewUri(imagePath) }}
             placeholder={{ blurhash: THUMB_BLURHASH }}
             transition={theme.animationTiming}
             contentFit="cover"
           />
-          <Text style={styles.question}>{question}</Text>
+          <View style={styles.questionBody}>
+            <Text style={styles.sectionLabel}>Question</Text>
+            <Text style={styles.question}>{question}</Text>
+          </View>
         </View>
 
-        <View style={styles.answerRow}>
-          <Text style={styles.answerText}>{response}</Text>
-          {isGenerating ? <Animated.View style={[styles.cursor, cursorStyle]} /> : null}
+        <View style={styles.answerBlock}>
+          <Text style={styles.sectionLabel}>{getStatusLabel(status)}</Text>
+          <View style={styles.answerRow}>
+            <Text style={[styles.answerText, !hasResponse && styles.answerPlaceholder]}>
+              {hasResponse ? response : getAnswerPlaceholder(status)}
+            </Text>
+            {isGenerating ? <Animated.View style={[styles.cursor, cursorStyle]} /> : null}
+          </View>
         </View>
 
-        {isErrored && error !== null ? <Text style={styles.error}>{error}</Text> : null}
-
-        {isCompleted ? (
-          <View style={styles.metricsRow}>
-            {metricPills.map((pill) => (
-              <View key={pill.key} style={styles.pill}>
-                <Text style={styles.pillValue}>{pill.value}</Text>
-                <Text style={styles.pillLabel}>{pill.label}</Text>
-              </View>
-            ))}
+        {isErrored && error !== null ? (
+          <View style={styles.errorCard}>
+            <Text style={styles.errorTitle}>No answer this time</Text>
+            <Text style={styles.error}>{error}</Text>
           </View>
         ) : null}
 
-        {flagged ? <Text style={styles.flaggedConfirm}>Flagged</Text> : null}
+        {isCompleted ? (
+          <View style={styles.metricsBlock}>
+            <Text style={styles.metricsTitle}>Performance</Text>
+            <View style={styles.metricsRow}>
+              {metricPills.map((pill) => (
+                <View key={pill.key} style={styles.pill}>
+                  <Text style={styles.pillValue}>{pill.value}</Text>
+                  <Text style={styles.pillLabel}>{pill.label}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        {flagged ? (
+          <Text style={styles.flaggedConfirm}>Saved as flagged on this phone.</Text>
+        ) : null}
       </ScrollView>
 
       {isGenerating ? (
@@ -139,6 +197,32 @@ export function AnswerScreen({ navigation, route }: Props) {
       ) : null}
     </SafeAreaView>
   );
+}
+
+function getStatusLabel(status: InferenceStatus): string {
+  if (status === 'preprocessing') return 'Preparing photo';
+  if (status === 'loading_model') return 'Loading model';
+  if (status === 'streaming') return 'Answering';
+  if (status === 'completed') return 'Answer';
+  if (status === 'errored') return 'Error';
+  if (status === 'cancelled') return 'Cancelled';
+  return 'Waiting';
+}
+
+function getAnswerPlaceholder(status: InferenceStatus): string {
+  if (status === 'preprocessing') return 'Making the photo small enough for this phone.';
+  if (status === 'loading_model') return 'Waking up the on-device model.';
+  if (status === 'streaming') return 'Looking closely.';
+  if (status === 'errored') return 'Locra stopped before it could answer.';
+  if (status === 'cancelled') return 'This answer was cancelled.';
+  return 'Your answer will appear here.';
+}
+
+function toPreviewUri(path: string): string {
+  if (path.startsWith('file://') || path.startsWith('content://')) {
+    return path;
+  }
+  return `file://${path}`;
 }
 
 const styles = StyleSheet.create({
@@ -153,24 +237,50 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.space4,
     paddingVertical: theme.space3,
   },
-  headerButton: {
-    width: theme.space6,
+  backButton: {
+    minWidth: theme.space6 * 3,
     height: theme.space6,
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  headerGlyph: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeXl,
-  },
-  flagGlyph: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeLg,
+  backLabel: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+    fontWeight: '700',
   },
   title: {
     color: theme.textPrimary,
     fontSize: theme.fontSizeLg,
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+  flagButton: {
+    minWidth: theme.space6 * 3,
+    height: theme.space6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.space3,
+    borderRadius: theme.radiusPill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    backgroundColor: theme.accentGlow,
+  },
+  flagButtonActive: {
+    borderColor: theme.success,
+    backgroundColor: theme.surface2,
+  },
+  flagButtonPressed: {
+    backgroundColor: theme.surface3,
+  },
+  flagButtonDisabled: {
+    opacity: 0.45,
+  },
+  flagLabel: {
+    color: theme.accent,
+    fontSize: theme.fontSizeSm,
+    fontWeight: '700',
+  },
+  flagLabelActive: {
+    color: theme.success,
   },
   offlineRow: {
     alignItems: 'center',
@@ -180,10 +290,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.space4,
     paddingBottom: theme.space6,
   },
-  promptRow: {
+  promptCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.space4,
+    padding: theme.space3,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    marginBottom: theme.space5,
   },
   thumb: {
     width: THUMB_SIZE,
@@ -192,10 +307,22 @@ const styles = StyleSheet.create({
     marginRight: theme.space3,
     backgroundColor: theme.surface2,
   },
-  question: {
+  questionBody: {
     flex: 1,
+  },
+  sectionLabel: {
+    color: theme.textMuted,
+    fontSize: theme.fontSizeXs,
+    fontWeight: '700',
+    marginBottom: theme.space1,
+  },
+  question: {
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  answerBlock: {
+    marginBottom: theme.space5,
   },
   answerRow: {
     flexDirection: 'row',
@@ -207,6 +334,9 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeMd,
     lineHeight: theme.fontSizeMd * ANSWER_LINE_HEIGHT_RATIO,
   },
+  answerPlaceholder: {
+    color: theme.textSecondary,
+  },
   cursor: {
     width: CURSOR_WIDTH,
     height: CURSOR_HEIGHT,
@@ -214,20 +344,43 @@ const styles = StyleSheet.create({
     marginBottom: theme.space1,
     backgroundColor: theme.accent,
   },
-  error: {
-    marginTop: theme.space4,
-    color: theme.error,
+  errorCard: {
+    padding: theme.space4,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+    marginBottom: theme.space5,
+  },
+  errorTitle: {
+    color: theme.textPrimary,
     fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+    marginBottom: theme.space2,
+  },
+  error: {
+    color: theme.error,
+    fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  metricsBlock: {
+    marginTop: theme.space2,
+  },
+  metricsTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+    marginBottom: theme.space3,
   },
   metricsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginTop: theme.space5,
   },
   pill: {
+    minWidth: theme.space6 * 5,
     paddingVertical: theme.space2,
     paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusPill,
+    borderRadius: theme.radiusMd,
     backgroundColor: theme.accentGlow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.accentBorder,
@@ -237,17 +390,19 @@ const styles = StyleSheet.create({
   pillValue: {
     color: theme.accent,
     fontSize: theme.fontSizeSm,
-    fontWeight: '600',
+    fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   pillLabel: {
-    color: theme.accent,
+    color: theme.textSecondary,
     fontSize: theme.fontSizeXs,
+    marginTop: theme.space1,
   },
   flaggedConfirm: {
     marginTop: theme.space4,
-    color: theme.textMuted,
+    color: theme.success,
     fontSize: theme.fontSizeSm,
+    textAlign: 'center',
   },
   cancelButton: {
     alignSelf: 'center',
@@ -257,10 +412,11 @@ const styles = StyleSheet.create({
     borderRadius: theme.radiusPill,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.accentBorder,
+    backgroundColor: theme.accentGlow,
   },
   cancelLabel: {
     color: theme.accent,
     fontSize: theme.fontSizeMd,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

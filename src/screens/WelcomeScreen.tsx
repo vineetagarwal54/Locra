@@ -6,34 +6,33 @@ import { useCameraPermission } from 'react-native-vision-camera';
 
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { storage } from '../storage/mmkv';
 import { useModelStore } from '../store/modelStore';
-
-// First run only. The primary promise here is trust: plain words, no jargon, no
-// "AI" — just what it does and the fact that nothing ever leaves the phone.
-// AppNavigator gates this screen on the MMKV `hasSeenWelcome` flag set below.
+import { useOnboardingStore } from '../store/onboardingStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
 
-const HERO_BADGE_SIZE = 104;
-const HERO_GLYPH_SIZE = 52;
+const HERO_CARD_WIDTH = 188;
+const HERO_CARD_HEIGHT = 118;
+const HERO_SIDE_CARD_WIDTH = 132;
+const HERO_SIDE_CARD_HEIGHT = 92;
+const LENS_SIZE = 58;
+const LENS_INNER_SIZE = 30;
 const READABLE_LINE_HEIGHT_RATIO = 1.5;
 
 export function WelcomeScreen({ navigation }: Props) {
   const { hasPermission, requestPermission } = useCameraPermission();
+  const completeWelcome = useOnboardingStore((s) => s.completeWelcome);
+  const isReadyForInference = useModelStore((s) => s.isReadyForInference);
   const [denied, setDenied] = useState(false);
 
   const proceed = useCallback((): void => {
-    // Never show this screen again once the person has gotten started.
-    storage.set('hasSeenWelcome', true);
-    // Hand off to the model-download screen unless the model is already ready
-    // (same gate AppNavigator uses at launch), otherwise straight to the camera.
-    if (useModelStore.getState().isReadyForInference()) {
+    completeWelcome();
+    if (isReadyForInference()) {
       navigation.replace('Capture');
     } else {
       navigation.replace('ModelSetup');
     }
-  }, [navigation]);
+  }, [completeWelcome, isReadyForInference, navigation]);
 
   const onPrimary = useCallback(async (): Promise<void> => {
     void haptics.tap();
@@ -54,29 +53,50 @@ export function WelcomeScreen({ navigation }: Props) {
     void Linking.openSettings();
   }, []);
 
-  const primaryLabel = hasPermission ? 'Get started' : 'Turn on camera';
+  const primaryLabel = denied
+    ? 'Try camera again'
+    : hasPermission
+      ? 'Start looking'
+      : 'Allow camera';
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.hero}>
-          <Text style={styles.heroGlyph}>📷</Text>
+        <View style={styles.heroStack} accessibilityLabel="Locra photo cards" accessible>
+          <View style={[styles.sidePhoto, styles.leftPhoto]}>
+            <Text style={styles.photoKicker}>Plant</Text>
+            <Text style={styles.photoText}>Is it healthy?</Text>
+          </View>
+          <View style={[styles.sidePhoto, styles.rightPhoto]}>
+            <Text style={styles.photoKicker}>Tool</Text>
+            <Text style={styles.photoText}>What is this for?</Text>
+          </View>
+          <View style={styles.mainPhoto}>
+            <View style={styles.lens}>
+              <View style={styles.lensInner} />
+            </View>
+            <Text style={styles.mainPhotoTitle}>Locra</Text>
+            <Text style={styles.mainPhotoText}>snap, ask, understand</Text>
+          </View>
         </View>
 
-        <Text style={styles.headline}>Welcome to Locra</Text>
+        <Text style={styles.headline}>A camera that answers back</Text>
         <Text style={styles.subhead}>
-          Point your camera at anything around you and ask a question about it. Locra will tell you
-          what it sees.
+          Take a photo, ask in your own words, and Locra explains it right on your phone.
         </Text>
 
-        <View style={styles.privacyCard}>
-          <Text style={styles.privacyGlyph}>🔒</Text>
-          <View style={styles.privacyBody}>
-            <Text style={styles.privacyTitle}>Everything stays on your phone</Text>
-            <Text style={styles.privacyText}>
-              Your pictures and your questions never leave this device. Nothing is sent to the
-              internet, and nothing is ever shared. What you see is just for you.
-            </Text>
+        <View style={styles.promiseGrid}>
+          <View style={styles.promiseCard}>
+            <Text style={styles.promiseNumber}>1</Text>
+            <Text style={styles.promiseText}>Point at anything nearby.</Text>
+          </View>
+          <View style={styles.promiseCard}>
+            <Text style={styles.promiseNumber}>2</Text>
+            <Text style={styles.promiseText}>Ask the question you already have.</Text>
+          </View>
+          <View style={styles.promiseCard}>
+            <Text style={styles.promiseNumber}>3</Text>
+            <Text style={styles.promiseText}>Keep the photo and answer on this phone.</Text>
           </View>
         </View>
       </ScrollView>
@@ -84,14 +104,17 @@ export function WelcomeScreen({ navigation }: Props) {
       <View style={styles.footer}>
         {denied ? (
           <View style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>Camera is off for now</Text>
             <Text style={styles.noticeText}>
-              No problem — you can turn this on any time. Open your phone’s Settings, find Locra, and
-              switch on Camera.
+              You can turn it on in Settings whenever you are ready.
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open your phone settings to allow the camera"
-              style={styles.secondaryButton}
+              accessibilityLabel="Open phone settings to allow the camera"
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                pressed && styles.secondaryButtonPressed,
+              ]}
               onPress={onOpenSettings}
             >
               <Text style={styles.secondaryLabel}>Open Settings</Text>
@@ -99,13 +122,13 @@ export function WelcomeScreen({ navigation }: Props) {
           </View>
         ) : (
           <Text style={styles.permissionNote}>
-            To get started, Locra needs your permission to use the camera.
+            Locra needs camera access before the first photo.
           </Text>
         )}
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={hasPermission ? 'Get started' : 'Turn on the camera to begin'}
+          accessibilityLabel={primaryLabel}
           style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
           onPress={onPrimary}
         >
@@ -126,21 +149,84 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: theme.space5,
-    paddingVertical: theme.space6,
+    paddingTop: theme.space6,
+    paddingBottom: theme.space4,
   },
-  hero: {
-    width: HERO_BADGE_SIZE,
-    height: HERO_BADGE_SIZE,
-    borderRadius: theme.radiusPill,
+  heroStack: {
+    width: '100%',
+    minHeight: HERO_CARD_HEIGHT + theme.space6,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: theme.space6,
+  },
+  sidePhoto: {
+    position: 'absolute',
+    width: HERO_SIDE_CARD_WIDTH,
+    height: HERO_SIDE_CARD_HEIGHT,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    padding: theme.space3,
+    justifyContent: 'flex-end',
+  },
+  leftPhoto: {
+    left: theme.space2,
+    top: theme.space5,
+    transform: [{ rotate: '-8deg' }],
+  },
+  rightPhoto: {
+    right: theme.space2,
+    top: theme.space1,
+    transform: [{ rotate: '7deg' }],
+  },
+  mainPhoto: {
+    width: HERO_CARD_WIDTH,
+    height: HERO_CARD_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+  },
+  lens: {
+    width: LENS_SIZE,
+    height: LENS_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusPill,
     backgroundColor: theme.accentGlow,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.accentBorder,
-    marginBottom: theme.space5,
+    marginBottom: theme.space3,
   },
-  heroGlyph: {
-    fontSize: HERO_GLYPH_SIZE,
+  lensInner: {
+    width: LENS_INNER_SIZE,
+    height: LENS_INNER_SIZE,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accent,
+  },
+  photoKicker: {
+    color: theme.textMuted,
+    fontSize: theme.fontSizeXs,
+    fontWeight: '700',
+    marginBottom: theme.space1,
+  },
+  photoText: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+  },
+  mainPhotoTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeLg,
+    fontWeight: '700',
+  },
+  mainPhotoText: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+    marginTop: theme.space1,
   },
   headline: {
     color: theme.textPrimary,
@@ -154,38 +240,42 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeMd,
     textAlign: 'center',
     lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
-    marginBottom: theme.space6,
+    marginBottom: theme.space5,
   },
-  privacyCard: {
+  promiseGrid: {
+    width: '100%',
+  },
+  promiseCard: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     backgroundColor: theme.surface,
     borderRadius: theme.radiusLg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.border,
     padding: theme.space4,
+    marginBottom: theme.space3,
   },
-  privacyGlyph: {
-    fontSize: theme.fontSizeXl,
+  promiseNumber: {
+    width: theme.space6,
+    height: theme.space6,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accentGlow,
+    color: theme.accent,
+    fontSize: theme.fontSizeSm,
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: theme.space6,
     marginRight: theme.space3,
   },
-  privacyBody: {
+  promiseText: {
     flex: 1,
-  },
-  privacyTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '600',
-    marginBottom: theme.space2,
-  },
-  privacyText: {
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
   },
   footer: {
     paddingHorizontal: theme.space5,
-    paddingTop: theme.space4,
+    paddingTop: theme.space3,
     paddingBottom: theme.space4,
   },
   permissionNote: {
@@ -196,11 +286,17 @@ const styles = StyleSheet.create({
   },
   noticeCard: {
     backgroundColor: theme.surface2,
-    borderRadius: theme.radiusMd,
+    borderRadius: theme.radiusLg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.borderStrong,
     padding: theme.space4,
     marginBottom: theme.space4,
+  },
+  noticeTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+    marginBottom: theme.space1,
   },
   noticeText: {
     color: theme.textSecondary,
@@ -215,6 +311,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.accentBorder,
     backgroundColor: theme.accentGlow,
+  },
+  secondaryButtonPressed: {
+    backgroundColor: theme.surface3,
   },
   secondaryLabel: {
     color: theme.accent,
