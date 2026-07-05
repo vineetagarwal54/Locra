@@ -12,6 +12,7 @@ import Animated, {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { OfflineIndicator } from '../components/OfflineIndicator';
+import { ReportButton } from '../components/ReportButton';
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useInferenceStore } from '../store/inferenceStore';
@@ -117,22 +118,7 @@ export function AnswerScreen({ navigation, route }: Props) {
           <Text style={styles.backLabel}>Camera</Text>
         </Pressable>
         <Text style={styles.title}>{isGenerating ? 'Looking' : 'Answer'}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={flagged ? 'Answer flagged' : 'Flag bad answer'}
-          disabled={flagDisabled}
-          style={({ pressed }) => [
-            styles.flagButton,
-            flagged && styles.flagButtonActive,
-            pressed && !flagDisabled && styles.flagButtonPressed,
-            flagDisabled && !flagged && styles.flagButtonDisabled,
-          ]}
-          onPress={onFlag}
-        >
-          <Text style={[styles.flagLabel, flagged && styles.flagLabelActive]}>
-            {flagged ? 'Flagged' : 'Flag'}
-          </Text>
-        </Pressable>
+        <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.offlineRow}>
@@ -182,6 +168,12 @@ export function AnswerScreen({ navigation, route }: Props) {
                 </View>
               ))}
             </View>
+          </View>
+        ) : null}
+
+        {isCompleted || flagged ? (
+          <View style={styles.reportBlock}>
+            <ReportButton reported={flagged} disabled={!isCompleted} onReport={onFlag} />
           </View>
         ) : null}
 
@@ -253,34 +245,9 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeLg,
     fontWeight: '700',
   },
-  flagButton: {
+  headerSpacer: {
     minWidth: theme.space6 * 3,
     height: theme.space6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusPill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    backgroundColor: theme.accentGlow,
-  },
-  flagButtonActive: {
-    borderColor: theme.success,
-    backgroundColor: theme.surface2,
-  },
-  flagButtonPressed: {
-    backgroundColor: theme.surface3,
-  },
-  flagButtonDisabled: {
-    opacity: 0.45,
-  },
-  flagLabel: {
-    color: theme.accent,
-    fontSize: theme.fontSizeSm,
-    fontWeight: '700',
-  },
-  flagLabelActive: {
-    color: theme.success,
   },
   offlineRow: {
     alignItems: 'center',
@@ -397,6 +364,9 @@ const styles = StyleSheet.create({
     color: theme.textSecondary,
     fontSize: theme.fontSizeXs,
     marginTop: theme.space1,
+  },
+  reportBlock: {
+    marginTop: theme.space4,
   },
   flaggedConfirm: {
     marginTop: theme.space4,

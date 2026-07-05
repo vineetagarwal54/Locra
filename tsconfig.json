@@ -6,6 +6,6 @@
     "strictNullChecks": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["jest"]
+    "types": ["jest", "node"]
   }
 }

@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '../constants/theme';
@@ -5,11 +6,9 @@ import { theme } from '../constants/theme';
 // Always-visible reassurance that inference is on-device (constitution Principle I,
 // FR-004). Mounted in both the Capture and Answer headers.
 
-const DOT_SIZE = 6;
-
-export function OfflineIndicator() {
+export function OfflineIndicator(): ReactElement {
   return (
-    <View style={styles.pill}>
+    <View style={styles.pill} accessibilityLabel="On-device inference indicator" accessible>
       <View style={styles.dot} />
       <Text style={styles.label}>On-device</Text>
     </View>
@@ -28,8 +27,8 @@ const styles = StyleSheet.create({
     borderColor: theme.accentBorder,
   },
   dot: {
-    width: DOT_SIZE,
-    height: DOT_SIZE,
+    width: theme.space2,
+    height: theme.space2,
     borderRadius: theme.radiusPill,
     backgroundColor: theme.accent,
     marginRight: theme.space2,

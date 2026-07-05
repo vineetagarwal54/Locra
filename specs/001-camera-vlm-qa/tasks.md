@@ -147,9 +147,9 @@ touches model loading."
 
 **Independent Test**: After receiving an answer, trigger the report action, confirm the session is flagged without navigating away and with no network activity, then confirm it shows as flagged in History (spec.md US4 Acceptance Scenarios 1–2).
 
-- [ ] T033 [US4] Expose a `setFlag` action on the `historyStore` (T030) in `src/store/historyStore.ts`
-- [ ] T034 [P] [US4] Implement `ReportButton.tsx` in `src/components/ReportButton.tsx` — single-tap flag action, no navigation side effect; depends on T033
-- [ ] T035 [US4] Mount `ReportButton` on `AnswerScreen.tsx` (T020) and render the flagged indicator on entries in `HistoryScreen.tsx` (T032); depends on T020, T032, T034
+- [X] T033 [US4] Expose a `setFlag` action on the `historyStore` (T030) in `src/store/historyStore.ts`
+- [X] T034 [P] [US4] Implement `ReportButton.tsx` in `src/components/ReportButton.tsx` — single-tap flag action, no navigation side effect; depends on T033
+- [X] T035 [US4] Mount `ReportButton` on `AnswerScreen.tsx` (T020) and render the flagged indicator on entries in `HistoryScreen.tsx` (T032); depends on T020, T032, T034
 
 **Checkpoint**: Reporting is available end-to-end and visible in history.
 
@@ -161,7 +161,7 @@ touches model loading."
 
 **Independent Test**: After several completed sessions, open the benchmark screen and confirm all five metrics are visualized across those sessions; with zero sessions, confirm an empty informational state instead of an error (spec.md US5 Acceptance Scenarios 1–2).
 
-- [ ] T036 [P] [US5] Implement `BenchmarkScreen.tsx` in `src/screens/BenchmarkScreen.tsx` — visualizes the five `PerformanceMetrics` fields across `historyStore.list()`, with an empty state when the list is empty; depends on T030
+- [X] T036 [P] [US5] Implement `BenchmarkScreen.tsx` in `src/screens/BenchmarkScreen.tsx` — visualizes the five `PerformanceMetrics` fields across `historyStore.list()`, with an empty state when the list is empty; depends on T030
 
 **Checkpoint**: All five screens are functional; every user story is independently demonstrable.
 
@@ -171,12 +171,12 @@ touches model loading."
 
 **Purpose**: Contract-level verification, cross-module integration checks, and the manual on-device validation pass.
 
-- [ ] T037 [P] Implement `OfflineIndicator.tsx` in `src/components/OfflineIndicator.tsx` and mount it on `CaptureScreen.tsx` and `AnswerScreen.tsx`
-- [ ] T038 [P] Contract test asserting every pre/postcondition in `contracts/inference-pipeline.contract.md` in `tests/contract/inference-pipeline.test.ts`
-- [ ] T039 [P] Contract test asserting every pre/postcondition in `contracts/model-lifecycle.contract.md` in `tests/contract/model-lifecycle.test.ts`
-- [ ] T040 [P] Contract test asserting every pre/postcondition in `contracts/history-store.contract.md` in `tests/contract/history-store.test.ts`
-- [ ] T041 [P] Integration test for the full capture→answer flow with airplane mode enabled, asserting zero network requests are observed, in `tests/integration/ask-flow.test.ts`
-- [ ] T042 [P] Integration test for the missing-model → download → integrity-verified → ready flow, including a simulated interrupted-then-resumed download, in `tests/integration/model-setup-flow.test.ts`
+- [X] T037 [P] Implement `OfflineIndicator.tsx` in `src/components/OfflineIndicator.tsx` and mount it on `CaptureScreen.tsx` and `AnswerScreen.tsx`
+- [X] T038 [P] Contract test asserting every pre/postcondition in `contracts/inference-pipeline.contract.md` in `tests/contract/inference-pipeline.test.ts`
+- [X] T039 [P] Contract test asserting every pre/postcondition in `contracts/model-lifecycle.contract.md` in `tests/contract/model-lifecycle.test.ts`
+- [X] T040 [P] Contract test asserting every pre/postcondition in `contracts/history-store.contract.md` in `tests/contract/history-store.test.ts`
+- [X] T041 [P] Integration test for the full capture→answer flow with airplane mode enabled, asserting zero network requests are observed, in `tests/integration/ask-flow.test.ts`
+- [X] T042 [P] Integration test for the missing-model → download → integrity-verified → ready flow, including a simulated interrupted-then-resumed download, in `tests/integration/model-setup-flow.test.ts`
 - [ ] T043 Run all seven `quickstart.md` scenarios on a physical Android 13+ device with 6–8GB RAM and record pass/fail results, including the 50-attempt sustained-use crash check (SC-008)
 
 ---
