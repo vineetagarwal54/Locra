@@ -5,6 +5,8 @@ import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
 
+import { useModelStore } from './modelStore';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen-facing state for the ask flow. Screens read from THIS store only — never
 // from src/inference/ directly (constitution Principle X). The store owns the
@@ -79,9 +81,14 @@ const bridgeEngine: InferenceEngineAdapter = {
   },
 };
 
-// One single-flight queue for the whole app. `isReadyForInference` stays the
-// Phase-1 mock (`() => true`); T027 replaces it with `modelStore.isReadyForInference()`.
-const queue = createInferenceQueue(bridgeEngine);
+// One single-flight queue for the whole app. T027: the model-readiness gate is
+// now the real `modelStore.isReadyForInference()` — the queue refuses to reach
+// 'loading_model' unless the model is downloaded AND integrity-verified. This
+// wiring lives here (the composition root) rather than inside InferenceQueue.ts
+// so the inference module stays store-free and its unit tests need no native mocks.
+const queue = createInferenceQueue(bridgeEngine, {
+  isReadyForInference: () => useModelStore.getState().isReadyForInference(),
+});
 
 export interface InferenceStoreState extends InferenceState {
   /** Registers (or clears) the live engine handle from the host component. */

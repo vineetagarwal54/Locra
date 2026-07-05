@@ -170,9 +170,11 @@ export class InferenceQueue implements IInferenceQueue {
 }
 
 /**
- * Default wiring. `isReadyForInference` is stubbed to `true` for Phase 1 US1
- * (T016); T027 replaces it with the real `modelStore.isReadyForInference()`.
- * `engine` must be supplied — the real one arrives with `useInferenceEngine` (T017).
+ * Default wiring. The `isReadyForInference` fallback is fail-closed (`() => false`)
+ * — a queue built without a real readiness gate never loads the model. The
+ * composition root (inferenceStore, T027) injects the real
+ * `modelStore.isReadyForInference()` via `overrides`. `engine` must be supplied —
+ * the real one arrives with `useInferenceEngine` (T017).
  */
 export function createInferenceQueue(
   engine: InferenceEngineAdapter,
@@ -180,7 +182,7 @@ export function createInferenceQueue(
 ): InferenceQueue {
   return new InferenceQueue({
     preprocess: preprocessImage,
-    isReadyForInference: () => true,
+    isReadyForInference: () => false,
     engine,
     ...overrides,
   });

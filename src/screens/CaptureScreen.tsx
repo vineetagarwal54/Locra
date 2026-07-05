@@ -3,6 +3,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { BlurView } from 'expo-blur';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
@@ -97,42 +98,48 @@ export function CaptureScreen({ navigation }: Props) {
         <OfflineIndicator />
       </View>
 
-      <View style={styles.body}>
-        {device && hasPermission ? (
-          <Camera style={styles.camera} device={device} isActive={isFocused} outputs={[photoOutput]} />
-        ) : (
-          <View style={styles.cameraFallback}>
-            <Text style={styles.fallbackText}>Camera unavailable</Text>
+      {/* behavior="padding": the keyboard height becomes bottom padding, so the
+          flex:1 camera shrinks while the prompt input and capture bar rise to sit
+          directly above the keyboard — all three stay usable. Reliable on Android
+          under RN edge-to-edge, where the built-in KeyboardAvoidingView is not. */}
+      <KeyboardAvoidingView style={styles.keyboardAvoider} behavior="padding">
+        <View style={styles.body}>
+          {device && hasPermission ? (
+            <Camera style={styles.camera} device={device} isActive={isFocused} outputs={[photoOutput]} />
+          ) : (
+            <View style={styles.cameraFallback}>
+              <Text style={styles.fallbackText}>Camera unavailable</Text>
+            </View>
+          )}
+
+          <View style={styles.promptWrap}>
+            <TextInput
+              style={styles.promptInput}
+              value={prompt}
+              onChangeText={setPrompt}
+              placeholder="Ask anything about what you see…"
+              placeholderTextColor={theme.textSecondary}
+              multiline
+            />
           </View>
-        )}
-
-        <View style={styles.promptWrap}>
-          <TextInput
-            style={styles.promptInput}
-            value={prompt}
-            onChangeText={setPrompt}
-            placeholder="Ask anything about what you see…"
-            placeholderTextColor={theme.textSecondary}
-            multiline
-          />
         </View>
-      </View>
 
-      <BlurView intensity={theme.blurCameraBar} tint="dark" style={styles.bottomBar}>
-        <Pressable accessibilityRole="button" style={styles.sideButton} onPress={onOpenGallery}>
-          <Text style={styles.sideGlyph}>▦</Text>
-        </Pressable>
+        <BlurView intensity={theme.blurCameraBar} tint="dark" style={styles.bottomBar}>
+          <Pressable accessibilityRole="button" style={styles.sideButton} onPress={onOpenGallery}>
+            <Text style={styles.sideGlyph}>▦</Text>
+          </Pressable>
 
-        <Pressable accessibilityRole="button" disabled={captureDisabled} onPress={onCapture}>
-          <Animated.View
-            style={[styles.captureButton, captureAnimatedStyle, captureDisabled && styles.captureDisabled]}
-          />
-        </Pressable>
+          <Pressable accessibilityRole="button" disabled={captureDisabled} onPress={onCapture}>
+            <Animated.View
+              style={[styles.captureButton, captureAnimatedStyle, captureDisabled && styles.captureDisabled]}
+            />
+          </Pressable>
 
-        <Pressable accessibilityRole="button" style={styles.sideButton} onPress={onFlipCamera}>
-          <Text style={styles.sideGlyph}>⟲</Text>
-        </Pressable>
-      </BlurView>
+          <Pressable accessibilityRole="button" style={styles.sideButton} onPress={onFlipCamera}>
+            <Text style={styles.sideGlyph}>⟲</Text>
+          </Pressable>
+        </BlurView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -141,6 +148,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: theme.canvas,
+  },
+  keyboardAvoider: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
