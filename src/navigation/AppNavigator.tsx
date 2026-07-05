@@ -1,14 +1,20 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { useEffect, useState } from 'react';
 
-import { withErrorBoundary } from '../components/ErrorBoundary';
+import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
+import { SplashScreen } from '../components/SplashScreen';
 import { AnswerScreen } from '../screens/AnswerScreen';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { ModelSetupScreen } from '../screens/ModelSetupScreen';
+import { WelcomeScreen } from '../screens/WelcomeScreen';
+import { storage } from '../storage/mmkv';
+import { useModelStore } from '../store/modelStore';
 
 export type RootStackParamList = {
+  Welcome: undefined;
   Capture: undefined;
   Answer: { imagePath: string; question: string };
   History: undefined;
@@ -20,16 +26,64 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 // Constitution Principle III: every screen is wrapped so a render crash in one
 // degrades to a legible fallback instead of taking down the app.
+const Welcome = withErrorBoundary(WelcomeScreen);
 const Capture = withErrorBoundary(CaptureScreen);
 const Answer = withErrorBoundary(AnswerScreen);
 const History = withErrorBoundary(HistoryScreen);
 const ModelSetup = withErrorBoundary(ModelSetupScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
 
+// Launch gate, checked in order (per the onboarding flow):
+//   1. Never onboarded        → Welcome (explains the app + requests camera)
+//   2. Onboarded, model not ready → ModelSetup (download / re-download)
+//   3. Onboarded, model ready → Capture
+// Returning users with a ready model land straight on the camera.
+function resolveInitialRoute(): keyof RootStackParamList {
+  const hasSeenWelcome = storage.getBoolean('hasSeenWelcome') ?? false;
+  if (!hasSeenWelcome) {
+    return 'Welcome';
+  }
+  if (!useModelStore.getState().isReadyForInference()) {
+    return 'ModelSetup';
+  }
+  return 'Capture';
+}
+
 export function AppNavigator() {
+  // Reconcile the on-device model against disk BEFORE resolving the initial route,
+  // so a returning user with a ready model goes straight to Capture and a
+  // deleted/corrupt model routes to ModelSetup. resolveInitialRoute() reads a
+  // synchronous snapshot, so it must run only after reconciliation settles.
+  const [bootstrapped, setBootstrapped] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void useModelStore
+      .getState()
+      .reconcile()
+      .finally(() => {
+        if (active) {
+          setBootstrapped(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (!bootstrapped) {
+    return (
+      <ErrorBoundary>
+        <SplashScreen />
+      </ErrorBoundary>
+    );
+  }
+
+  const initialRouteName = resolveInitialRoute();
+
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName="Capture" screenOptions={{ headerShown: false }}>
+      <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Welcome" component={Welcome} />
         <Stack.Screen name="Capture" component={Capture} />
         <Stack.Screen name="Answer" component={Answer} />
         <Stack.Screen name="History" component={History} />
