@@ -49,6 +49,10 @@ function makeHarness() {
   const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
   const verifyIntegrity = jest.fn(async () => true);
   const getFileSize = jest.fn(async () => EXPECTED_SIZE);
+  const getModelConfig = jest.fn(async () => ({
+    expectedSha256: EXPECTED_HASH,
+    expectedSize: EXPECTED_SIZE,
+  }));
 
   const manager = new ModelDownloadManager({
     fetcher: {
@@ -61,9 +65,8 @@ function makeHarness() {
     },
     verifyIntegrity,
     getFileSize,
+    getModelConfig,
     sources: SOURCES,
-    expectedSha256: EXPECTED_HASH,
-    expectedSize: EXPECTED_SIZE,
   });
 
   return {
@@ -76,16 +79,18 @@ function makeHarness() {
     listDownloadedModels,
     verifyIntegrity,
     getFileSize,
+    getModelConfig,
   };
 }
 
 describe('ModelDownloadManager', () => {
   it('resolves to downloaded with a true integrity check on success', async () => {
-    const { manager, verifyIntegrity } = makeHarness();
+    const { manager, verifyIntegrity, getModelConfig } = makeHarness();
     verifyIntegrity.mockResolvedValue(true);
 
     await manager.startDownload();
 
+    expect(getModelConfig).toHaveBeenCalledTimes(1);
     expect(verifyIntegrity).toHaveBeenCalledWith(LOCAL_MODEL_PATH, EXPECTED_HASH);
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.getState().integrityVerified).toBe(true);
@@ -193,6 +198,7 @@ describe('ModelDownloadManager', () => {
       // fails), so launch trusts that cached result — a cheap size check — instead
       // of loading 2.4 GB into memory to re-hash it on every cold start.
       expect(verifyIntegrity).not.toHaveBeenCalled();
+      expect(getFileSize).not.toHaveBeenCalled();
       expect(manager.getState().downloadStatus).toBe('downloaded');
       expect(manager.getState().integrityVerified).toBe(true);
       expect(manager.isReadyForInference()).toBe(true);
@@ -200,6 +206,8 @@ describe('ModelDownloadManager', () => {
 
     it('deletes a truncated download (fewer bytes than expected) and reports not-ready', async () => {
       const { manager, listDownloadedModels, getFileSize, deleteResources } = makeHarness();
+      await manager.startDownload();
+      deleteResources.mockClear();
       listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
       getFileSize.mockResolvedValue(EXPECTED_SIZE - 1024); // interrupted / partial download
 
@@ -212,6 +220,8 @@ describe('ModelDownloadManager', () => {
 
     it('trusts a complete file at or above the expected size (never false-deletes)', async () => {
       const { manager, listDownloadedModels, getFileSize, deleteResources } = makeHarness();
+      await manager.startDownload();
+      deleteResources.mockClear();
       listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
       getFileSize.mockResolvedValue(EXPECTED_SIZE + 4096);
 

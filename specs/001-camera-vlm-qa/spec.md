@@ -131,6 +131,27 @@ A user opens a benchmark screen and sees the recorded performance metrics visual
 - **FR-023**: System MUST respond to an out-of-memory condition during inference by returning to a clean, usable UI state with a clear error message rather than crashing.
 - **FR-024**: System MUST prevent submission of a request that is missing a captured image or contains an empty question.
 
+#### Phase 2 Additions (Post-MVP)
+
+These requirements extend Phase 1's scope and, where noted, supersede specific
+bullets in the Assumptions section below (see "Phase 2 Scope Note" at the end
+of this document for the reconciliation).
+
+- **FR-025**: System MUST continue an in-progress model download when the app is backgrounded, and MUST display a persistent Android notification showing download percentage and megabytes downloaded; tapping the notification MUST return the user to the model setup screen; pause/resume/cancel MUST remain available from the notification.
+- **FR-026**: System MUST check the active network connection's type before starting a model download and, when the connection is cellular (metered), MUST present the user an explicit choice to wait for WiFi or proceed anyway before any download traffic begins; a user's choice to proceed on cellular MUST be persisted locally so they are not asked again on a subsequent resume of the same download.
+- **FR-027**: System MUST verify downloaded model integrity via a chunked/streaming SHA-256 computation that never loads the full model file into memory at once, eliminating out-of-memory risk on constrained devices during the post-download integrity check.
+- **FR-028**: System MUST fetch the expected model SHA-256 hash and file size from a hosted remote configuration endpoint at the start of each download attempt, rather than from a value hardcoded in the app binary, so the expected model version can change without an app release; this fetched configuration MUST NOT be cached between app sessions.
+- **FR-029**: All iconography in production screens and components MUST use a vector icon library; no unicode glyph characters may be used as icons.
+- **FR-030**: System MUST allow the user to ask one or more follow-up questions about the same previously-captured image without navigating away from the answer screen; the captured image MUST be attached only to the first question in the exchange, with follow-up questions sent as text-only turns; the full multi-turn exchange MUST be persisted as a single history entry.
+- **FR-031**: System MUST allow the user to copy a completed answer's text to the system clipboard in a single action, with a haptic and visual confirmation, without navigating away from the current screen.
+- **FR-032**: System MUST allow the user to share a completed question-and-answer pair as plain text via the native Android share sheet, without including the captured image and without any network activity.
+- **FR-033**: System MUST allow the user to dictate a question via an on-device speech-to-text transcription rather than typing; the transcribed text MUST populate the question field for the user to review and edit before submitting; a voice transcription and a vision-language inference MUST NOT run concurrently.
+- **FR-034**: System MUST offer a text-only fallback model on devices whose Device Compatibility Result indicates insufficient memory to run the vision-language model, so such devices retain a usable feature set instead of being blocked entirely.
+- **FR-035**: System MUST allow the user to optionally attach a short free-text note (up to 120 characters) when flagging an answer, and MUST display that note alongside the flagged indicator when the session is later viewed in history.
+- **FR-036**: System MUST allow the user to filter their local Q&A history by a case-insensitive substring match against the question text, updating the visible list as the user types, without issuing additional storage queries.
+- **FR-037**: System MUST allow the user to pinch-to-zoom the captured image shown on the answer screen, within bounded zoom limits, and MUST reset the zoom level when the user navigates away from that screen.
+- **FR-038**: System MUST present the user with a list of available on-device models, each showing its recommended status (based on device compatibility), storage size, and minimum RAM requirement, and MUST allow the user to select which single model is active at a time.
+
 ### Key Entities
 
 - **Q&A Session**: A single ask-and-answer interaction — holds a reference to the captured image, the question text, the generated answer text, a timestamp, its status (completed, cancelled, or errored), and whether it has been flagged.
@@ -160,3 +181,24 @@ A user opens a benchmark screen and sees the recorded performance metrics visual
 - The question is entered as typed text; voice input is out of scope for Phase 1.
 - Downloading the on-device model is the only point in the app's lifecycle that uses network access; once the model is present and verified, every subsequent capture-question-answer flow is fully offline.
 - "Unsupported device" is determined by a compatibility check (available memory and OS version) performed at launch, before any model load is attempted; the exact thresholds are a planning/implementation decision, not a product decision.
+
+## Phase 2 Scope Note
+
+The Assumptions above describe Phase 1's scope exactly as originally
+delivered and are left unedited here for historical accuracy. FR-025 through
+FR-038 (Phase 2 Additions, above) supersede the following three Assumptions
+bullets specifically:
+
+- "The question is entered as typed text; voice input is out of scope for
+  Phase 1" — superseded by FR-033 (voice input via on-device transcription).
+- "Phase 1 ships with a single selectable on-device vision-language model;
+  choosing between multiple models is out of scope for this feature" —
+  superseded by FR-034 and FR-038 (text-only fallback model, multi-model
+  selector).
+- The single-image constraint ("Exactly one image may be attached per
+  question; multi-image questions are out of scope") is **not** superseded —
+  FR-030's multi-turn follow-up flow explicitly keeps exactly one image per
+  session, attached only on the first turn; every subsequent turn is
+  text-only. This assumption remains fully in force.
+
+All other Assumptions bullets remain in force unchanged.

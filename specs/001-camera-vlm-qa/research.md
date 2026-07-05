@@ -346,3 +346,41 @@ connected via USB with `adb reverse tcp:8081 tcp:8081` — Metro/JS-only iterati
 does not require a local native build once an EAS-built dev client APK is installed
 on the device. `app.json`'s `runtimeVersion` policy is set to `sdkVersion` so EAS
 builds and the JS bundle stay compatible without a native rebuild on every JS change.
+
+## Phase 2 Background Download Findings (verified 2026-07-05, T046)
+
+**Finding**: The installed
+`react-native-executorch-expo-resource-fetcher` package is version **0.9.1** in
+`node_modules/react-native-executorch-expo-resource-fetcher/package.json`, even
+though T046 names v0.9.2. The installed package does **not** wrap
+`@kesha-antonov/react-native-background-downloader`; searching the installed
+package found no dependency or import for that package.
+
+**Finding**: The installed fetcher handles remote resources by calling Expo
+FileSystem legacy `createDownloadResumable(uri, cacheFileUri, { sessionType:
+FileSystemSessionType.BACKGROUND }, progressCallback)` in
+`node_modules/react-native-executorch-expo-resource-fetcher/lib/handlers.js`.
+Pause, resume, and cancel are exposed by forwarding to the stored
+`DownloadResumable` handle in
+`node_modules/react-native-executorch-expo-resource-fetcher/lib/ResourceFetcher.js`.
+
+**Impact**: This is equivalent to Expo FileSystem's background session support for
+the download itself while the JS process still has a stored handle. It is not a
+complete implementation of FR-025/T047 because it does not expose persistent
+Android notification creation, notification actions, tap-to-open routing back to
+`ModelSetupScreen`, MB-downloaded display, or Android 14+ User-Initiated Data
+Transfer (UIDT) JobScheduler integration.
+
+**Android UIDT requirement**: The Android Developers UIDT documentation says UIDT
+jobs were introduced in Android 14/API 34, require a manifest `JobService` plus
+`RUN_USER_INITIATED_JOBS`, require `JobInfo.Builder.setUserInitiated(true)`, and
+require the job service to post/update a notification. It also states there is
+currently no Jetpack library support for UIDT jobs and recommends gating UIDT to
+Android 14+ with a lower-version fallback. Source:
+https://developer.android.com/develop/background-work/background-tasks/uidt
+
+**Decision**: Complete T046 as a verified finding. Do not implement T047 with the
+current JS-only `ExpoResourceFetcher` surface because it cannot satisfy the
+persistent notification controls or Android 14+ UIDT requirements. A correct T047
+requires native Android code or a verified native dependency/config plugin and
+therefore an EAS build, not just a Metro hot reload.

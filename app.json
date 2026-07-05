@@ -18,14 +18,23 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.locra.app",
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-asset",
-      "expo-image"
+      "expo-image",
+      [
+        "@kesha-antonov/react-native-background-downloader",
+        {
+          "skipMmkvDependency": true
+        }
+      ]
     ],
     "extra": {
       "eas": {
