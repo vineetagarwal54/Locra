@@ -11,6 +11,8 @@ jobs:
 
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+      ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/27.3.13750724
       EAS_LOCAL_BUILD_WORKINGDIR: /tmp/eas-local-build
       EAS_LOCAL_BUILD_ARTIFACTS_DIR: /tmp/eas-local-artifacts
       GRADLE_OPTS: -Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m"
@@ -42,7 +44,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android NDK 27
-        run: sdkmanager "ndk;27.1.12297006"
+        run: sdkmanager "ndk;27.3.13750724"
 
       - name: Install dependencies
         run: npm ci
