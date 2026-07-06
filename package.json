@@ -1,0 +1,79 @@
+{
+  "name": "locra",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@kesha-antonov/react-native-background-downloader": "^4.5.6",
+    "@react-navigation/native": "^7.3.7",
+    "@react-navigation/native-stack": "^7.17.9",
+    "expo": "~56.0.14",
+    "expo-asset": "~56.0.18",
+    "expo-blur": "~56.0.3",
+    "expo-crypto": "~56.0.4",
+    "expo-dev-client": "~56.0.22",
+    "expo-file-system": "~56.0.8",
+    "expo-font": "56.0.7",
+    "expo-haptics": "~56.0.3",
+    "expo-image": "~56.0.11",
+    "expo-network": "~56.0.5",
+    "expo-status-bar": "~56.0.4",
+    "js-sha256": "^0.11.1",
+    "react": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-device-info": "^15.0.2",
+    "react-native-executorch": "^0.9.2",
+    "react-native-executorch-expo-resource-fetcher": "^0.9.1",
+    "react-native-keyboard-controller": "1.21.6",
+    "react-native-mmkv": "^4.3.2",
+    "react-native-nitro-image": "^0.15.1",
+    "react-native-nitro-modules": "^0.36.1",
+    "react-native-reanimated": "4.3.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-vision-camera": "^5.1.0",
+    "react-native-worklets": "0.8.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/react": "~19.2.2",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
+    "@typescript-eslint/parser": "^8.62.1",
+    "babel-preset-expo": "~56.0.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-native": "^5.0.0",
+    "jest-expo": "~56.0.5",
+    "prettier": "^3.9.4",
+    "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "@react-native/jest-preset": "0.85.3"
+  },
+  "scripts": {
+    "postinstall": "node scripts/patch-react-native.js",
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "type-check": "tsc --noEmit",
+    "test": "jest"
+  },
+  "jest": {
+    "preset": "jest-expo"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-nitro-image"
+        ]
+      }
+    }
+  },
+  "private": true
+}

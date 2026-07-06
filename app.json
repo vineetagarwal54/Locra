@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "locra",
+    "slug": "locra",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.locra.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-image",
+      [
+        "@kesha-antonov/react-native-background-downloader",
+        {
+          "skipMmkvDependency": true
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9f543c30-f28d-4c1a-aaa0-eb01dc4527d4"
+      }
+    }
+  }
+}

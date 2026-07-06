@@ -22,15 +22,22 @@ Session"; drives User Stories 1, 3, 4).
 | `errorMessage` | `string \| null` | Populated only when `status === 'errored'` |
 | `metrics` | `PerformanceMetrics \| null` | `null` for `cancelled`/`errored` sessions that never reached a completed generation |
 | `flagged` | `boolean` | Set by User Story 4's report action; defaults to `false` |
-| `flagNote` | `string \| null` | Optional free-text note captured with the flag |
+| `flagNote` | `string \| null` | Optional free-text note captured with the flag; capped at 120 characters as of FR-035 (Phase 2) |
+| `turns` | `Array<{ question: string; answer: string }>` | **Phase 2 (FR-030)**. The full ordered multi-turn exchange about this session's single image. `turns[0]` mirrors the top-level `question`/`answer` fields (the image-attached first turn); each subsequent element is a text-only follow-up. A Phase 1 (single-exchange) session has exactly one element in `turns`, keeping it fully backward-compatible with code that only reads the top-level `question`/`answer` fields. |
 
 **Validation rules**:
 - `question` MUST be non-empty and `imagePath` MUST reference an existing
   file before a session is submitted (FR-024).
-- A session only transitions to `status: 'completed'` once, and only from
-  `'streaming'` — no re-opening a completed session for further generation
-  (multi-turn chat is out of scope for Phase 1, matching the spec's
-  single-image, single-question scope boundary).
+- Phase 1: a session only transitions to `status: 'completed'` once, and
+  only from `'streaming'` — no re-opening a completed session for further
+  generation (multi-turn chat was out of scope for Phase 1, matching the
+  spec's original single-image, single-question scope boundary). **Phase 2
+  (FR-030)** supersedes this specific rule: a `'completed'` session MAY
+  re-enter `'streaming'` for a follow-up turn, provided the follow-up is
+  text-only (no new `imagePath`) and appends to `turns[]` rather than
+  replacing it. The top-level `question`/`answer` fields always continue to
+  hold `turns[0]` (the original image-attached exchange) for backward
+  compatibility, not the most recent turn.
 - Deletion (FR-017/FR-018) removes the MMKV entry entirely; there is no
   soft-delete/tombstone, since FR-018 requires deleted entries be
   unrecoverable through the app.
@@ -42,6 +49,12 @@ Session"; drives User Stories 1, 3, 4).
                           → cancelled   (FR-007: user-initiated, no partial answer kept)
                           → errored     (FR-023: e.g. OOM mid-stream)
 ```
+
+**Phase 2 addendum (FR-030)**: from `completed`, a follow-up text-only
+question may re-enter `streaming` and return to `completed` again, appending
+one element to `turns[]` per cycle. `cancelled`/`errored` on a follow-up turn
+behaves the same as the first turn (FR-007/FR-023) but does not remove
+previously completed turns already in `turns[]`.
 
 ## PerformanceMetrics
 
