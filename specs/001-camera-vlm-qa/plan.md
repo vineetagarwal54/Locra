@@ -24,20 +24,28 @@ rather than silently decided.
 ## Technical Context
 
 **Language/Version**: TypeScript (strict mode, project-wide) on React
-Native **0.81–0.85** (NOT 0.76 as originally stated — see `research.md`
-Flagged Risk 1; ExecuTorch's own compatibility table excludes RN ≤0.80).
-New Architecture mandatory (constitution Principle VII; also an ExecuTorch
-hard requirement independent of the constitution).
+Native **0.85.3** (within the 0.81–0.85 confirmed decision band — NOT 0.76
+as originally stated, and NOT 0.86 as the initial T001 scaffold pinned; see
+`research.md` Flagged Risk 1 and the Phase 1 Setup Findings section: Expo
+SDK 57 bundles RN 0.86.0 exclusively, which is outside ExecuTorch's
+supported band, so the project runs Expo SDK **56.0.14** instead, which
+bundles RN 0.85.3 exactly). New Architecture mandatory (constitution
+Principle VII; also an ExecuTorch hard requirement independent of the
+constitution).
 
-**Primary Dependencies**: `react-native-executorch` (`useLLM` hook,
+**Primary Dependencies**: `react-native-executorch` `0.9.2` (`useLLM` hook,
 `LFM2_5_VL_1_6B_QUANTIZED` model constant — see `research.md` for why not
 the deprecated `LFM2_VL_1_6B_QUANTIZED` alias named in the feature input),
-`react-native-executorch-expo-resource-fetcher` + `expo-file-system` +
-`expo-asset` (required companion packages, not optional — `initExecutorch`
+`react-native-executorch-expo-resource-fetcher` `0.9.1` + `expo-file-system`
++ `expo-asset` (required companion packages, not optional — `initExecutorch`
 throws without a registered resource fetcher adapter), Expo Dev Client
-(custom build, not Expo Go), React Native Vision Camera v5, Zustand
-(inference/model/history stores), MMKV (all persistence), React Navigation,
-React Native Reanimated.
+(custom build via **EAS Build**, not Expo Go — see Build Strategy below),
+React Native Vision Camera v5 (+ its peer deps `react-native-nitro-modules`
+and `react-native-nitro-image`, installed explicitly per `research.md`),
+Zustand (inference/model/history stores), MMKV (all persistence), React
+Navigation, React Native Reanimated `4.3.1` + `react-native-worklets`
+`0.8.3` (the exact pair Expo SDK 56 resolves natively — see Build Strategy
+for why this specific pair matters).
 
 **Storage**: MMKV only (constitution Principle VIII) — see `data-model.md`
 for the four entities (`QASession`, `PerformanceMetrics`, `OnDeviceModel`,
@@ -57,7 +65,40 @@ raised from the project's previously stated API 26 to match ExecuTorch's
 actual minimum (`research.md` Flagged Risk 2; requires your sign-off since
 it shrinks the addressable device population). Target API 35. Physical
 device required for meaningful inference testing (emulators don't reflect
-real latency/memory behavior).
+real latency/memory behavior). Verified on Samsung S26 Ultra (SM-S948U1).
+
+**Build Strategy**: All Android builds (development and production) run on
+**EAS Build**, not local Gradle — this project has no working local Android
+build path, permanently, on this development machine. See `research.md`'s
+"Phase 1 Setup Findings" for the full investigation; in short,
+`react-native-executorch`'s prebuilt native libraries require NDK 26, while
+React Native's own Fabric headers and the `reanimated`/`worklets` pair
+Expo SDK 56 resolves natively require NDK 27's compiler — no single NDK
+version satisfies both, and this was confirmed by exhausting the
+reasonable local fixes (an NDK pin plus a one-line header patch resolves
+ExecuTorch vs. RN-core, but not the further NDK 27–only compiler behavior
+`reanimated` depends on; a linker-flag relaxation attempt made the build
+worse). Two permanent patches, applied automatically:
+
+- `graphicsConversions.h`'s `std::format` call, rewritten to
+  `std::to_string` — applied via the npm `postinstall` script
+  (`scripts/patch-react-native.js`), since `patch-package`'s git-diff step
+  fails independently on this machine.
+- `android/build.gradle`'s `ndkVersion` pinned to `26.3.11579264` via a
+  root `ext` block plus a `subprojects { afterEvaluate { ... } }` hook —
+  this is **not** persisted automatically and MUST be re-applied by hand
+  after every `expo prebuild`, since prebuild regenerates `android/` from
+  the Expo template. (EAS Build's managed prebuild step needs the same fix;
+  tracked as a follow-up to move this into an Expo config plugin so EAS
+  applies it automatically rather than relying on a locally-regenerated,
+  hand-patched `android/build.gradle`.)
+
+Local development uses `npx expo start --dev-client --clear` against an
+EAS-built dev client APK installed on a physical device over USB (`adb
+reverse tcp:8081 tcp:8081`) — Metro/JS iteration does not require a native
+rebuild. `app.json`'s `runtimeVersion` policy is `sdkVersion` so the JS
+bundle and EAS-built native binary stay compatible without a full rebuild
+on every JS-only change.
 
 **Project Type**: Mobile app (single React Native project, no separate
 backend — there is no backend in this architecture by design).
