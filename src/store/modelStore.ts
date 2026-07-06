@@ -14,6 +14,9 @@ import { checkDeviceCompatibility } from '../model/DeviceCompatibility';
 import { fetchModelConfig } from '../model/ModelConfig';
 import { ModelDownloadManager, type ResourceSource } from '../model/ModelDownloadManager';
 import { verifyModelIntegrity } from '../model/ModelIntegrity';
+import { allowCellularDownload, evaluateNetworkGate } from '../model/NetworkGate';
+import { getDownloadConnectionType } from '../platform/NetworkConnection';
+import { storage } from '../storage/mmkv';
 import type { IModelLifecycle } from '../types/interfaces';
 import type { DeviceCompatibilityResult, ModelState } from '../types/models';
 
@@ -114,12 +117,15 @@ function toFileUri(path: string): string {
 }
 
 export interface ModelStoreState extends ModelState {
+  cellularDownloadWarningVisible: boolean;
   checkDeviceCompatibility: () => DeviceCompatibilityResult;
   /** Reattach native background downloads that survived process death. */
   reattachExistingDownload: () => Promise<boolean>;
   /** Reconcile in-memory readiness against the model on disk (call once at launch). */
   reconcile: () => Promise<void>;
   startDownload: () => Promise<void>;
+  confirmCellularDownload: () => Promise<void>;
+  dismissCellularDownloadWarning: () => void;
   pauseDownload: () => Promise<void>;
   resumeDownload: () => Promise<void>;
   cancelDownload: () => Promise<void>;
@@ -128,10 +134,31 @@ export interface ModelStoreState extends ModelState {
 
 export const useModelStore = create<ModelStoreState>(() => ({
   ...manager.getState(),
+  cellularDownloadWarningVisible: false,
   checkDeviceCompatibility,
   reattachExistingDownload: () => manager.reattachExistingDownload(),
   reconcile: () => manager.reconcile(),
-  startDownload: () => manager.startDownload(),
+  startDownload: async () => {
+    const gate = await evaluateNetworkGate({
+      storage,
+      getConnectionType: getDownloadConnectionType,
+    });
+    if (gate.status === 'warning') {
+      useModelStore.setState({ cellularDownloadWarningVisible: true });
+      return;
+    }
+
+    useModelStore.setState({ cellularDownloadWarningVisible: false });
+    await manager.startDownload();
+  },
+  confirmCellularDownload: async () => {
+    allowCellularDownload(storage);
+    useModelStore.setState({ cellularDownloadWarningVisible: false });
+    await manager.startDownload();
+  },
+  dismissCellularDownloadWarning: () => {
+    useModelStore.setState({ cellularDownloadWarningVisible: false });
+  },
   pauseDownload: () => manager.pauseDownload(),
   resumeDownload: () => manager.resumeDownload(),
   cancelDownload: () => manager.cancelDownload(),

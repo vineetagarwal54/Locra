@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 
-import { createInferenceQueue, type InferenceEngineAdapter } from '../inference/InferenceQueue';
+import {
+  createInferenceQueue,
+  type InferenceEngineAdapter,
+  type InferenceSubmitOptions,
+} from '../inference/InferenceQueue';
 import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
@@ -21,9 +25,14 @@ import { useModelStore } from './modelStore';
 // synchronously from outside the render cycle.
 let engineHandle: InferenceEngineHandle | null = null;
 
-// The request currently being served, captured so a completed InferenceState
-// (which carries no imagePath/question) can be turned into a QASession.
-let lastRequest: InferenceRequest | null = null;
+// The turn currently being served, captured so a completed InferenceState
+// (which carries no imagePath/question) can be turned into a QASession update.
+let activeTurn: PendingTurn | null = null;
+
+interface PendingTurn {
+  readonly request: InferenceRequest;
+  readonly baseSession: QASession | null;
+}
 
 function requireEngine(): InferenceEngineHandle {
   if (engineHandle === null) {
@@ -59,8 +68,20 @@ const bridgeEngine: InferenceEngineAdapter = {
     });
   },
 
-  generate: async (request, onToken, signal): Promise<{ response: string; tokenCount: number }> => {
+  generate: async (
+    request,
+    onToken,
+    signal
+  ): Promise<{
+    response: string;
+    tokenCount: number;
+    promptTokenCount?: number;
+    totalTokenCount?: number;
+  }> => {
     const handle = requireEngine();
+    if (request.imagePath === undefined) {
+      await waitForMessageHistory(handle, signal);
+    }
     const unsubscribe = handle.subscribe(() => onToken(handle.getResponse()));
     const onAbort = (): void => handle.cancel();
     if (signal.aborted) {
@@ -69,12 +90,17 @@ const bridgeEngine: InferenceEngineAdapter = {
       signal.addEventListener('abort', onAbort);
     }
     try {
-      await handle.submit(request.imagePath, request.question);
+      const response = await handle.submit(request.imagePath ?? null, request.question);
       const error = handle.getError();
       if (error !== null) {
         throw new Error(error);
       }
-      return { response: handle.getResponse(), tokenCount: handle.getGeneratedTokenCount() };
+      return {
+        response,
+        tokenCount: handle.getGeneratedTokenCount(),
+        promptTokenCount: handle.getPromptTokenCount(),
+        totalTokenCount: handle.getTotalTokenCount(),
+      };
     } finally {
       unsubscribe();
       signal.removeEventListener('abort', onAbort);
@@ -106,9 +132,19 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
   registerEngine: (handle: InferenceEngineHandle | null): void => {
     engineHandle = handle;
   },
-  submit: (request: InferenceRequest): Promise<void> => {
-    lastRequest = request;
-    return queue.submit(request);
+  submit: async (request: InferenceRequest): Promise<void> => {
+    const turn = createPendingTurn(request);
+    activeTurn = turn;
+    const options: InferenceSubmitOptions =
+      turn.baseSession === null ? { turn: 'first' } : { turn: 'followUp' };
+    try {
+      await queue.submit(request, options);
+    } catch (error) {
+      if (activeTurn === turn) {
+        activeTurn = null;
+      }
+      throw error;
+    }
   },
   cancel: (): void => queue.cancel(),
   flagCurrentSession: (note?: string): void => flagLastSavedSession(note),
@@ -122,9 +158,13 @@ queue.subscribe((state: InferenceState) => {
     response: state.response,
     metrics: state.metrics,
     error: state.error,
+    limitWarning: state.limitWarning,
   });
-  if (state.status === 'completed' && state.metrics !== null && lastRequest !== null) {
-    saveCompletedSession(lastRequest, state);
+  if (state.status === 'completed' && state.metrics !== null && activeTurn !== null) {
+    saveCompletedTurn(activeTurn, state);
+    activeTurn = null;
+  } else if (state.status === 'cancelled' || state.status === 'errored') {
+    activeTurn = null;
   }
 });
 
@@ -162,13 +202,41 @@ function flagLastSavedSession(note?: string): void {
   }
 }
 
-function saveCompletedSession(request: InferenceRequest, state: InferenceState): void {
+function createPendingTurn(request: InferenceRequest): PendingTurn {
+  return {
+    request,
+    baseSession: getFollowUpBaseSession(request),
+  };
+}
+
+function getFollowUpBaseSession(request: InferenceRequest): QASession | null {
+  if (
+    lastSavedSession === null ||
+    lastSavedSession.status !== 'completed' ||
+    lastSavedSession.imagePath !== request.imagePath
+  ) {
+    return null;
+  }
+  return lastSavedSession;
+}
+
+function saveCompletedTurn(turn: PendingTurn, state: InferenceState): void {
+  if (turn.baseSession === null) {
+    saveFirstTurnSession(turn.request, state);
+    return;
+  }
+
+  saveFollowUpTurnSession(turn.baseSession, turn.request, state);
+}
+
+function saveFirstTurnSession(request: InferenceRequest, state: InferenceState): void {
   saveToHistoryStore({
     id: generateSessionId(),
     createdAt: Date.now(),
     imagePath: request.imagePath,
     question: request.question,
     answer: state.response,
+    turns: [{ question: request.question, answer: state.response }],
     status: 'completed',
     errorMessage: null,
     metrics: state.metrics,
@@ -177,6 +245,66 @@ function saveCompletedSession(request: InferenceRequest, state: InferenceState):
   });
 }
 
+function saveFollowUpTurnSession(
+  baseSession: QASession,
+  request: InferenceRequest,
+  state: InferenceState
+): void {
+  saveToHistoryStore({
+    ...baseSession,
+    status: 'completed',
+    errorMessage: null,
+    metrics: baseSession.metrics ?? state.metrics,
+    turns: [
+      ...normalizedTurns(baseSession),
+      { question: request.question, answer: state.response },
+    ],
+  });
+}
+
+function normalizedTurns(session: QASession): Array<{ question: string; answer: string }> {
+  if (session.turns.length > 0) {
+    return session.turns;
+  }
+  return [{ question: session.question, answer: session.answer }];
+}
+
 function generateSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function waitForMessageHistory(handle: InferenceEngineHandle, signal: AbortSignal): Promise<void> {
+  if (handle.getMessageHistoryLength() > 0) {
+    return Promise.resolve();
+  }
+  if (signal.aborted) {
+    return Promise.reject(new Error('Follow-up cancelled before conversation context was ready.'));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    let unsubscribe: (() => void) | null = null;
+    const timeout = setTimeout(() => {
+      unsubscribe?.();
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('The previous answer is not available for follow-up context yet.'));
+    }, 250);
+    const settle = (): void => {
+      if (handle.getMessageHistoryLength() === 0) {
+        return;
+      }
+      clearTimeout(timeout);
+      unsubscribe?.();
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      unsubscribe?.();
+      reject(new Error('Follow-up cancelled before conversation context was ready.'));
+    };
+
+    signal.addEventListener('abort', onAbort);
+    unsubscribe = handle.subscribe(settle);
+    settle();
+  });
 }

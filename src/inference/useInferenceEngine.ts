@@ -1,5 +1,12 @@
 import { useEffect, useRef } from 'react';
-import { LFM2_5_VL_1_6B_QUANTIZED, useLLM } from 'react-native-executorch';
+import {
+  DEFAULT_SYSTEM_PROMPT,
+  LFM2_5_VL_1_6B_QUANTIZED,
+  SlidingWindowContextStrategy,
+  useLLM,
+} from 'react-native-executorch';
+
+import { RESPONSE_TOKEN_BUDGET } from './GenerationLimits';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // This file is the ONE sanctioned `useLLM` call site in the entire codebase
@@ -20,7 +27,7 @@ import { LFM2_5_VL_1_6B_QUANTIZED, useLLM } from 'react-native-executorch';
  */
 export interface InferenceEngineHandle {
   /** Managed-mode multimodal request: `sendMessage(prompt, { imagePath })`. */
-  submit(imagePath: string, prompt: string): Promise<void>;
+  submit(imagePath: string | null, prompt: string): Promise<string>;
   /** Interrupts the in-flight generation (`llm.interrupt()`). */
   cancel(): void;
   /** Cumulative streamed response so far. */
@@ -31,6 +38,12 @@ export interface InferenceEngineHandle {
   isReady(): boolean;
   /** Tokens generated so far in the current generation (drives tokens/sec). */
   getGeneratedTokenCount(): number;
+  /** Prompt tokens consumed by the current/last generation. */
+  getPromptTokenCount(): number;
+  /** Prompt + generated tokens consumed by the current/last generation. */
+  getTotalTokenCount(): number;
+  /** Current managed-mode message history length, owned by `useLLM`. */
+  getMessageHistoryLength(): number;
   /** Human-readable load/generation error, or null. */
   getError(): string | null;
   /** Fires on every streaming-relevant state change; returns an unsubscribe. */
@@ -50,6 +63,7 @@ export function useInferenceEngine(): InferenceEngineHandle {
   // (the InferenceQueue lives outside React and cannot read hook state directly).
   const llmRef = useRef(llm);
   const listenersRef = useRef<Set<() => void>>(new Set());
+  const configuredRef = useRef(false);
 
   // Refresh the ref, then notify subscribers — ordering matters so that a
   // listener reading getResponse()/getGeneratedTokenCount() sees fresh values.
@@ -60,20 +74,48 @@ export function useInferenceEngine(): InferenceEngineHandle {
     }
   }, [llm, llm.response, llm.token, llm.isGenerating, llm.isReady, llm.error]);
 
+  const configureForLongResponses = (): void => {
+    const current = llmRef.current;
+    if (configuredRef.current || !current.isReady || current.messageHistory.length > 0) {
+      return;
+    }
+
+    current.configure({
+      chatConfig: {
+        systemPrompt: DEFAULT_SYSTEM_PROMPT,
+        initialMessageHistory: [],
+        contextStrategy: new SlidingWindowContextStrategy(RESPONSE_TOKEN_BUDGET),
+      },
+    });
+    configuredRef.current = true;
+  };
+
+  useEffect(() => {
+    configureForLongResponses();
+  }, [llm.isReady]);
+
   // Build the handle once so its identity is stable across re-renders.
   const handleRef = useRef<InferenceEngineHandle | null>(null);
   if (handleRef.current === null) {
     const listeners = listenersRef.current;
     handleRef.current = {
-      submit: async (imagePath: string, prompt: string): Promise<void> => {
+      submit: async (imagePath: string | null, prompt: string): Promise<string> => {
+        configureForLongResponses();
+        if (imagePath === null) {
+          return await llmRef.current.sendMessage(prompt);
+        }
+
         // The single, sanctioned sendMessage call — managed mode, vision media.
-        await llmRef.current.sendMessage(prompt, { imagePath });
+        return await llmRef.current.sendMessage(prompt, { imagePath });
       },
       cancel: (): void => llmRef.current.interrupt(),
       getResponse: (): string => llmRef.current.response,
       isGenerating: (): boolean => llmRef.current.isGenerating,
       isReady: (): boolean => llmRef.current.isReady,
       getGeneratedTokenCount: (): number => llmRef.current.getGeneratedTokenCount(),
+      getPromptTokenCount: (): number => llmRef.current.getPromptTokenCount(),
+      getTotalTokenCount: (): number => llmRef.current.getTotalTokenCount(),
+      getMessageHistoryLength: (): number => llmRef.current.messageHistory.length,
       getError: (): string | null => (llmRef.current.error ? llmRef.current.error.message : null),
       subscribe: (listener: () => void): (() => void) => {
         listeners.add(listener);
