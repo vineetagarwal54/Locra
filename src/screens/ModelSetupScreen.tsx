@@ -1,5 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   cancelAnimation,
@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { requestDownloadNotificationPermission } from '../platform/NotificationPermission';
 import { useModelStore } from '../store/modelStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ModelSetup'>;
@@ -40,6 +41,7 @@ const SHIMMER_TRAVEL = 320;
 const SHIMMER_DURATION_MS = 1400;
 
 export function ModelSetupScreen({ navigation }: Props) {
+  const [notificationPermissionDenied, setNotificationPermissionDenied] = useState(false);
   const downloadStatus = useModelStore((s) => s.downloadStatus);
   const downloadProgress = useModelStore((s) => s.downloadProgress);
   const integrityVerified = useModelStore((s) => s.integrityVerified);
@@ -89,12 +91,14 @@ export function ModelSetupScreen({ navigation }: Props) {
     }
   }, [isReady, navigation]);
 
-  const onPrimaryAction = (): void => {
+  const onPrimaryAction = async (): Promise<void> => {
     if (primaryAction === null) {
       return;
     }
     void haptics.tap();
     if (primaryAction.action === 'start') {
+      const canShowNotifications = await requestDownloadNotificationPermission();
+      setNotificationPermissionDenied(!canShowNotifications);
       void startDownload();
     } else if (primaryAction.action === 'pause') {
       void pauseDownload();
@@ -188,6 +192,16 @@ export function ModelSetupScreen({ navigation }: Props) {
             <Text style={styles.error}>{error}</Text>
           </View>
         ) : null}
+
+        {notificationPermissionDenied ? (
+          <View style={styles.noticeCard}>
+            <Text style={styles.noticeTitle}>Notifications are off</Text>
+            <Text style={styles.noticeText}>
+              Android may hide background progress. You can enable notifications for Locra in
+              system settings.
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.footer}>
@@ -201,7 +215,9 @@ export function ModelSetupScreen({ navigation }: Props) {
               pressed && primaryAction.variant === 'primary' && styles.primaryButtonPressed,
               pressed && primaryAction.variant === 'secondary' && styles.secondaryButtonPressed,
             ]}
-            onPress={onPrimaryAction}
+            onPress={() => {
+              void onPrimaryAction();
+            }}
           >
             <Text
               style={
@@ -517,6 +533,25 @@ const styles = StyleSheet.create({
   },
   error: {
     color: theme.error,
+    fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+  },
+  noticeCard: {
+    marginTop: theme.space4,
+    padding: theme.space4,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+  },
+  noticeTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+    marginBottom: theme.space2,
+  },
+  noticeText: {
+    color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
   },

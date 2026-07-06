@@ -15,19 +15,28 @@ export type ModelConfigFetch = (
 ) => Promise<ModelConfigResponse>;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
+const FALLBACK_MODEL_CONFIG: ModelConfig = {
+  expectedSha256: 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4',
+  expectedSize: 2_427_656_704,
+};
 
 export async function fetchModelConfig(
   endpoint: string,
   fetcher: ModelConfigFetch = defaultFetch
 ): Promise<ModelConfig> {
-  const response = await fetcher(endpoint, {
-    headers: { Accept: 'application/json' },
-  });
-  if (!response.ok) {
-    throw new Error(`Model config request failed with status ${response.status}.`);
-  }
+  try {
+    const response = await fetcher(endpoint, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`Model config request failed with status ${response.status}.`);
+    }
 
-  return parseModelConfig(await response.json());
+    return parseModelConfig(await response.json());
+  } catch (error) {
+    warnModelConfigFallback(endpoint, error);
+    return FALLBACK_MODEL_CONFIG;
+  }
 }
 
 function parseModelConfig(raw: unknown): ModelConfig {
@@ -37,7 +46,7 @@ function parseModelConfig(raw: unknown): ModelConfig {
 
   const record = raw as Record<string, unknown>;
   const sha256 = record.sha256;
-  const sizeBytes = record.sizeBytes;
+  const sizeBytes = record.sizeBytes ?? record.size;
 
   if (
     typeof sha256 !== 'string' ||
@@ -63,4 +72,15 @@ async function defaultFetch(
     throw new Error('Model config fetch is unavailable.');
   }
   return fetch(url, init);
+}
+
+function warnModelConfigFallback(endpoint: string, error: unknown): void {
+  const message =
+    error instanceof Error && error.message.trim() !== ''
+      ? error.message
+      : 'Unknown model config fetch error.';
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[Locra] Model config fetch failed for ${endpoint}; using pinned fallback config. ${message}`
+  );
 }

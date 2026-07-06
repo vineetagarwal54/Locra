@@ -32,7 +32,8 @@ const MODEL_SOURCES: ResourceSource[] = [
 
 // Remote config is fetched once per download attempt (FR-028), so hash/size
 // metadata can rotate without a new app binary.
-const MODEL_CONFIG_ENDPOINT = `https://locra.app/models/${LFM2_5_VL_1_6B_QUANTIZED.modelName}.json`;
+const MODEL_CONFIG_ENDPOINT =
+  'https://raw.githubusercontent.com/vineetagarwal54/Locra/001-camera-vlm-qa/model-configs/lfm2.5-vl-1.6b-quantized.json';
 
 // Development escape hatch: skip post-download AND launch-time verification
 // entirely so iterating on inference doesn't require hashing a 2.4 GB file on
