@@ -1,5 +1,6 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { ReactElement } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '../constants/theme';
 
@@ -30,9 +31,16 @@ export function ReportButton({
       ]}
       onPress={onReport}
     >
-      <Text style={[styles.label, reported && styles.labelReported]}>
-        {reported ? 'Flagged' : 'Flag answer'}
-      </Text>
+      <View style={styles.content}>
+        <MaterialCommunityIcons
+          name={reported ? 'flag' : 'flag-outline'}
+          size={theme.fontSizeMd}
+          color={reported ? theme.success : theme.accent}
+        />
+        <Text style={[styles.label, reported && styles.labelReported]}>
+          {reported ? 'Flagged' : 'Flag answer'}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -59,10 +67,15 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.45,
   },
+  content: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   label: {
     color: theme.accent,
     fontSize: theme.fontSizeSm,
     fontWeight: '700',
+    marginLeft: theme.space2,
   },
   labelReported: {
     color: theme.success,

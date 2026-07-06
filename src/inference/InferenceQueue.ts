@@ -7,6 +7,7 @@
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, InferenceStatus } from '../types/models';
 
+import { getResponseLimitWarning } from './GenerationLimits';
 import { preprocessImage, type PreprocessedImage } from './ImagePreprocessor';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
 
@@ -16,6 +17,11 @@ import { InferenceMetricsRecorder } from './InferenceMetrics';
  * `useLLM` call; here the queue depends only on this narrow interface so it
  * stays hook-free and unit-testable.
  */
+export interface EngineGenerateRequest {
+  question: string;
+  imagePath?: string;
+}
+
 export interface InferenceEngineAdapter {
   /** Ensures the model is resident and ready; resolves once loaded. */
   loadModel(): Promise<void>;
@@ -25,10 +31,14 @@ export interface InferenceEngineAdapter {
    * MUST honour {@link signal} for cancellation.
    */
   generate(
-    request: InferenceRequest,
+    request: EngineGenerateRequest,
     onToken: (cumulativeResponse: string) => void,
     signal: AbortSignal,
-  ): Promise<{ response: string; tokenCount: number }>;
+  ): Promise<{ response: string; tokenCount: number; promptTokenCount?: number; totalTokenCount?: number }>;
+}
+
+export interface InferenceSubmitOptions {
+  turn?: 'first' | 'followUp';
 }
 
 export interface InferenceQueueDeps {
@@ -46,6 +56,7 @@ const IDLE_STATE: InferenceState = {
   response: '',
   metrics: null,
   error: null,
+  limitWarning: null,
 };
 
 interface ActiveRequest {
@@ -74,7 +85,7 @@ export class InferenceQueue implements IInferenceQueue {
     };
   }
 
-  async submit(request: InferenceRequest): Promise<void> {
+  async submit(request: InferenceRequest, options: InferenceSubmitOptions = {}): Promise<void> {
     // Single-flight guard (Principle II, FR-006): reject synchronously WITHOUT
     // acquiring the lock or mutating state if a request is already in-flight.
     // The module never trusts the caller to have disabled its own control.
@@ -85,15 +96,24 @@ export class InferenceQueue implements IInferenceQueue {
     const active: ActiveRequest = { controller: new AbortController(), cancelled: false };
     this.active = active;
     const recorder = this.createRecorder();
+    const isFollowUp = options.turn === 'followUp';
 
     // Acquire the lock: reset any prior terminal state and enter 'preprocessing'.
-    this.setState({ status: 'preprocessing', response: '', metrics: null, error: null });
+    this.setState({
+      status: 'preprocessing',
+      response: '',
+      metrics: null,
+      error: null,
+      limitWarning: null,
+    });
 
     try {
       // Principle IV: the 512x512 ceiling is enforced before any model/tensor
       // code runs.
       recorder.markPreprocessingStart();
-      const processed = await this.deps.preprocess(request.imagePath);
+      const processed = isFollowUp
+        ? null
+        : await this.deps.preprocess(request.imagePath);
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
 
@@ -103,14 +123,20 @@ export class InferenceQueue implements IInferenceQueue {
 
       this.setState({ status: 'loading_model' });
       recorder.markModelLoadStart();
-      await this.deps.engine.loadModel();
+      if (!isFollowUp) {
+        await this.deps.engine.loadModel();
+      }
       recorder.markModelLoadEnd();
       if (active.cancelled) return;
 
       this.setState({ status: 'streaming' });
       recorder.markInferenceStart();
+      const generateRequest: EngineGenerateRequest =
+        processed === null
+          ? { question: request.question }
+          : { imagePath: processed.path, question: request.question };
       const result = await this.deps.engine.generate(
-        { imagePath: processed.path, question: request.question },
+        generateRequest,
         (cumulative) => {
           if (active.cancelled) return;
           recorder.markFirstToken();
@@ -122,7 +148,12 @@ export class InferenceQueue implements IInferenceQueue {
 
       recorder.setTokenCount(result.tokenCount);
       recorder.markInferenceEnd();
-      this.setState({ status: 'completed', response: result.response, metrics: recorder.build() });
+      this.setState({
+        status: 'completed',
+        response: result.response,
+        metrics: recorder.build(),
+        limitWarning: getResponseLimitWarning(result.tokenCount),
+      });
     } catch (error) {
       // A cancel already drove state to its terminal value — don't overwrite it.
       if (active.cancelled) return;
@@ -133,6 +164,7 @@ export class InferenceQueue implements IInferenceQueue {
         response: '',
         metrics: null,
         error: toMessage(error),
+        limitWarning: null,
       });
     } finally {
       // Release the lock on every exit path.
@@ -152,7 +184,13 @@ export class InferenceQueue implements IInferenceQueue {
 
     // Notify subscribers of the terminal 'cancelled' state (contract), discarding
     // the partial response so nothing residual is ever persisted (FR-007)...
-    this.setState({ status: 'cancelled', response: '', metrics: null, error: null });
+    this.setState({
+      status: 'cancelled',
+      response: '',
+      metrics: null,
+      error: null,
+      limitWarning: null,
+    });
     // ...then return the queue to idle, ready to accept the next request.
     this.setState({ ...IDLE_STATE });
   }

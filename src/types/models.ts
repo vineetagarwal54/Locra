@@ -16,6 +16,7 @@ export interface QASession {
   imagePath: string;
   question: string;
   answer: string;
+  turns: Array<{ question: string; answer: string }>;
   status: QASessionStatus;
   errorMessage: string | null;
   metrics: PerformanceMetrics | null;
@@ -59,6 +60,7 @@ export interface InferenceState {
   response: string;
   metrics: PerformanceMetrics | null;
   error: string | null;
+  limitWarning: string | null;
 }
 
 export interface ModelState {

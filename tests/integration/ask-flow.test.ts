@@ -12,7 +12,11 @@ jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
 
 import { HistoryStore, type HistoryStorage } from '../../src/history/HistoryStore';
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
-import { InferenceQueue, type InferenceEngineAdapter } from '../../src/inference/InferenceQueue';
+import {
+  InferenceQueue,
+  type EngineGenerateRequest,
+  type InferenceEngineAdapter,
+} from '../../src/inference/InferenceQueue';
 import type { InferenceRequest, QASession } from '../../src/types/models';
 
 class MemoryHistoryStorage implements HistoryStorage {
@@ -81,7 +85,7 @@ describe('offline capture to answer integration flow', () => {
   });
 
   it('answers and persists a captured image request with zero network calls observed', async () => {
-    const generatedRequests: InferenceRequest[] = [];
+    const generatedRequests: EngineGenerateRequest[] = [];
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
       generate: (request, onToken) => {
@@ -115,6 +119,7 @@ describe('offline capture to answer integration flow', () => {
       imagePath: capturedRequest.imagePath,
       question: capturedRequest.question,
       answer: state.response,
+      turns: [{ question: capturedRequest.question, answer: state.response }],
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,

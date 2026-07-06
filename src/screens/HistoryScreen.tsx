@@ -11,6 +11,7 @@ import { useHistoryStore } from '../store/historyStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'History'>;
 type HistorySession = ReturnType<typeof useHistoryStore.getState>['sessions'][number];
+type HistoryTurn = HistorySession['turns'][number];
 
 const THUMB_SIZE = 64;
 const READABLE_LINE_HEIGHT_RATIO = 1.45;
@@ -114,6 +115,8 @@ interface HistoryItemProps {
 }
 
 function HistoryItem({ session, onDelete }: HistoryItemProps) {
+  const turns = getSessionTurns(session);
+
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -130,9 +133,19 @@ function HistoryItem({ session, onDelete }: HistoryItemProps) {
         </View>
       </View>
 
-      <Text style={styles.answer} numberOfLines={4}>
-        {session.answer}
-      </Text>
+      <View style={styles.turnList}>
+        {turns.map((turn, index) => (
+          <View key={`${session.id}-${index}`} style={styles.turnBlock}>
+            {index > 0 ? (
+              <>
+                <Text style={styles.turnLabel}>Follow-up</Text>
+                <Text style={styles.turnQuestion}>{turn.question}</Text>
+              </>
+            ) : null}
+            <Text style={styles.turnAnswer}>{turn.answer}</Text>
+          </View>
+        ))}
+      </View>
 
       {session.metrics !== null ? (
         <View style={styles.metricsGrid}>
@@ -196,6 +209,14 @@ function toPreviewUri(path: string): string {
     return path;
   }
   return `file://${path}`;
+}
+
+function getSessionTurns(session: HistorySession): HistoryTurn[] {
+  if (Array.isArray(session.turns) && session.turns.length > 0) {
+    return session.turns;
+  }
+
+  return [{ question: session.question, answer: session.answer }];
 }
 
 function formatTimestamp(timestamp: number): string {
@@ -318,11 +339,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
   },
-  answer: {
+  turnList: {
+    marginBottom: theme.space4,
+  },
+  turnBlock: {
+    paddingTop: theme.space3,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
+    marginTop: theme.space3,
+  },
+  turnLabel: {
+    color: theme.accent,
+    fontSize: theme.fontSizeXs,
+    fontWeight: '700',
+    marginBottom: theme.space1,
+  },
+  turnQuestion: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeSm,
+    fontWeight: '700',
+    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+    marginBottom: theme.space2,
+  },
+  turnAnswer: {
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
-    marginBottom: theme.space4,
   },
   metricsGrid: {
     flexDirection: 'row',

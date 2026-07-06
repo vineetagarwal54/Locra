@@ -46,9 +46,12 @@ export function ModelSetupScreen({ navigation }: Props) {
   const downloadProgress = useModelStore((s) => s.downloadProgress);
   const integrityVerified = useModelStore((s) => s.integrityVerified);
   const error = useModelStore((s) => s.error);
+  const cellularDownloadWarningVisible = useModelStore((s) => s.cellularDownloadWarningVisible);
 
   const checkDeviceCompatibility = useModelStore((s) => s.checkDeviceCompatibility);
   const startDownload = useModelStore((s) => s.startDownload);
+  const confirmCellularDownload = useModelStore((s) => s.confirmCellularDownload);
+  const dismissCellularDownloadWarning = useModelStore((s) => s.dismissCellularDownloadWarning);
   const pauseDownload = useModelStore((s) => s.pauseDownload);
   const resumeDownload = useModelStore((s) => s.resumeDownload);
   const cancelDownload = useModelStore((s) => s.cancelDownload);
@@ -110,6 +113,16 @@ export function ModelSetupScreen({ navigation }: Props) {
   const onCancel = (): void => {
     void haptics.tap();
     void cancelDownload();
+  };
+
+  const onWaitForWifi = (): void => {
+    void haptics.tap();
+    dismissCellularDownloadWarning();
+  };
+
+  const onDownloadAnyway = (): void => {
+    void haptics.tap();
+    void confirmCellularDownload();
   };
 
   if (!compatibility.isSupported) {
@@ -185,6 +198,39 @@ export function ModelSetupScreen({ navigation }: Props) {
             ))}
           </View>
         </View>
+
+        {cellularDownloadWarningVisible ? (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>This looks like mobile data</Text>
+            <Text style={styles.warningText}>
+              The model is about 2.4 GB. Wait for WiFi, or continue now and remember this choice.
+            </Text>
+            <View style={styles.warningActions}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Wait for WiFi before downloading"
+                style={({ pressed }) => [
+                  styles.warningSecondaryButton,
+                  pressed && styles.secondaryButtonPressed,
+                ]}
+                onPress={onWaitForWifi}
+              >
+                <Text style={styles.secondaryLabel}>Wait for WiFi</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Download the model using mobile data"
+                style={({ pressed }) => [
+                  styles.warningPrimaryButton,
+                  pressed && styles.primaryButtonPressed,
+                ]}
+                onPress={onDownloadAnyway}
+              >
+                <Text style={styles.primaryLabel}>Download anyway</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
 
         {error !== null && downloadStatus === 'failed' ? (
           <View style={styles.errorCard}>
@@ -535,6 +581,46 @@ const styles = StyleSheet.create({
     color: theme.error,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+  },
+  warningCard: {
+    marginTop: theme.space4,
+    padding: theme.space4,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+  },
+  warningTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+    marginBottom: theme.space2,
+  },
+  warningText: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+  },
+  warningActions: {
+    flexDirection: 'row',
+    marginTop: theme.space4,
+  },
+  warningSecondaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: theme.space3,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accentGlow,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    marginRight: theme.space3,
+  },
+  warningPrimaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: theme.space3,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accent,
   },
   noticeCard: {
     marginTop: theme.space4,

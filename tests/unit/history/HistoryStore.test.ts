@@ -48,6 +48,7 @@ function makeSession(overrides: Partial<QASession> = {}): QASession {
     imagePath: '/tmp/photo.jpg',
     question: 'What is this?',
     answer: 'A small object.',
+    turns: [{ question: 'What is this?', answer: 'A small object.' }],
     status: 'completed',
     errorMessage: null,
     metrics: METRICS,

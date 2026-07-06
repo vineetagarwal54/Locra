@@ -1,7 +1,8 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Image } from 'expo-image';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,
@@ -34,25 +35,57 @@ export function AnswerScreen({ navigation, route }: Props) {
   const response = useInferenceStore((s) => s.response);
   const metrics = useInferenceStore((s) => s.metrics);
   const error = useInferenceStore((s) => s.error);
+  const limitWarning = useInferenceStore((s) => s.limitWarning);
+  const submit = useInferenceStore((s) => s.submit);
   const cancel = useInferenceStore((s) => s.cancel);
   const flagCurrentSession = useInferenceStore((s) => s.flagCurrentSession);
 
   const [flagged, setFlagged] = useState(false);
+  const [turns, setTurns] = useState([{ question, answer: '' }]);
+  const [followUpQuestion, setFollowUpQuestion] = useState('');
+  const [composerVisible, setComposerVisible] = useState(false);
+  const scrollRef = useRef<ScrollView | null>(null);
+  const activeTurnIndexRef = useRef(0);
 
   const isGenerating =
     status === 'streaming' || status === 'preprocessing' || status === 'loading_model';
   const isCompleted = status === 'completed';
   const isErrored = status === 'errored';
-  const hasResponse = response.trim() !== '';
   const flagDisabled = !isCompleted || flagged;
+  const trimmedFollowUpQuestion = followUpQuestion.trim();
+  const followUpDisabled = isGenerating || trimmedFollowUpQuestion === '';
 
   useEffect(() => {
     if (isCompleted) {
       void haptics.success();
+      setComposerVisible(true);
     } else if (isErrored) {
       void haptics.error();
     }
   }, [isCompleted, isErrored]);
+
+  useEffect(() => {
+    activeTurnIndexRef.current = 0;
+    setTurns([{ question, answer: '' }]);
+    setFollowUpQuestion('');
+    setComposerVisible(false);
+    setFlagged(false);
+  }, [imagePath, question]);
+
+  useEffect(() => {
+    setTurns((currentTurns) => {
+      const activeTurnIndex = activeTurnIndexRef.current;
+      if (currentTurns.length === 0) {
+        return [{ question, answer: response }];
+      }
+      if (activeTurnIndex >= currentTurns.length) {
+        return currentTurns;
+      }
+      const nextTurns = [...currentTurns];
+      nextTurns[activeTurnIndex] = { ...nextTurns[activeTurnIndex], answer: response };
+      return nextTurns;
+    });
+  }, [question, response]);
 
   const cursorOpacity = useSharedValue(1);
   useEffect(() => {
@@ -64,6 +97,10 @@ export function AnswerScreen({ navigation, route }: Props) {
     }
   }, [isGenerating, cursorOpacity]);
   const cursorStyle = useAnimatedStyle(() => ({ opacity: cursorOpacity.value }));
+
+  const scrollToEnd = (): void => {
+    scrollRef.current?.scrollToEnd({ animated: true });
+  };
 
   const onBack = (): void => {
     void haptics.tap();
@@ -82,6 +119,25 @@ export function AnswerScreen({ navigation, route }: Props) {
     flagCurrentSession();
     void haptics.tap();
     setFlagged(true);
+  };
+
+  const onSubmitFollowUp = (): void => {
+    if (followUpDisabled) {
+      return;
+    }
+
+    const nextQuestion = trimmedFollowUpQuestion;
+    const previousActiveTurnIndex = Math.max(0, turns.length - 1);
+    activeTurnIndexRef.current = turns.length;
+    setTurns((currentTurns) => [...currentTurns, { question: nextQuestion, answer: '' }]);
+    setFollowUpQuestion('');
+    void haptics.tap();
+    void submit({ imagePath, question: nextQuestion }).catch(() => {
+      activeTurnIndexRef.current = previousActiveTurnIndex;
+      setTurns((currentTurns) => currentTurns.slice(0, -1));
+      setFollowUpQuestion(nextQuestion);
+      void haptics.error();
+    });
   };
 
   const metricPills = metrics
@@ -125,7 +181,13 @@ export function AnswerScreen({ navigation, route }: Props) {
         <OfflineIndicator />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, (composerVisible || isGenerating) && styles.contentWithDock]}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={scrollToEnd}
+      >
         <View style={styles.promptCard}>
           <Image
             style={styles.thumb}
@@ -140,20 +202,48 @@ export function AnswerScreen({ navigation, route }: Props) {
           </View>
         </View>
 
-        <View style={styles.answerBlock}>
-          <Text style={styles.sectionLabel}>{getStatusLabel(status)}</Text>
-          <View style={styles.answerRow}>
-            <Text style={[styles.answerText, !hasResponse && styles.answerPlaceholder]}>
-              {hasResponse ? response : getAnswerPlaceholder(status)}
-            </Text>
-            {isGenerating ? <Animated.View style={[styles.cursor, cursorStyle]} /> : null}
-          </View>
+        <View style={styles.threadBlock}>
+          {turns.map((turn, index) => {
+            const isLatestTurn = index === turns.length - 1;
+            const hasTurnAnswer = turn.answer.trim() !== '';
+            return (
+              <View key={`${index}-${turn.question}`} style={styles.turnBlock}>
+                {index > 0 ? (
+                  <View style={styles.followUpQuestionBlock}>
+                    <Text style={styles.sectionLabel}>Follow-up</Text>
+                    <Text style={styles.question}>{turn.question}</Text>
+                  </View>
+                ) : null}
+                <Text style={styles.sectionLabel}>
+                  {isLatestTurn ? getStatusLabel(status) : 'Answer'}
+                </Text>
+                <View style={styles.answerRow}>
+                  <Text style={[styles.answerText, !hasTurnAnswer && styles.answerPlaceholder]}>
+                    {hasTurnAnswer
+                      ? turn.answer
+                      : isLatestTurn
+                        ? getAnswerPlaceholder(status)
+                        : 'No answer saved.'}
+                  </Text>
+                  {isLatestTurn && isGenerating ? (
+                    <Animated.View style={[styles.cursor, cursorStyle]} />
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
         </View>
 
         {isErrored && error !== null ? (
           <View style={styles.errorCard}>
             <Text style={styles.errorTitle}>No answer this time</Text>
             <Text style={styles.error}>{error}</Text>
+          </View>
+        ) : null}
+
+        {isCompleted && limitWarning !== null ? (
+          <View style={styles.limitWarningCard}>
+            <Text style={styles.limitWarningText}>{limitWarning}</Text>
           </View>
         ) : null}
 
@@ -182,10 +272,41 @@ export function AnswerScreen({ navigation, route }: Props) {
         ) : null}
       </ScrollView>
 
-      {isGenerating ? (
-        <Pressable accessibilityRole="button" style={styles.cancelButton} onPress={onCancel}>
-          <Text style={styles.cancelLabel}>Cancel</Text>
-        </Pressable>
+      {composerVisible || isGenerating ? (
+        <KeyboardStickyView offset={{ closed: 0, opened: theme.space2 }} style={styles.bottomDock}>
+          {composerVisible ? (
+            <View style={styles.followUpComposer}>
+              <TextInput
+                style={[styles.followUpInput, isGenerating && styles.inputDisabled]}
+                value={followUpQuestion}
+                onChangeText={setFollowUpQuestion}
+                placeholder="Ask a follow-up"
+                placeholderTextColor={theme.textSecondary}
+                editable={!isGenerating}
+                multiline
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Submit follow-up question"
+                disabled={followUpDisabled}
+                style={({ pressed }) => [
+                  styles.followUpButton,
+                  pressed && !followUpDisabled && styles.followUpButtonPressed,
+                  followUpDisabled && styles.disabled,
+                ]}
+                onPress={onSubmitFollowUp}
+              >
+                <Text style={styles.followUpButtonLabel}>{isGenerating ? 'Working' : 'Ask'}</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {isGenerating ? (
+            <Pressable accessibilityRole="button" style={styles.cancelButton} onPress={onCancel}>
+              <Text style={styles.cancelLabel}>Cancel</Text>
+            </Pressable>
+          ) : null}
+        </KeyboardStickyView>
       ) : null}
     </SafeAreaView>
   );
@@ -253,9 +374,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingBottom: theme.space3,
   },
+  scroll: {
+    flex: 1,
+  },
   content: {
     paddingHorizontal: theme.space4,
     paddingBottom: theme.space6,
+  },
+  contentWithDock: {
+    paddingBottom: theme.space6 * 6,
   },
   promptCard: {
     flexDirection: 'row',
@@ -288,8 +415,19 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
   },
-  answerBlock: {
+  threadBlock: {
     marginBottom: theme.space5,
+  },
+  turnBlock: {
+    marginBottom: theme.space5,
+  },
+  followUpQuestionBlock: {
+    padding: theme.space3,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    marginBottom: theme.space3,
   },
   answerRow: {
     flexDirection: 'row',
@@ -329,6 +467,61 @@ const styles = StyleSheet.create({
     color: theme.error,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  limitWarningCard: {
+    padding: theme.space3,
+    borderRadius: theme.radiusMd,
+    backgroundColor: theme.accentGlow,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    marginBottom: theme.space5,
+  },
+  limitWarningText: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+    lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  followUpComposer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  followUpInput: {
+    flex: 1,
+    minHeight: theme.space6 * 2,
+    maxHeight: theme.space6 * 5,
+    paddingHorizontal: theme.space4,
+    paddingVertical: theme.space3,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    lineHeight: theme.fontSizeMd * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  inputDisabled: {
+    color: theme.textSecondary,
+  },
+  followUpButton: {
+    minWidth: theme.space6 * 3,
+    height: theme.space6 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accent,
+    marginLeft: theme.space3,
+    paddingHorizontal: theme.space4,
+  },
+  followUpButtonPressed: {
+    backgroundColor: theme.accentDim,
+  },
+  followUpButtonLabel: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
+  },
+  disabled: {
+    opacity: 0.45,
   },
   metricsBlock: {
     marginTop: theme.space2,
@@ -376,7 +569,7 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     alignSelf: 'center',
-    marginBottom: theme.space4,
+    marginTop: theme.space3,
     paddingVertical: theme.space3,
     paddingHorizontal: theme.space6,
     borderRadius: theme.radiusPill,
@@ -388,5 +581,13 @@ const styles = StyleSheet.create({
     color: theme.accent,
     fontSize: theme.fontSizeMd,
     fontWeight: '700',
+  },
+  bottomDock: {
+    paddingHorizontal: theme.space4,
+    paddingTop: theme.space3,
+    paddingBottom: theme.space3,
+    backgroundColor: theme.canvas,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.border,
   },
 });

@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { ReactElement } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -9,7 +10,7 @@ import { theme } from '../constants/theme';
 export function OfflineIndicator(): ReactElement {
   return (
     <View style={styles.pill} accessibilityLabel="On-device inference indicator" accessible>
-      <View style={styles.dot} />
+      <MaterialCommunityIcons name="shield-check" size={theme.fontSizeMd} color={theme.accent} />
       <Text style={styles.label}>On-device</Text>
     </View>
   );
@@ -26,16 +27,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.accentBorder,
   },
-  dot: {
-    width: theme.space2,
-    height: theme.space2,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
-    marginRight: theme.space2,
-  },
   label: {
     color: theme.accent,
     fontSize: theme.fontSizeXs,
     fontWeight: '600',
+    marginLeft: theme.space2,
   },
 });
