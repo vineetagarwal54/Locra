@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f6f6f6"/>
+  <rect x="132" y="52" width="248" height="408" fill="#fff" stroke="#ccc" stroke-width="4"/>
+  <text x="166" y="110" font-family="Arial" font-size="24" fill="#111">GROCERY</text>
+  <text x="160" y="184" font-family="Arial" font-size="22" fill="#111">APPLES  4.20</text>
+  <text x="160" y="226" font-family="Arial" font-size="22" fill="#111">BREAD   3.75</text>
+  <text x="160" y="268" font-family="Arial" font-size="22" fill="#111">MILK    5.10</text>
+  <text x="152" y="382" font-family="Arial" font-size="30" font-weight="bold" fill="#111">TOTAL $18.42</text>
+</svg>

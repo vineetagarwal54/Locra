@@ -71,6 +71,7 @@ const extractionJson = JSON.stringify({
   visibleFeatures: ['rectangular', 'matte cover'],
   visibleText: [],
   visibleCondition: 'closed on a desk',
+  uncertainty: ['brand is not visible'],
 });
 const extractionAnswer = [
   'Subject/object: black notebook',
@@ -78,6 +79,7 @@ const extractionAnswer = [
   'Visible text: None visible',
   'Visible condition: closed on a desk',
 ].join('\n');
+const firstVisibleAnswer = 'It is a black notebook closed on the desk.';
 
 function preprocess(imagePath: string): Promise<PreprocessedImage> {
   return Promise.resolve({
@@ -100,7 +102,11 @@ describe('multi-turn follow-up exchanges', () => {
       loadModel: jest.fn(() => Promise.resolve()),
       generate: (request, onToken) => {
         generatedRequests.push(request);
-        const response = generatedRequests.length === 1 ? 'A notebook.' : 'It is black.';
+        const response = generatedRequests.length === 1
+          ? extractionJson
+          : generatedRequests.length === 2
+            ? 'A notebook.'
+            : 'It is black.';
         onToken(response);
         return Promise.resolve({ response, tokenCount: 3 });
       },
@@ -123,6 +129,14 @@ describe('multi-turn follow-up exchanges', () => {
     );
     expect(generatedRequests[0].question).toMatch(/subject\/object/i);
     expect(generatedRequests[1]).toEqual(
+      expect.objectContaining({
+        kind: 'answer',
+        originalQuestion: firstRequest.question,
+      })
+    );
+    expect(generatedRequests[1].imagePath).toBeUndefined();
+    expect(generatedRequests[1].question).toContain('Visible facts from the image');
+    expect(generatedRequests[2]).toEqual(
       {
         question: followUpRequest.question,
       }
@@ -145,14 +159,14 @@ describe('multi-turn follow-up exchanges', () => {
     const savedSessions = historyStoreMock.mockSavedSessions as QASession[];
     expect(savedSessions[0].pinnedExtraction).toBe(extractionAnswer);
     expect(savedSessions[1].pinnedExtraction).toBe(extractionAnswer);
-    expect(engine.submissions[1]).toEqual(
+    expect(engine.submissions[2]).toEqual(
       expect.objectContaining({
         imagePath: null,
         historyLengthBefore: 2,
       })
     );
-    expect(engine.submissions[1].prompt).toContain(extractionAnswer);
-    expect(engine.submissions[1].prompt).toContain(pinnedFollowUpRequest.question);
+    expect(engine.submissions[2].prompt).toContain(extractionAnswer);
+    expect(engine.submissions[2].prompt).toContain(pinnedFollowUpRequest.question);
   });
 
   it('keeps pinned extraction in follow-up context after many turns exceed the recent window', async () => {
@@ -193,7 +207,7 @@ describe('multi-turn follow-up exchanges', () => {
     expect(savedSessions).toHaveLength(2);
     expect(savedSessions[1].id).toBe(savedSessions[0].id);
     expect(savedSessions[1].turns).toEqual([
-      { question: fullFirstRequest.question, answer: extractionAnswer },
+      { question: fullFirstRequest.question, answer: firstVisibleAnswer },
       {
         question: fullFollowUpRequest.question,
         answer: 'It is black.',
@@ -206,7 +220,7 @@ describe('multi-turn follow-up exchanges', () => {
       })
     );
     expect(engine.submissions[0].prompt).toMatch(/subject\/object/i);
-    expect(engine.submissions[1].prompt).toContain(extractionAnswer);
+    expect(engine.submissions[2].prompt).toContain(extractionAnswer);
   });
 
   it('uses useLLM managed messageHistory for follow-up context instead of manual history or a new load', () => {
@@ -266,13 +280,13 @@ describe('multi-turn follow-up exchanges', () => {
 
     await useInferenceStore.getState().submit(delayedFollowUpRequest);
 
-    expect(engine.submissions[1]).toEqual(
+    expect(engine.submissions[2]).toEqual(
       expect.objectContaining({
         imagePath: null,
         historyLengthBefore: 2,
       })
     );
-    expect(engine.submissions[1].prompt).toContain(delayedFollowUpRequest.question);
+    expect(engine.submissions[2].prompt).toContain(delayedFollowUpRequest.question);
   });
 
   it('persists the resolved final response even when streamed hook state is behind', async () => {
@@ -290,9 +304,9 @@ describe('multi-turn follow-up exchanges', () => {
     await useInferenceStore.getState().submit(isolatedRequest);
 
     const savedSessions = historyStoreMock.mockSavedSessions as QASession[];
-    expect(savedSessions[0].answer).toBe(extractionAnswer);
+    expect(savedSessions[0].answer).toBe(firstVisibleAnswer);
     expect(savedSessions[0].turns).toEqual([
-      { question: isolatedRequest.question, answer: extractionAnswer },
+      { question: isolatedRequest.question, answer: firstVisibleAnswer },
     ]);
   });
 
@@ -326,8 +340,11 @@ function makeEngineHandle(
     submit: async (imagePath: string | null, prompt: string): Promise<string> => {
       submissions.push({ imagePath, prompt, historyLengthBefore: messageHistoryLength });
       const isExtractionTurn = imagePath !== null;
+      const isAnswerTurn = imagePath === null && prompt.includes('Visible facts from the image');
       const finalResponse = isExtractionTurn
         ? options.firstFinalResponse ?? extractionJson
+        : isAnswerTurn
+          ? firstVisibleAnswer
         : 'It is black.';
       response = isExtractionTurn ? options.firstStreamedResponse ?? finalResponse : finalResponse;
       tokenCount = finalResponse.split(' ').length;

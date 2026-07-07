@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#edf5fa"/>
+  <rect x="312" y="84" width="110" height="190" fill="#dff3ff" stroke="#333" stroke-width="6"/>
+  <line x1="367" y1="84" x2="367" y2="274" stroke="#333" stroke-width="5"/>
+  <line x1="312" y1="178" x2="422" y2="178" stroke="#333" stroke-width="5"/>
+  <rect x="142" y="330" width="88" height="62" fill="#b86d35"/>
+  <path d="M186 330c-52-60-22-126 54-104-20 42-28 74-22 104z" fill="#3f8f46"/>
+  <path d="M186 330c40-78 98-84 118-22-46 0-82 10-118 22z" fill="#4cae55"/>
+  <text x="118" y="120" font-family="Arial" font-size="28" fill="#222">plant near window</text>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f4efe5"/>
+  <rect x="116" y="126" width="280" height="260" rx="20" fill="#fff" stroke="#333" stroke-width="6"/>
+  <text x="158" y="210" font-family="Arial" font-size="34" fill="#111">ALMOND</text>
+  <text x="184" y="258" font-family="Arial" font-size="34" fill="#111">SOAP</text>
+  <text x="214" y="320" font-family="Arial" font-size="28" fill="#111">80 g</text>
+</svg>

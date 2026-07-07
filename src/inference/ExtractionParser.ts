@@ -1,10 +1,12 @@
 import { buildExtractionRetryPrompt } from './ExtractionPrompt';
+import type { HiddenVisualEvidence } from './OutputPipelineTypes';
 
 export interface ExtractionFindings {
   subjectObject: string;
   visibleFeatures: string[];
   visibleText: string[];
   visibleCondition: string;
+  uncertainty: string[];
 }
 
 export type ExtractionParseResult =
@@ -14,6 +16,7 @@ export type ExtractionParseResult =
 export interface ExtractionOutcome {
   pinnedExtraction: string;
   visibleAnswer: string;
+  hiddenEvidence: HiddenVisualEvidence | null;
   usedFallback: boolean;
 }
 
@@ -44,6 +47,7 @@ export function parseExtractionResponse(rawText: string): ExtractionParseResult 
         visibleFeatures: readStringArray(parsed, 'visibleFeatures'),
         visibleText: readStringArray(parsed, 'visibleText'),
         visibleCondition,
+        uncertainty: readStringArray(parsed, 'uncertainty'),
       },
     };
   } catch {
@@ -54,24 +58,28 @@ export function parseExtractionResponse(rawText: string): ExtractionParseResult 
 export async function parseExtractionWithRetry(
   rawText: string,
   retry: ExtractionRetry,
-  userQuestion: string
+  userQuestion: string,
+  imagePath = ''
 ): Promise<ExtractionOutcome> {
   const firstParse = parseExtractionResponse(rawText);
   if (firstParse.ok) {
-    const answer = formatExtractionAnswer(firstParse.findings);
-    return { pinnedExtraction: answer, visibleAnswer: answer, usedFallback: false };
+    return buildSuccessfulOutcome(firstParse.findings, userQuestion, imagePath);
   }
 
   const retryPrompt = buildExtractionRetryPrompt(rawText, userQuestion);
   const retryText = await retry(retryPrompt);
   const retryParse = parseExtractionResponse(retryText);
   if (retryParse.ok) {
-    const answer = formatExtractionAnswer(retryParse.findings);
-    return { pinnedExtraction: answer, visibleAnswer: answer, usedFallback: false };
+    return buildSuccessfulOutcome(retryParse.findings, userQuestion, imagePath);
   }
 
-  const fallback = rawText.trim() === '' ? 'No structured visual extraction was produced.' : rawText.trim();
-  return { pinnedExtraction: fallback, visibleAnswer: fallback, usedFallback: true };
+  return {
+    pinnedExtraction: 'Visual evidence unavailable: Locra could not extract reliable structured visual evidence.',
+    visibleAnswer:
+      "I couldn't extract reliable visual evidence from this image, so I can't answer confidently from the picture. Try retaking the image with the subject centered and well lit.",
+    hiddenEvidence: null,
+    usedFallback: true,
+  };
 }
 
 export function formatExtractionAnswer(findings: ExtractionFindings): string {
@@ -103,4 +111,28 @@ function formatList(values: string[]): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function buildSuccessfulOutcome(
+  findings: ExtractionFindings,
+  userQuestion: string,
+  imagePath: string
+): ExtractionOutcome {
+  const pinnedExtraction = formatExtractionAnswer(findings);
+  return {
+    pinnedExtraction,
+    visibleAnswer: pinnedExtraction,
+    hiddenEvidence: {
+      version: 'hidden-evidence-v1',
+      imagePath,
+      sourceQuestion: userQuestion,
+      subjectObject: findings.subjectObject,
+      visibleFeatures: findings.visibleFeatures,
+      visibleText: findings.visibleText,
+      visibleCondition: findings.visibleCondition,
+      uncertainty: findings.uncertainty,
+      createdAt: new Date().toISOString(),
+    },
+    usedFallback: false,
+  };
 }

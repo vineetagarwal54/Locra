@@ -6,7 +6,6 @@ import {
 } from 'react-native-executorch';
 
 import { RESPONSE_TOKEN_BUDGET } from './GenerationLimits';
-import { LOCRA_GENERATION_CONFIG } from './GenerationTuning';
 import { LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,9 +91,6 @@ export function useInferenceEngine(): InferenceEngineHandle {
         initialMessageHistory: [],
         contextStrategy: new SlidingWindowContextStrategy(RESPONSE_TOKEN_BUDGET),
       },
-      // Only 0.9.2-verified fields (temperature/topP/minP/repetitionPenalty);
-      // no topK/maxTokens exist on this version. See GenerationTuning.ts.
-      generationConfig: LOCRA_GENERATION_CONFIG,
     });
     configuredRef.current = true;
   };

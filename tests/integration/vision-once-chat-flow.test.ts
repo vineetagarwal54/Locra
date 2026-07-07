@@ -18,6 +18,35 @@ jest.mock('../../src/storage/mmkv', () => {
     },
   };
 });
+
+describe('grounded practical advice prompt assembly', () => {
+  it('combines visible evidence, general knowledge, uncertainty, and next steps for advice cases', () => {
+    const evidence: HiddenVisualEvidence = {
+      version: 'hidden-evidence-v1',
+      imagePath: '/camera/pan.jpg',
+      sourceQuestion: 'How do I fix this?',
+      subjectObject: 'worn cooking pan',
+      visibleFeatures: ['dark cooking surface', 'scratched center'],
+      visibleText: [],
+      visibleCondition: 'surface appears worn in the center',
+      uncertainty: ['coating material is not legible from the image'],
+      createdAt: '2026-07-07T16:30:00.000Z',
+    };
+
+    const prompt = buildAnswerPrompt({
+      question: 'How do I fix this?',
+      hiddenEvidence: evidence,
+      conversationMode: 'live',
+      generationConfigId: 'recommended-lfm2-vl-v1',
+      pipelineVariantId: 'recommended-sampling-v1',
+    });
+
+    expect(prompt).toContain('Visible facts from the image');
+    expect(prompt).toContain('General knowledge and reasoning');
+    expect(prompt).toContain('Actionable next steps');
+    expect(prompt).toContain('coating material is not legible');
+  });
+});
 jest.mock('../../src/store/modelStore', () => ({
   useModelStore: Object.assign(jest.fn(), {
     getState: () => ({ isReadyForInference: () => true }),
@@ -33,6 +62,8 @@ jest.mock('expo-image-manipulator', () => ({
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
 
+import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
+import type { HiddenVisualEvidence } from '../../src/inference/OutputPipelineTypes';
 import type { InferenceEngineHandle } from '../../src/inference/useInferenceEngine';
 import { useHistoryStore } from '../../src/store/historyStore';
 import { useInferenceStore } from '../../src/store/inferenceStore';

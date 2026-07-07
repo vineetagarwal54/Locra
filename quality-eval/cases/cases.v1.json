@@ -1,0 +1,272 @@
+[
+  {
+    "caseId": "visible-001",
+    "category": "visibleFacts",
+    "title": "Mug on table",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/visible-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What object is on the table?",
+    "followUps": [],
+    "expectedCriteria": ["Identifies the red mug", "Does not invent extra objects"],
+    "tags": ["visible-facts", "first-turn"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "visible-002",
+    "category": "visibleFacts",
+    "title": "Keys and wallet",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/visible-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What items are shown?",
+    "followUps": [],
+    "expectedCriteria": ["Mentions keys and wallet", "Avoids unsupported brand claims"],
+    "tags": ["visible-facts"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "visible-003",
+    "category": "visibleFacts",
+    "title": "Yellow plant leaf",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/visible-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What stands out in this plant?",
+    "followUps": [],
+    "expectedCriteria": ["Mentions one yellow leaf", "Does not diagnose hidden causes"],
+    "tags": ["visible-facts", "plant"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "text-001",
+    "category": "textReading",
+    "title": "Product label",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/text-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What does the label say?",
+    "followUps": [],
+    "expectedCriteria": ["Reads ALMOND SOAP", "Mentions 80 g if visible"],
+    "tags": ["text-reading", "label"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "text-002",
+    "category": "textReading",
+    "title": "Receipt total",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/text-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What is the total?",
+    "followUps": [],
+    "expectedCriteria": ["Answers $18.42", "Does not confuse subtotal with total"],
+    "tags": ["text-reading", "receipt"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "text-003",
+    "category": "textReading",
+    "title": "Error screen",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/text-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What error code is shown?",
+    "followUps": [],
+    "expectedCriteria": ["Reads E24", "States uncertainty only if unclear"],
+    "tags": ["text-reading", "error-screen"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "reason-001",
+    "category": "visualReasoning",
+    "title": "Container comparison",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/reason-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "Which container looks fuller?",
+    "followUps": [],
+    "expectedCriteria": ["Identifies the left container as fuller", "Grounds answer in visible fill level"],
+    "tags": ["visual-reasoning"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "reason-002",
+    "category": "visualReasoning",
+    "title": "Tangled cable",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/reason-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What is likely causing the cable problem?",
+    "followUps": [],
+    "expectedCriteria": ["Mentions visible tangle/kink", "Avoids claiming internal cable damage"],
+    "tags": ["visual-reasoning", "cable"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "reason-003",
+    "category": "visualReasoning",
+    "title": "Plant near window",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/reason-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "Is this plant getting light?",
+    "followUps": [],
+    "expectedCriteria": ["Mentions visible window/light", "Avoids exact sunlight claims"],
+    "tags": ["visual-reasoning", "plant"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "advice-001",
+    "category": "practicalAdvice",
+    "title": "Worn pan",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/advice-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "How do I fix this?",
+    "followUps": [],
+    "expectedCriteria": ["Gives practical pan-care guidance", "Grounds advice in worn/dark surface", "Avoids unsupported coating certainty"],
+    "tags": ["practical-advice", "pan"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "advice-002",
+    "category": "practicalAdvice",
+    "title": "Stained shirt",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/advice-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "How can I clean this?",
+    "followUps": [],
+    "expectedCriteria": ["Gives safe stain-cleaning steps", "Mentions uncertainty about fabric/stain type"],
+    "tags": ["practical-advice", "cleaning"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "advice-003",
+    "category": "practicalAdvice",
+    "title": "Appliance error",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/advice-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What should I do?",
+    "followUps": [],
+    "expectedCriteria": ["Mentions visible E24 error", "Provides cautious troubleshooting steps"],
+    "tags": ["practical-advice", "error-screen"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "active-001",
+    "category": "activeFollowUpContext",
+    "title": "Pan handle follow-up",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/active-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "How do I fix this pan?",
+    "followUps": ["What about the handle?"],
+    "expectedCriteria": ["Follow-up uses visible handle context", "Does not repeat full transcript"],
+    "tags": ["active-follow-up", "pan"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "active-002",
+    "category": "activeFollowUpContext",
+    "title": "Label safety follow-up",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/active-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "Is this safe for a child?",
+    "followUps": ["What ingredient should I check first?"],
+    "expectedCriteria": ["Uses label context", "Separates visible text from general safety guidance"],
+    "tags": ["active-follow-up", "label"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "active-003",
+    "category": "activeFollowUpContext",
+    "title": "Plant follow-up",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/active-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What is wrong with this plant?",
+    "followUps": ["Should I move it closer to the window?"],
+    "expectedCriteria": ["Uses remembered visible leaf/window context", "Avoids unsupported exact diagnosis"],
+    "tags": ["active-follow-up", "plant"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "resume-001",
+    "category": "resumedConversationContext",
+    "title": "Receipt resume",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/resume-001.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What did I spend?",
+    "followUps": ["After reopening, remind me what the total was."],
+    "expectedCriteria": ["Resumed answer recalls total", "Does not require reattaching image"],
+    "tags": ["resumed-context", "receipt"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "resume-002",
+    "category": "resumedConversationContext",
+    "title": "Code screenshot resume",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/resume-002.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What is the visible error?",
+    "followUps": ["After reopening, what should I check first?"],
+    "expectedCriteria": ["Uses visible TypeError context", "Gives practical first check"],
+    "tags": ["resumed-context", "code"],
+    "officialDeviceRequired": true
+  },
+  {
+    "caseId": "resume-003",
+    "category": "resumedConversationContext",
+    "title": "Chat screenshot resume",
+    "imageSource": {
+      "type": "repoAsset",
+      "path": "quality-eval/images/resume-003.svg",
+      "licenseOrOrigin": "project-created SVG fixture"
+    },
+    "question": "What is the plan in this chat?",
+    "followUps": ["After reopening, what time should I remember?"],
+    "expectedCriteria": ["Uses visible chat plan", "Recalls 6 PM when resumed"],
+    "tags": ["resumed-context", "chat"],
+    "officialDeviceRequired": true
+  }
+]

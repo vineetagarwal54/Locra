@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#222831"/>
+  <rect x="106" y="92" width="300" height="300" rx="26" fill="#11151c" stroke="#ddd" stroke-width="6"/>
+  <circle cx="256" cy="152" r="28" fill="#ffcc00"/>
+  <text x="166" y="236" font-family="Arial" font-size="48" font-weight="bold" fill="#ff5f57">E24</text>
+  <text x="154" y="300" font-family="Arial" font-size="24" fill="#fff">DRAIN ERROR</text>
+</svg>

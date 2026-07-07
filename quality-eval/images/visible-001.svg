@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f3f0e8"/>
+  <rect x="56" y="330" width="400" height="46" fill="#8b6f47"/>
+  <path d="M174 206h140v84c0 46-31 76-70 76s-70-30-70-76z" fill="#c43d32"/>
+  <path d="M314 236h32c28 0 28 62 0 62h-32" fill="none" stroke="#c43d32" stroke-width="18"/>
+  <text x="146" y="112" font-family="Arial" font-size="28" fill="#222">red mug on table</text>
+</svg>

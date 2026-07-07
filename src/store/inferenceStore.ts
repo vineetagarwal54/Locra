@@ -1,12 +1,12 @@
 import { create } from 'zustand';
 
 import { buildPinnedContextPrompt } from '../inference/ContextBuilder';
-import { parseExtractionWithRetry } from '../inference/ExtractionParser';
 import {
   createInferenceQueue,
   type InferenceEngineAdapter,
   type InferenceSubmitOptions,
 } from '../inference/InferenceQueue';
+import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
@@ -123,23 +123,16 @@ const bridgeEngine: InferenceEngineAdapter = {
       if (error !== null) {
         throw new Error(error);
       }
-      let response = rawResponse;
-      let pinnedExtraction: string | null = null;
-      if (request.kind === 'extraction') {
-        const outcome = await parseExtractionWithRetry(
-          rawResponse,
-          (retryPrompt) => submitAndWaitForMessageHistory(handle, null, retryPrompt, signal),
-          request.originalQuestion ?? request.question
-        );
-        response = outcome.visibleAnswer;
-        pinnedExtraction = outcome.pinnedExtraction;
+      if (request.kind === 'extraction' || request.kind === 'extractionRetry') {
+        handle.clearHistory();
+        engineTurnsServed = 0;
       }
       return {
-        response,
+        response: rawResponse,
         tokenCount: handle.getGeneratedTokenCount(),
         promptTokenCount: handle.getPromptTokenCount(),
         totalTokenCount: handle.getTotalTokenCount(),
-        pinnedExtraction,
+        pinnedExtraction: null,
       };
     } finally {
       unsubscribe();
@@ -160,6 +153,8 @@ const queue = createInferenceQueue(bridgeEngine, {
 export interface InferenceStoreState extends InferenceState {
   /** The persisted session id the current chat thread belongs to (FR-046). */
   activeSessionId: string | null;
+  /** Latest completed production-owned objective result for dev-only consumers. */
+  currentObjectiveResult: ObjectiveInferenceResultRecord | null;
   /** Registers (or clears) the live engine handle from the host component. */
   registerEngine: (handle: InferenceEngineHandle | null) => void;
   /** Rejects if a request is already in-flight (single-flight, FR-006). */
@@ -184,6 +179,7 @@ export interface InferenceStoreState extends InferenceState {
 export const useInferenceStore = create<InferenceStoreState>(() => ({
   ...queue.getState(),
   activeSessionId: null,
+  currentObjectiveResult: null,
   registerEngine: (handle: InferenceEngineHandle | null): void => {
     if (handle !== engineHandle) {
       engineTurnsServed = 0;
@@ -228,6 +224,9 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
       error: null,
       limitWarning: null,
       pinnedExtraction: session.pinnedExtraction,
+      hiddenEvidence: session.hiddenEvidence ?? null,
+      objectiveResult: null,
+      currentObjectiveResult: null,
     });
     return session;
   },
@@ -249,6 +248,9 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
       error: null,
       limitWarning: null,
       pinnedExtraction: null,
+      hiddenEvidence: null,
+      objectiveResult: null,
+      currentObjectiveResult: null,
     });
   },
 }));
@@ -263,6 +265,12 @@ queue.subscribe((state: InferenceState) => {
     error: state.error,
     limitWarning: state.limitWarning,
     pinnedExtraction: state.pinnedExtraction,
+    hiddenEvidence: state.hiddenEvidence ?? null,
+    objectiveResult: state.objectiveResult ?? null,
+    currentObjectiveResult:
+      state.status === 'completed'
+        ? state.objectiveResult ?? null
+        : useInferenceStore.getState().currentObjectiveResult,
   });
   if (state.status === 'completed' && state.metrics !== null && activeTurn !== null) {
     saveCompletedTurn(activeTurn, state);
@@ -341,7 +349,7 @@ function saveCompletedTurn(turn: PendingTurn, state: InferenceState): void {
 }
 
 function saveFirstTurnSession(request: InferenceRequest, state: InferenceState): void {
-  const pinnedExtraction = state.pinnedExtraction ?? state.response;
+  const pinnedExtraction = state.pinnedExtraction ?? null;
   saveToHistoryStore({
     id: generateSessionId(),
     createdAt: Date.now(),
@@ -350,6 +358,7 @@ function saveFirstTurnSession(request: InferenceRequest, state: InferenceState):
     answer: state.response,
     turns: [{ question: request.question, answer: state.response }],
     pinnedExtraction,
+    hiddenEvidence: state.hiddenEvidence ?? null,
     status: 'completed',
     errorMessage: null,
     metrics: state.metrics,
@@ -369,6 +378,7 @@ function saveFollowUpTurnSession(
     errorMessage: null,
     metrics: baseSession.metrics ?? state.metrics,
     pinnedExtraction: baseSession.pinnedExtraction,
+    hiddenEvidence: baseSession.hiddenEvidence ?? null,
     turns: [
       ...normalizedTurns(baseSession),
       { question: request.question, answer: state.response },

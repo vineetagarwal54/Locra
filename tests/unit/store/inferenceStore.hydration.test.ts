@@ -54,6 +54,14 @@ const PINNED = [
   'Visible text: None visible',
   'Visible condition: used, clean',
 ].join('\n');
+const HIDDEN_EVIDENCE_JSON = JSON.stringify({
+  subjectObject: 'ceramic mug',
+  visibleFeatures: ['blue glaze', 'chipped handle'],
+  visibleText: [],
+  visibleCondition: 'used, clean',
+  uncertainty: ['exact size is unclear from the image'],
+});
+const FIRST_VISIBLE_ANSWER = 'It is a ceramic mug with a chipped handle.';
 
 function makePersistedSession(id: string, imagePath: string): QASession {
   return {
@@ -94,15 +102,13 @@ function makeEngineHandle(): InferenceEngineHandle & {
     clearHistoryCalls: 0,
     submit: async (imagePath: string | null, prompt: string): Promise<string> => {
       submissions.push({ imagePath, prompt });
-      response =
-        imagePath !== null
-          ? JSON.stringify({
-              subjectObject: 'ceramic mug',
-              visibleFeatures: ['blue glaze'],
-              visibleText: [],
-              visibleCondition: 'clean',
-            })
-          : 'It is about ten centimeters tall.';
+      if (imagePath !== null) {
+        response = HIDDEN_EVIDENCE_JSON;
+      } else if (prompt.includes('Visible facts from the image')) {
+        response = FIRST_VISIBLE_ANSWER;
+      } else {
+        response = 'It is about ten centimeters tall.';
+      }
       messageHistoryLength += 2;
       for (const listener of listeners) listener();
       return response;
@@ -181,6 +187,64 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
     expect(saved.pinnedExtraction).toBe(PINNED);
   });
 
+  it('persists the final first-turn answer without adding hidden perception as a normal turn', async () => {
+    const engine = makeEngineHandle();
+    useInferenceStore.getState().registerEngine(engine);
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: '/photos/first-turn.jpg', question: 'What is this?' });
+
+    const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
+    expect(engine.submissions).toHaveLength(2);
+    expect(engine.submissions[0].imagePath).toBe('/photos/first-turn.jpg');
+    expect(engine.submissions[0].prompt).toMatch(/valid json only/i);
+    expect(engine.submissions[1].imagePath).toBeNull();
+    expect(engine.submissions[1].prompt).toContain('Visible facts from the image');
+    expect(saved.answer).toBe(FIRST_VISIBLE_ANSWER);
+    expect(saved.turns).toEqual([
+      { question: 'What is this?', answer: FIRST_VISIBLE_ANSWER },
+    ]);
+    expect(saved.turns[0].answer).not.toMatch(/Subject\/object|visibleFeatures|subjectObject/i);
+  });
+
+  it('persists hidden visual evidence separately from the visible answer', async () => {
+    const engine = makeEngineHandle();
+    useInferenceStore.getState().registerEngine(engine);
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: '/photos/hidden.jpg', question: 'What is this?' });
+
+    const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
+    expect(saved.pinnedExtraction).toContain('Subject/object: ceramic mug');
+    expect(saved.hiddenEvidence?.subjectObject).toBe('ceramic mug');
+    expect(saved.hiddenEvidence?.sourceQuestion).toBe('What is this?');
+    expect(saved.hiddenEvidence?.visibleFeatures).toContain('chipped handle');
+    expect(saved.answer).toBe(FIRST_VISIBLE_ANSWER);
+  });
+
+  it('bridges the completed production objective result for dev-only consumers without saving it to history', async () => {
+    const engine = makeEngineHandle();
+    useInferenceStore.getState().registerEngine(engine);
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: '/photos/objective.jpg', question: 'What is this?' });
+
+    const state = useInferenceStore.getState();
+    const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
+    expect(state.currentObjectiveResult).toEqual(
+      expect.objectContaining({
+        answerText: FIRST_VISIBLE_ANSWER,
+        pipelineVariantId: 'recommended-sampling-v1',
+        generationConfigId: 'recommended-lfm2-vl-v1',
+      }),
+    );
+    expect(saved).not.toHaveProperty('currentObjectiveResult');
+    expect(saved).not.toHaveProperty('objectiveResult');
+  });
+
   it('resetActiveChat clears the thread, wipes engine history, and the next capture starts a new session', async () => {
     const engine = makeEngineHandle();
     useInferenceStore.getState().registerEngine(engine);
@@ -204,7 +268,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
     expect(secondSaved.id).not.toBe(firstId);
     expect(secondSaved.turns).toHaveLength(1);
     // The new thread's first turn re-runs vision — image attached again.
-    expect(engine.submissions.at(-1)?.imagePath).not.toBeNull();
+    expect(engine.submissions.at(-2)?.imagePath).not.toBeNull();
   });
 
   it('completing a first turn records its session id as the active thread', async () => {
