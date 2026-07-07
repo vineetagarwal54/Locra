@@ -17,7 +17,12 @@ import { hasCompletedWelcome } from '../store/onboardingStore';
 export type RootStackParamList = {
   Welcome: undefined;
   Capture: undefined;
-  Answer: { imagePath: string; question: string };
+  /**
+   * Two entry modes (FR-046): a fresh ask arrives with `imagePath`+`question`
+   * (the submit was already fired from Capture); a thread reopened from
+   * History arrives with `sessionId` and hydrates its persisted turns.
+   */
+  Answer: { imagePath: string; question: string; sessionId?: undefined } | { sessionId: string };
   History: undefined;
   ModelSetup: undefined;
   Benchmark: undefined;
@@ -53,6 +58,7 @@ export function AppNavigator() {
   const engineReady = useModelStore(
     (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
   );
+  const [engineHostMounted, setEngineHostMounted] = useState(false);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -79,6 +85,12 @@ export function AppNavigator() {
     };
   }, []);
 
+  useEffect(() => {
+    if (engineReady) {
+      setEngineHostMounted(true);
+    }
+  }, [engineReady]);
+
   if (!bootstrapped) {
     return (
       <ErrorBoundary>
@@ -91,7 +103,7 @@ export function AppNavigator() {
 
   return (
     <NavigationContainer>
-      {engineReady ? <InferenceEngineHost /> : null}
+      {engineHostMounted ? <InferenceEngineHost /> : null}
       <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
         <Stack.Screen name="Capture" component={Capture} />

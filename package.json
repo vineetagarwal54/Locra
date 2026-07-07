@@ -16,6 +16,7 @@
     "expo-font": "56.0.7",
     "expo-haptics": "~56.0.3",
     "expo-image": "~56.0.11",
+    "expo-image-manipulator": "~56.0.20",
     "expo-network": "~56.0.5",
     "expo-status-bar": "~56.0.4",
     "js-sha256": "^0.11.1",

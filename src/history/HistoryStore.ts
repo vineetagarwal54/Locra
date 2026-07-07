@@ -145,8 +145,20 @@ function readSession(rawSession: string | undefined): QASession | null {
     return null;
   }
   try {
-    return JSON.parse(rawSession) as QASession;
+    return normalizeSession(JSON.parse(rawSession));
   } catch {
     return null;
   }
+}
+
+function normalizeSession(value: unknown): QASession | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const session = value as QASession;
+  return {
+    ...session,
+    pinnedExtraction: session.pinnedExtraction ?? null,
+  };
 }

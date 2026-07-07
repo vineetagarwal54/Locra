@@ -106,12 +106,15 @@ describe('offline capture to answer integration flow', () => {
 
     const state = queue.getState();
     expect(state.status).toBe('completed');
-    expect(generatedRequests).toEqual([
-      {
+    expect(generatedRequests[0]).toEqual(
+      expect.objectContaining({
         imagePath: '/camera/raw-capture.jpg.preprocessed',
-        question: capturedRequest.question,
-      },
-    ]);
+        kind: 'extraction',
+        originalQuestion: capturedRequest.question,
+      })
+    );
+    expect(generatedRequests[0].question).toMatch(/subject\/object/i);
+    expect(generatedRequests[0].question).toContain(capturedRequest.question);
 
     const session: QASession = {
       id: 'completed-flow',
@@ -120,6 +123,7 @@ describe('offline capture to answer integration flow', () => {
       question: capturedRequest.question,
       answer: state.response,
       turns: [{ question: capturedRequest.question, answer: state.response }],
+      pinnedExtraction: null,
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,

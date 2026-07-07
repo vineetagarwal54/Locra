@@ -69,3 +69,41 @@ interface InferenceEngine {
   (`'completed' | 'cancelled' | 'errored'`) even if the screen that called
   `submit()` has since unmounted and re-mounted — state lives in the module,
   not in screen-local state.
+
+## Phase 3 addendum (FR-039–FR-042, FR-049, FR-052, FR-054)
+
+- **Engine adapter abort semantics**: the `InferenceEngineAdapter.generate`
+  contract now requires that when the queue aborts the request signal,
+  `generate` RESOLVES with the partial response streamed so far — it must not
+  reject. The queue drives the same abort path for two distinct outcomes:
+  a user cancel (where `cancel()` was called and the resolved partial is
+  discarded, preserving FR-007) and the FR-052 output-length cap (where the
+  partial completes normally). The queue distinguishes them internally; the
+  adapter must not.
+- **Streaming callback**: `onToken(cumulativeResponse, generatedTokenCount?)`
+  — the optional second argument feeds the app-level output cap. Once
+  `generatedTokenCount` reaches the configured budget
+  (`OUTPUT_TOKEN_BUDGET`, `src/inference/GenerationTuning.ts`), the queue
+  aborts generation and completes with the partial answer plus a visible
+  notice in `limitWarning`; this replaces the nonexistent native
+  max-tokens setting (`research.md` Phase 3 API Verification).
+- **Deterministic history wait, no fixed timeout**: the composition root's
+  bridge no longer uses any fixed-duration timer to wait for the engine's
+  managed history. It waits on actual observed state (history growth, engine
+  error, or signal abort — each of which settles the wait), and skips the
+  pre-send history wait entirely when no turn has been served by this engine
+  instance in this process (the hydrated-thread case, where the pinned-context
+  prompt is self-contained).
+- **Preprocessing pipeline**: `submit()`'s preprocessing step is now
+  enhance → ceiling: `prepareImageForInference` runs FR-049's
+  orient/crop/downscale enhancement first, then the unchanged ≤512×512 hard
+  ceiling. Enhancement failure falls back to the original capture — the
+  ceiling and its clear errors remain the invariant (Principles III/IV).
+- **Post-processing**: on `'completed'`, the response is trimmed and its tail
+  assessed (`postProcessAnswer`, FR-054); a truncated or looping tail is
+  collapsed/flagged via `limitWarning`, and the persisted answer is always
+  the post-processed text.
+- **Pinned extraction**: a first (image) turn's completed state carries
+  `pinnedExtraction` (FR-041); follow-up turns' effective prompts MUST include
+  it (FR-042/FR-044) — verified by `tests/unit/inference/MultiTurnFollowUp.test.ts`
+  and `tests/integration/vision-once-chat-flow.test.ts`.

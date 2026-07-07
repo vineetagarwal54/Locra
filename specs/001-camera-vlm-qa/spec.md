@@ -152,9 +152,104 @@ of this document for the reconciliation).
 - **FR-037**: System MUST allow the user to pinch-to-zoom the captured image shown on the answer screen, within bounded zoom limits, and MUST reset the zoom level when the user navigates away from that screen.
 - **FR-038**: System MUST present the user with a list of available on-device models, each showing its recommended status (based on device compatibility), storage size, and minimum RAM requirement, and MUST allow the user to select which single model is active at a time.
 
+#### Phase 3 Additions (Multi-Turn Reliability, Vision-Once/Text-Chat, Resumable Threads)
+
+These requirements extend Phase 2's multi-turn follow-up capability
+(FR-030) with a reliability fix, a vision-once inference model, richer
+context handling, full-thread persistence, and input/output quality tuning.
+Where an item's exact underlying library capability is unconfirmed as of this
+writing, `research.md`'s "Phase 3 API Verification" section is the source of
+truth and this spec defers to it rather than assuming.
+
+- **FR-039**: System MUST use exactly one long-lived inference-engine instance
+  for the entire lifetime of the app process; every turn of every chat thread
+  (first and follow-up) MUST be sent via that same instance's managed
+  `sendMessage` call, and the instance MUST NOT be remounted, re-initialized,
+  or re-`configure()`-d with a reset history mid-conversation.
+- **FR-040**: System MUST be verifiable, via an automated test, that a second
+  turn's effective request context (as observed through the engine's own
+  conversation history or an equivalent inspectable request payload) includes
+  the first turn's question and answer.
+- **FR-041**: For the first turn following a new image capture, System MUST
+  send the image together with a structured-extraction prompt instructing the
+  model to identify, as labeled findings, the subject/object, its visible
+  features, any visible text, and its visible condition; this extraction MUST
+  be retained as pinned context for the remainder of that thread and MUST NOT
+  be evicted by any later context-management step.
+- **FR-042**: For every turn after the first in a thread, System MUST send a
+  text-only request on the same engine instance (FR-039), constructed from
+  the pinned extraction (FR-041) plus prior turns, without re-attaching the
+  captured image.
+- **FR-043** *(deferred — see Assumptions)*: System MUST offer a "Look again"
+  action that re-runs the structured-extraction step (FR-041) against the
+  thread's original stored image without starting a new thread. This is
+  specified now so it is not re-litigated later, but it is explicitly
+  deferred to a separate future task per the Phase 3 Scope Note below.
+- **FR-044**: When constructing the message context for any turn, System MUST
+  include the pinned extraction (FR-041) plus at minimum the most recent K
+  verbatim turns (a sliding-window floor), and MUST NOT silently drop the
+  pinned extraction to make room for additional history. Rolling
+  summarization of turns older than the window is out of scope for this
+  batch of work (see Phase 3 Scope Note).
+- **FR-045**: System MUST persist each chat thread as a complete record —
+  identifier, creation time, a reference to its captured image, and the full
+  ordered list of turns — rather than a summarized or truncated form.
+- **FR-046**: System MUST present an active chat thread through a single
+  screen keyed by that thread's identifier; opening a thread from history
+  MUST hydrate its full persisted turn list and allow the user to continue
+  it with further follow-up turns, using the same continuation path as a
+  thread that was never left.
+- **FR-047**: When the user navigates away from an active chat thread, or
+  begins a new image capture, System MUST ensure the current thread's
+  latest state is already committed to history, then MUST reset any active-
+  chat state to a clean slate before a new capture's first turn begins; a
+  freshly captured image MUST NOT retain any turn, extraction, or context
+  from a prior thread.
+- **FR-048**: System MUST interrupt any in-flight generation before its chat
+  screen unmounts (navigation away or app teardown), so no generation is ever
+  left running unobserved after the user has left that screen.
+- **FR-049**: System MUST preprocess a captured image before it is handed to
+  inference: correct its orientation per embedded orientation metadata, crop
+  to a subject region (or a sensible centered default when no subject region
+  is available), and downscale to the existing resolution ceiling — all
+  performed on-device with zero network calls. Contrast normalization applies
+  only where the platform image API supports it; `research.md`'s Phase 3 API
+  Verification (d) confirms the current RN-layer image libraries expose no
+  contrast operation, so that sub-step is omitted until a vetted native
+  module exists (see Phase 3 Scope Note).
+- **FR-050**: System MUST send a system prompt that establishes the model's
+  role and explicit negative constraints (answer only from what is visible in
+  the image, do not speculate beyond it, keep answers concise), and MAY
+  include a small fixed set of example exchanges to steer output formatting.
+- **FR-051**: System MUST configure generation parameters for every inference
+  call using only fields confirmed to exist on the installed library's
+  generation-configuration surface (`temperature`, `topP`, `minP`,
+  `repetitionPenalty`, `outputTokenBatchSize`, `batchTimeInterval` — see
+  `research.md`); System MUST NOT reference a `topK` field anywhere, since
+  `research.md`'s verification confirms it does not exist on the installed
+  version.
+- **FR-052**: Because the installed library exposes no native maximum-
+  output-length or context-sequence-length setting (`research.md`
+  verification), System MUST enforce an app-level output-length budget by
+  observing the engine's generated-token count during streaming and stopping
+  generation once a configured budget is reached, rather than assuming a
+  native field for this exists.
+- **FR-053**: For the structured-extraction turn (FR-041), System MUST
+  prompt the model to produce a specific JSON-shaped response, attempt to
+  parse the result as JSON, and — if parsing fails — retry generation exactly
+  once with a corrective follow-up prompt before falling back to storing the
+  raw text as an unstructured extraction; System MUST NOT depend on any
+  native grammar- or schema-constrained decoding feature, since `research.md`
+  confirms none exists on the installed version.
+- **FR-054**: System MUST post-process every completed answer by trimming
+  leading/trailing whitespace and detecting whether its tail appears
+  truncated mid-sentence or looping on a repeated phrase, and MUST present an
+  answer detected this way with a distinct, visible indicator rather than as
+  an ordinary complete answer.
+
 ### Key Entities
 
-- **Q&A Session**: A single ask-and-answer interaction — holds a reference to the captured image, the question text, the generated answer text, a timestamp, its status (completed, cancelled, or errored), and whether it has been flagged.
+- **Q&A Session**: A single ask-and-answer interaction — holds a reference to the captured image, the question text, the generated answer text, a timestamp, its status (completed, cancelled, or errored), and whether it has been flagged. **Phase 3**: also the persisted chat thread record (FR-045) — its full ordered turn list plus, once produced, the pinned structured-extraction result (FR-041) that every later turn's context is built from.
 - **Performance Metrics**: The measured timing/throughput data for one Q&A Session — model load time, image preprocessing time, first-token latency, tokens per second, and total wall time.
 - **On-Device Model**: The installed vision-language model asset — tracks its download status, integrity/verification status, and whether it is currently available for inference.
 - **Device Compatibility Result**: The outcome of the compatibility check performed before model load — whether the device is supported, and the reason when it is not.
@@ -202,3 +297,32 @@ bullets specifically:
   text-only. This assumption remains fully in force.
 
 All other Assumptions bullets remain in force unchanged.
+
+## Phase 3 Scope Note
+
+FR-039 through FR-054 (Phase 3 Additions, above) extend Phase 2's multi-turn
+capability rather than replacing it — FR-030 remains in force; FR-039/FR-042
+make explicit *how* its "same instance, text-only follow-ups" behavior must
+be implemented so the context-loss failure mode this batch was commissioned
+to fix cannot recur silently.
+
+- **FR-043 ("Look again") is deferred, not built, in this batch.** It is
+  specified so the requirement exists and is not forgotten, but no task in
+  this batch's `tasks.md` implements it; it is tracked as a standalone future
+  task to pick up once the vision-once/text-chat split (FR-041/FR-042) is
+  live and stable.
+- **Rolling summarization of context beyond the sliding-window floor
+  (referenced in FR-044) is explicitly out of scope for this batch.** Build
+  it only once a real conversation is observed overflowing the context
+  window in practice — do not build it speculatively ahead of that evidence.
+- **FR-051/FR-052/FR-053 are bounded by `research.md`'s Phase 3 API
+  Verification findings, not by the feature input's original assumptions.**
+  The feature input that commissioned this batch of work asserted `topK`,
+  `maxTokens`, and `sequenceLength` as available, and assumed native
+  grammar/JSON-constrained decoding might exist — `research.md` verified all
+  three assumptions against the installed library and found none of them
+  hold. FR-051/FR-052/FR-053 are written to the verified reality (app-level
+  enforcement/parsing) rather than the original assumption, per Principle IX.
+  If a future `react-native-executorch` upgrade bridges any of these
+  natively, this spec should be revisited rather than the app-level
+  workaround being kept out of inertia.

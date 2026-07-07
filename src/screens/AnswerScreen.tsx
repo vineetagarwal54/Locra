@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Image } from 'expo-image';
 import { useEffect, useRef, useState } from 'react';
@@ -16,20 +17,70 @@ import { OfflineIndicator } from '../components/OfflineIndicator';
 import { ReportButton } from '../components/ReportButton';
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { useHistoryStore } from '../store/historyStore';
 import { useInferenceStore } from '../store/inferenceStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Answer'>;
 type InferenceStatus = ReturnType<typeof useInferenceStore.getState>['status'];
 
-const THUMB_SIZE = 84;
+interface ThreadTurn {
+  question: string;
+  answer: string;
+}
+
+interface ThreadSeed {
+  imagePath: string;
+  turns: ThreadTurn[];
+  flagged: boolean;
+  /** Index of the turn currently being generated, or null when settled. */
+  pendingIndex: number | null;
+  missing: boolean;
+}
+
+const THUMB_SIZE = 56;
 const ANSWER_LINE_HEIGHT_RATIO = 1.6;
 const CURSOR_WIDTH = 2;
 const CURSOR_HEIGHT = 16;
 const CURSOR_BLINK_MS = 1000;
 const THUMB_BLURHASH = 'L6Pj0^jE.AyE_3t7t7R**0o#DgR4';
 
+/**
+ * Seeds the thread from the route: a fresh ask has one unanswered turn already
+ * in flight (Capture fired the submit); a history reopen loads the persisted
+ * session read-only — `hydrateSession` runs in a mount effect, not here, so no
+ * store writes happen during render.
+ */
+function seedThread(params: Props['route']['params']): ThreadSeed {
+  if (params.sessionId !== undefined) {
+    const session = useHistoryStore.getState().get(params.sessionId);
+    if (session === null) {
+      return { imagePath: '', turns: [], flagged: false, pendingIndex: null, missing: true };
+    }
+    const turns =
+      session.turns.length > 0
+        ? session.turns
+        : [{ question: session.question, answer: session.answer }];
+    return {
+      imagePath: session.imagePath,
+      turns: [...turns],
+      flagged: session.flagged,
+      pendingIndex: null,
+      missing: false,
+    };
+  }
+  return {
+    imagePath: params.imagePath,
+    turns: [{ question: params.question, answer: '' }],
+    flagged: false,
+    pendingIndex: 0,
+    missing: false,
+  };
+}
+
 export function AnswerScreen({ navigation, route }: Props) {
-  const { imagePath, question } = route.params;
+  const sessionId = route.params.sessionId;
+  const [seed] = useState(() => seedThread(route.params));
+  const { imagePath, missing } = seed;
 
   const status = useInferenceStore((s) => s.status);
   const response = useInferenceStore((s) => s.response);
@@ -40,52 +91,76 @@ export function AnswerScreen({ navigation, route }: Props) {
   const cancel = useInferenceStore((s) => s.cancel);
   const flagCurrentSession = useInferenceStore((s) => s.flagCurrentSession);
 
-  const [flagged, setFlagged] = useState(false);
-  const [turns, setTurns] = useState([{ question, answer: '' }]);
+  const [flagged, setFlagged] = useState(seed.flagged);
+  const [turns, setTurns] = useState<ThreadTurn[]>(seed.turns);
   const [followUpQuestion, setFollowUpQuestion] = useState('');
-  const [composerVisible, setComposerVisible] = useState(false);
   const scrollRef = useRef<ScrollView | null>(null);
-  const activeTurnIndexRef = useRef(0);
+  // Which turn the global streamed response belongs to; null means no turn on
+  // this screen is generating, so stale store state can never corrupt the
+  // thread (e.g. right after hydrating an old session).
+  const pendingIndexRef = useRef<number | null>(seed.pendingIndex);
+
+  // FR-046: reopening from history re-activates the persisted thread so
+  // follow-ups continue the same session id.
+  useEffect(() => {
+    if (sessionId !== undefined) {
+      useInferenceStore.getState().hydrateSession(sessionId);
+    }
+  }, [sessionId]);
+
+  // FR-048: never leave a generation running unobserved after leaving the
+  // screen — interrupt any in-flight turn on unmount.
+  useEffect(() => {
+    return () => {
+      const current = useInferenceStore.getState();
+      if (
+        current.status === 'preprocessing' ||
+        current.status === 'loading_model' ||
+        current.status === 'streaming'
+      ) {
+        current.cancel();
+      }
+    };
+  }, []);
 
   const isGenerating =
     status === 'streaming' || status === 'preprocessing' || status === 'loading_model';
-  const isCompleted = status === 'completed';
-  const isErrored = status === 'errored';
-  const flagDisabled = !isCompleted || flagged;
+  const hasPendingTurn = pendingIndexRef.current !== null;
+  const isErrored = status === 'errored' && hasPendingTurn;
+  const canCompose = !missing && !isGenerating;
+  const canFlag = turns.some((turn) => turn.answer.trim() !== '') && !flagged && !isGenerating;
   const trimmedFollowUpQuestion = followUpQuestion.trim();
-  const followUpDisabled = isGenerating || trimmedFollowUpQuestion === '';
+  const followUpDisabled = !canCompose || trimmedFollowUpQuestion === '';
 
+  // Stream the in-flight turn's answer into the thread (guarded by pending).
   useEffect(() => {
-    if (isCompleted) {
-      void haptics.success();
-      setComposerVisible(true);
-    } else if (isErrored) {
-      void haptics.error();
+    const pendingIndex = pendingIndexRef.current;
+    if (pendingIndex === null) {
+      return;
     }
-  }, [isCompleted, isErrored]);
-
-  useEffect(() => {
-    activeTurnIndexRef.current = 0;
-    setTurns([{ question, answer: '' }]);
-    setFollowUpQuestion('');
-    setComposerVisible(false);
-    setFlagged(false);
-  }, [imagePath, question]);
-
-  useEffect(() => {
     setTurns((currentTurns) => {
-      const activeTurnIndex = activeTurnIndexRef.current;
-      if (currentTurns.length === 0) {
-        return [{ question, answer: response }];
-      }
-      if (activeTurnIndex >= currentTurns.length) {
+      if (pendingIndex >= currentTurns.length) {
         return currentTurns;
       }
       const nextTurns = [...currentTurns];
-      nextTurns[activeTurnIndex] = { ...nextTurns[activeTurnIndex], answer: response };
+      nextTurns[pendingIndex] = { ...nextTurns[pendingIndex], answer: response };
       return nextTurns;
     });
-  }, [question, response]);
+  }, [response]);
+
+  // Settle the pending turn when its generation reaches a terminal state.
+  useEffect(() => {
+    if (pendingIndexRef.current === null) {
+      return;
+    }
+    if (status === 'completed') {
+      pendingIndexRef.current = null;
+      void haptics.success();
+    } else if (status === 'errored') {
+      pendingIndexRef.current = null;
+      void haptics.error();
+    }
+  }, [status]);
 
   const cursorOpacity = useSharedValue(1);
   useEffect(() => {
@@ -108,12 +183,23 @@ export function AnswerScreen({ navigation, route }: Props) {
   };
 
   const onCancel = (): void => {
+    const pendingIndex = pendingIndexRef.current;
     cancel();
     void haptics.tap();
+    if (pendingIndex !== null && pendingIndex > 0) {
+      // A stopped follow-up returns its question to the composer for editing,
+      // matching FR-007: no partial output is kept.
+      const stoppedQuestion = turns[pendingIndex]?.question ?? '';
+      pendingIndexRef.current = null;
+      setTurns((currentTurns) => currentTurns.slice(0, pendingIndex));
+      setFollowUpQuestion((existing) => (existing === '' ? stoppedQuestion : existing));
+    } else {
+      pendingIndexRef.current = null;
+    }
   };
 
   const onFlag = (): void => {
-    if (flagDisabled) {
+    if (!canFlag) {
       return;
     }
     flagCurrentSession();
@@ -127,14 +213,14 @@ export function AnswerScreen({ navigation, route }: Props) {
     }
 
     const nextQuestion = trimmedFollowUpQuestion;
-    const previousActiveTurnIndex = Math.max(0, turns.length - 1);
-    activeTurnIndexRef.current = turns.length;
+    const nextIndex = turns.length;
+    pendingIndexRef.current = nextIndex;
     setTurns((currentTurns) => [...currentTurns, { question: nextQuestion, answer: '' }]);
     setFollowUpQuestion('');
     void haptics.tap();
     void submit({ imagePath, question: nextQuestion }).catch(() => {
-      activeTurnIndexRef.current = previousActiveTurnIndex;
-      setTurns((currentTurns) => currentTurns.slice(0, -1));
+      pendingIndexRef.current = null;
+      setTurns((currentTurns) => currentTurns.slice(0, nextIndex));
       setFollowUpQuestion(nextQuestion);
       void haptics.error();
     });
@@ -142,11 +228,7 @@ export function AnswerScreen({ navigation, route }: Props) {
 
   const metricPills = metrics
     ? [
-        {
-          key: 'modelLoad',
-          label: 'Model load',
-          value: `${Math.round(metrics.modelLoadTimeMs)} ms`,
-        },
+        { key: 'modelLoad', label: 'Model load', value: `${Math.round(metrics.modelLoadTimeMs)} ms` },
         {
           key: 'preprocess',
           label: 'Preprocess',
@@ -162,33 +244,51 @@ export function AnswerScreen({ navigation, route }: Props) {
       ]
     : [];
 
+  if (missing) {
+    return (
+      <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
+        <View style={styles.missingWrap}>
+          <MaterialCommunityIcons
+            name="chat-remove-outline"
+            size={theme.space6 * 2}
+            color={theme.textMuted}
+          />
+          <Text style={styles.missingTitle}>This chat is gone</Text>
+          <Text style={styles.missingBody}>It was deleted from history on this phone.</Text>
+          <Pressable accessibilityRole="button" style={styles.missingButton} onPress={onBack}>
+            <Text style={styles.missingButtonLabel}>Go back</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Back to camera"
+          accessibilityLabel="Back"
           style={styles.backButton}
           onPress={onBack}
         >
-          <Text style={styles.backLabel}>Camera</Text>
+          <MaterialCommunityIcons name="chevron-left" size={28} color={theme.textSecondary} />
+          <Text style={styles.backLabel}>Back</Text>
         </Pressable>
-        <Text style={styles.title}>{isGenerating ? 'Looking' : 'Answer'}</Text>
-        <View style={styles.headerSpacer} />
-      </View>
-
-      <View style={styles.offlineRow}>
-        <OfflineIndicator />
+        <Text style={styles.title}>{isGenerating ? 'Looking' : 'Chat'}</Text>
+        <View style={styles.headerRight}>
+          <OfflineIndicator />
+        </View>
       </View>
 
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
-        contentContainerStyle={[styles.content, (composerVisible || isGenerating) && styles.contentWithDock]}
+        contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={scrollToEnd}
       >
-        <View style={styles.promptCard}>
+        <View style={styles.photoCard}>
           <Image
             style={styles.thumb}
             source={{ uri: toPreviewUri(imagePath) }}
@@ -196,43 +296,32 @@ export function AnswerScreen({ navigation, route }: Props) {
             transition={theme.animationTiming}
             contentFit="cover"
           />
-          <View style={styles.questionBody}>
-            <Text style={styles.sectionLabel}>Question</Text>
-            <Text style={styles.question}>{question}</Text>
-          </View>
+          <Text style={styles.photoLabel}>This chat is about this photo</Text>
         </View>
 
-        <View style={styles.threadBlock}>
-          {turns.map((turn, index) => {
-            const isLatestTurn = index === turns.length - 1;
-            const hasTurnAnswer = turn.answer.trim() !== '';
-            return (
-              <View key={`${index}-${turn.question}`} style={styles.turnBlock}>
-                {index > 0 ? (
-                  <View style={styles.followUpQuestionBlock}>
-                    <Text style={styles.sectionLabel}>Follow-up</Text>
-                    <Text style={styles.question}>{turn.question}</Text>
-                  </View>
-                ) : null}
-                <Text style={styles.sectionLabel}>
-                  {isLatestTurn ? getStatusLabel(status) : 'Answer'}
-                </Text>
-                <View style={styles.answerRow}>
-                  <Text style={[styles.answerText, !hasTurnAnswer && styles.answerPlaceholder]}>
-                    {hasTurnAnswer
-                      ? turn.answer
-                      : isLatestTurn
-                        ? getAnswerPlaceholder(status)
-                        : 'No answer saved.'}
-                  </Text>
-                  {isLatestTurn && isGenerating ? (
-                    <Animated.View style={[styles.cursor, cursorStyle]} />
-                  ) : null}
-                </View>
+        {turns.map((turn, index) => {
+          const isPendingTurn = index === pendingIndexRef.current;
+          const hasTurnAnswer = turn.answer.trim() !== '';
+          return (
+            <View key={`turn-${index}`} style={styles.turnBlock}>
+              <View style={styles.userBubble}>
+                <Text style={styles.userBubbleText}>{turn.question}</Text>
               </View>
-            );
-          })}
-        </View>
+              <View style={styles.answerRow}>
+                <Text style={[styles.answerText, !hasTurnAnswer && styles.answerPlaceholder]}>
+                  {hasTurnAnswer
+                    ? turn.answer
+                    : isPendingTurn || isGenerating
+                      ? getAnswerPlaceholder(status)
+                      : 'No answer saved.'}
+                </Text>
+                {isPendingTurn && isGenerating ? (
+                  <Animated.View style={[styles.cursor, cursorStyle]} />
+                ) : null}
+              </View>
+            </View>
+          );
+        })}
 
         {isErrored && error !== null ? (
           <View style={styles.errorCard}>
@@ -241,13 +330,18 @@ export function AnswerScreen({ navigation, route }: Props) {
           </View>
         ) : null}
 
-        {isCompleted && limitWarning !== null ? (
+        {status === 'completed' && limitWarning !== null ? (
           <View style={styles.limitWarningCard}>
+            <MaterialCommunityIcons
+              name="information-outline"
+              size={16}
+              color={theme.textSecondary}
+            />
             <Text style={styles.limitWarningText}>{limitWarning}</Text>
           </View>
         ) : null}
 
-        {isCompleted ? (
+        {status === 'completed' && metricPills.length > 0 ? (
           <View style={styles.metricsBlock}>
             <Text style={styles.metricsTitle}>Performance</Text>
             <View style={styles.metricsRow}>
@@ -261,65 +355,55 @@ export function AnswerScreen({ navigation, route }: Props) {
           </View>
         ) : null}
 
-        {isCompleted || flagged ? (
+        {canFlag || flagged ? (
           <View style={styles.reportBlock}>
-            <ReportButton reported={flagged} disabled={!isCompleted} onReport={onFlag} />
+            <ReportButton reported={flagged} disabled={!canFlag && !flagged} onReport={onFlag} />
+            {flagged ? (
+              <Text style={styles.flaggedConfirm}>Saved as flagged on this phone.</Text>
+            ) : null}
           </View>
-        ) : null}
-
-        {flagged ? (
-          <Text style={styles.flaggedConfirm}>Saved as flagged on this phone.</Text>
         ) : null}
       </ScrollView>
 
-      {composerVisible || isGenerating ? (
-        <KeyboardStickyView offset={{ closed: 0, opened: theme.space2 }} style={styles.bottomDock}>
-          {composerVisible ? (
-            <View style={styles.followUpComposer}>
-              <TextInput
-                style={[styles.followUpInput, isGenerating && styles.inputDisabled]}
-                value={followUpQuestion}
-                onChangeText={setFollowUpQuestion}
-                placeholder="Ask a follow-up"
-                placeholderTextColor={theme.textSecondary}
-                editable={!isGenerating}
-                multiline
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Submit follow-up question"
-                disabled={followUpDisabled}
-                style={({ pressed }) => [
-                  styles.followUpButton,
-                  pressed && !followUpDisabled && styles.followUpButtonPressed,
-                  followUpDisabled && styles.disabled,
-                ]}
-                onPress={onSubmitFollowUp}
-              >
-                <Text style={styles.followUpButtonLabel}>{isGenerating ? 'Working' : 'Ask'}</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
+      <KeyboardStickyView offset={{ closed: 0, opened: theme.space2 }} style={styles.bottomDock}>
+        <View style={styles.composer}>
+          <TextInput
+            style={[styles.composerInput, !canCompose && styles.inputDisabled]}
+            value={followUpQuestion}
+            onChangeText={setFollowUpQuestion}
+            placeholder={isGenerating ? 'Locra is answering…' : 'Ask a follow-up'}
+            placeholderTextColor={theme.textSecondary}
+            editable={canCompose}
+            multiline
+          />
           {isGenerating ? (
-            <Pressable accessibilityRole="button" style={styles.cancelButton} onPress={onCancel}>
-              <Text style={styles.cancelLabel}>Cancel</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stop generating"
+              style={styles.stopButton}
+              onPress={onCancel}
+            >
+              <MaterialCommunityIcons name="stop" size={22} color={theme.textPrimary} />
             </Pressable>
-          ) : null}
-        </KeyboardStickyView>
-      ) : null}
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send follow-up question"
+              disabled={followUpDisabled}
+              style={({ pressed }) => [
+                styles.sendButton,
+                pressed && !followUpDisabled && styles.sendButtonPressed,
+                followUpDisabled && styles.disabled,
+              ]}
+              onPress={onSubmitFollowUp}
+            >
+              <MaterialCommunityIcons name="arrow-up" size={22} color={theme.textPrimary} />
+            </Pressable>
+          )}
+        </View>
+      </KeyboardStickyView>
     </SafeAreaView>
   );
-}
-
-function getStatusLabel(status: InferenceStatus): string {
-  if (status === 'preprocessing') return 'Preparing photo';
-  if (status === 'loading_model') return 'Loading model';
-  if (status === 'streaming') return 'Answering';
-  if (status === 'completed') return 'Answer';
-  if (status === 'errored') return 'Error';
-  if (status === 'cancelled') return 'Cancelled';
-  return 'Waiting';
 }
 
 function getAnswerPlaceholder(status: InferenceStatus): string {
@@ -327,7 +411,7 @@ function getAnswerPlaceholder(status: InferenceStatus): string {
   if (status === 'loading_model') return 'Waking up the on-device model.';
   if (status === 'streaming') return 'Looking closely.';
   if (status === 'errored') return 'Locra stopped before it could answer.';
-  if (status === 'cancelled') return 'This answer was cancelled.';
+  if (status === 'cancelled') return 'This answer was stopped.';
   return 'Your answer will appear here.';
 }
 
@@ -347,14 +431,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space4,
+    paddingHorizontal: theme.space3,
     paddingVertical: theme.space3,
   },
   backButton: {
     minWidth: theme.space6 * 3,
     height: theme.space6,
-    alignItems: 'flex-start',
-    justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   backLabel: {
     color: theme.textSecondary,
@@ -366,25 +450,18 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeLg,
     fontWeight: '700',
   },
-  headerSpacer: {
+  headerRight: {
     minWidth: theme.space6 * 3,
-    height: theme.space6,
-  },
-  offlineRow: {
-    alignItems: 'center',
-    paddingBottom: theme.space3,
+    alignItems: 'flex-end',
   },
   scroll: {
     flex: 1,
   },
   content: {
     paddingHorizontal: theme.space4,
-    paddingBottom: theme.space6,
+    paddingBottom: theme.space6 * 2,
   },
-  contentWithDock: {
-    paddingBottom: theme.space6 * 6,
-  },
-  promptCard: {
+  photoCard: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: theme.space3,
@@ -401,33 +478,30 @@ const styles = StyleSheet.create({
     marginRight: theme.space3,
     backgroundColor: theme.surface2,
   },
-  questionBody: {
+  photoLabel: {
     flex: 1,
-  },
-  sectionLabel: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    fontWeight: '700',
-    marginBottom: theme.space1,
-  },
-  question: {
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
-    lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
-  },
-  threadBlock: {
-    marginBottom: theme.space5,
   },
   turnBlock: {
     marginBottom: theme.space5,
   },
-  followUpQuestionBlock: {
-    padding: theme.space3,
+  userBubble: {
+    alignSelf: 'flex-end',
+    maxWidth: '85%',
+    paddingHorizontal: theme.space4,
+    paddingVertical: theme.space3,
     borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface2,
+    borderBottomRightRadius: theme.radiusSm,
+    backgroundColor: theme.accentGlow,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    borderColor: theme.accentBorder,
     marginBottom: theme.space3,
+  },
+  userBubbleText: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    lineHeight: theme.fontSizeMd * ANSWER_LINE_HEIGHT_RATIO,
   },
   answerRow: {
     flexDirection: 'row',
@@ -469,6 +543,9 @@ const styles = StyleSheet.create({
     lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
   },
   limitWarningCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space2,
     padding: theme.space3,
     borderRadius: theme.radiusMd,
     backgroundColor: theme.accentGlow,
@@ -477,54 +554,14 @@ const styles = StyleSheet.create({
     marginBottom: theme.space5,
   },
   limitWarningText: {
+    flex: 1,
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
     lineHeight: theme.fontSizeSm * ANSWER_LINE_HEIGHT_RATIO,
   },
-  followUpComposer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
-  followUpInput: {
-    flex: 1,
-    minHeight: theme.space6 * 2,
-    maxHeight: theme.space6 * 5,
-    paddingHorizontal: theme.space4,
-    paddingVertical: theme.space3,
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.borderStrong,
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * ANSWER_LINE_HEIGHT_RATIO,
-  },
-  inputDisabled: {
-    color: theme.textSecondary,
-  },
-  followUpButton: {
-    minWidth: theme.space6 * 3,
-    height: theme.space6 * 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
-    marginLeft: theme.space3,
-    paddingHorizontal: theme.space4,
-  },
-  followUpButtonPressed: {
-    backgroundColor: theme.accentDim,
-  },
-  followUpButtonLabel: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-  },
-  disabled: {
-    opacity: 0.45,
-  },
   metricsBlock: {
     marginTop: theme.space2,
+    marginBottom: theme.space4,
   },
   metricsTitle: {
     color: theme.textPrimary,
@@ -559,28 +596,13 @@ const styles = StyleSheet.create({
     marginTop: theme.space1,
   },
   reportBlock: {
-    marginTop: theme.space4,
+    marginTop: theme.space2,
   },
   flaggedConfirm: {
-    marginTop: theme.space4,
+    marginTop: theme.space3,
     color: theme.success,
     fontSize: theme.fontSizeSm,
     textAlign: 'center',
-  },
-  cancelButton: {
-    alignSelf: 'center',
-    marginTop: theme.space3,
-    paddingVertical: theme.space3,
-    paddingHorizontal: theme.space6,
-    borderRadius: theme.radiusPill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    backgroundColor: theme.accentGlow,
-  },
-  cancelLabel: {
-    color: theme.accent,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
   },
   bottomDock: {
     paddingHorizontal: theme.space4,
@@ -589,5 +611,82 @@ const styles = StyleSheet.create({
     backgroundColor: theme.canvas,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.border,
+  },
+  composer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  composerInput: {
+    flex: 1,
+    minHeight: theme.space6 * 2,
+    maxHeight: theme.space6 * 5,
+    paddingHorizontal: theme.space4,
+    paddingVertical: theme.space3,
+    borderRadius: theme.radiusLg,
+    backgroundColor: theme.surface2,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    lineHeight: theme.fontSizeMd * ANSWER_LINE_HEIGHT_RATIO,
+  },
+  inputDisabled: {
+    color: theme.textSecondary,
+  },
+  sendButton: {
+    width: theme.space6 * 2,
+    height: theme.space6 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accent,
+    marginLeft: theme.space3,
+  },
+  sendButtonPressed: {
+    backgroundColor: theme.accentDim,
+  },
+  stopButton: {
+    width: theme.space6 * 2,
+    height: theme.space6 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.surface3,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.borderStrong,
+    marginLeft: theme.space3,
+  },
+  disabled: {
+    opacity: 0.45,
+  },
+  missingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.space5,
+  },
+  missingTitle: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeLg,
+    fontWeight: '700',
+    marginTop: theme.space4,
+    marginBottom: theme.space2,
+  },
+  missingBody: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeMd,
+    textAlign: 'center',
+    marginBottom: theme.space5,
+  },
+  missingButton: {
+    paddingVertical: theme.space3,
+    paddingHorizontal: theme.space6,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accent,
+  },
+  missingButtonLabel: {
+    color: theme.textPrimary,
+    fontSize: theme.fontSizeMd,
+    fontWeight: '700',
   },
 });

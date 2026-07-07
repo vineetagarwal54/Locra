@@ -17,6 +17,7 @@ export interface QASession {
   question: string;
   answer: string;
   turns: Array<{ question: string; answer: string }>;
+  pinnedExtraction: string | null;
   status: QASessionStatus;
   errorMessage: string | null;
   metrics: PerformanceMetrics | null;
@@ -61,6 +62,7 @@ export interface InferenceState {
   metrics: PerformanceMetrics | null;
   error: string | null;
   limitWarning: string | null;
+  pinnedExtraction: string | null;
 }
 
 export interface ModelState {

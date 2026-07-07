@@ -7,8 +7,17 @@
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, InferenceStatus } from '../types/models';
 
+import { postProcessAnswer } from './AnswerPostProcessor';
+import { buildStructuredExtractionPrompt } from './ExtractionPrompt';
 import { getResponseLimitWarning } from './GenerationLimits';
-import { preprocessImage, type PreprocessedImage } from './ImagePreprocessor';
+import {
+  LOOPING_ANSWER_NOTICE,
+  OUTPUT_LIMIT_NOTICE,
+  OUTPUT_TOKEN_BUDGET,
+  TRUNCATED_ANSWER_NOTICE,
+} from './GenerationTuning';
+import { prepareImageForInference } from './ImageEnhancer';
+import { type PreprocessedImage } from './ImagePreprocessor';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
 
 /**
@@ -20,21 +29,33 @@ import { InferenceMetricsRecorder } from './InferenceMetrics';
 export interface EngineGenerateRequest {
   question: string;
   imagePath?: string;
+  kind?: 'extraction' | 'chat';
+  originalQuestion?: string;
 }
 
 export interface InferenceEngineAdapter {
   /** Ensures the model is resident and ready; resolves once loaded. */
   loadModel(): Promise<void>;
   /**
-   * Runs generation, invoking {@link onToken} with the cumulative response on
-   * each streamed update, and resolving with the final response + token count.
-   * MUST honour {@link signal} for cancellation.
+   * Runs generation, invoking {@link onToken} with the cumulative response
+   * (and, when available, the generated-token count so far) on each streamed
+   * update, and resolving with the final response + token count.
+   * MUST honour {@link signal}: on abort, generation stops and the promise
+   * RESOLVES with the partial response so far — it must not reject. The queue
+   * uses the same abort path for both user cancellation (where the resolved
+   * value is discarded) and the FR-052 output-length cap (where it is kept).
    */
   generate(
     request: EngineGenerateRequest,
-    onToken: (cumulativeResponse: string) => void,
+    onToken: (cumulativeResponse: string, generatedTokenCount?: number) => void,
     signal: AbortSignal,
-  ): Promise<{ response: string; tokenCount: number; promptTokenCount?: number; totalTokenCount?: number }>;
+  ): Promise<{
+    response: string;
+    tokenCount: number;
+    promptTokenCount?: number;
+    totalTokenCount?: number;
+    pinnedExtraction?: string | null;
+  }>;
 }
 
 export interface InferenceSubmitOptions {
@@ -57,6 +78,7 @@ const IDLE_STATE: InferenceState = {
   metrics: null,
   error: null,
   limitWarning: null,
+  pinnedExtraction: null,
 };
 
 interface ActiveRequest {
@@ -105,6 +127,7 @@ export class InferenceQueue implements IInferenceQueue {
       metrics: null,
       error: null,
       limitWarning: null,
+      pinnedExtraction: null,
     });
 
     try {
@@ -134,13 +157,31 @@ export class InferenceQueue implements IInferenceQueue {
       const generateRequest: EngineGenerateRequest =
         processed === null
           ? { question: request.question }
-          : { imagePath: processed.path, question: request.question };
+          : {
+              imagePath: processed.path,
+              question: buildStructuredExtractionPrompt(request.question),
+              kind: 'extraction',
+              originalQuestion: request.question,
+            };
+      // FR-052: no native max-output setting exists on the installed library,
+      // so the queue itself stops generation once the app-level budget is hit.
+      // Aborting the signal is NOT a user cancel — `active.cancelled` stays
+      // false, so the partial response completes normally below.
+      let budgetStopped = false;
       const result = await this.deps.engine.generate(
         generateRequest,
-        (cumulative) => {
+        (cumulative, generatedTokenCount) => {
           if (active.cancelled) return;
           recorder.markFirstToken();
           this.setState({ response: cumulative });
+          if (
+            !budgetStopped &&
+            generatedTokenCount !== undefined &&
+            generatedTokenCount >= OUTPUT_TOKEN_BUDGET
+          ) {
+            budgetStopped = true;
+            active.controller.abort();
+          }
         },
         active.controller.signal,
       );
@@ -148,11 +189,19 @@ export class InferenceQueue implements IInferenceQueue {
 
       recorder.setTokenCount(result.tokenCount);
       recorder.markInferenceEnd();
+      // FR-054: trim and inspect the tail before the answer becomes visible or
+      // persistable; a truncated/looping tail surfaces as a distinct notice.
+      const processedAnswer = postProcessAnswer(result.response);
       this.setState({
         status: 'completed',
-        response: result.response,
+        response: processedAnswer.text,
         metrics: recorder.build(),
-        limitWarning: getResponseLimitWarning(result.tokenCount),
+        limitWarning: resolveCompletionNotice(
+          budgetStopped,
+          processedAnswer.verdict,
+          result.tokenCount,
+        ),
+        pinnedExtraction: result.pinnedExtraction ?? null,
       });
     } catch (error) {
       // A cancel already drove state to its terminal value — don't overwrite it.
@@ -165,6 +214,7 @@ export class InferenceQueue implements IInferenceQueue {
         metrics: null,
         error: toMessage(error),
         limitWarning: null,
+        pinnedExtraction: null,
       });
     } finally {
       // Release the lock on every exit path.
@@ -190,6 +240,7 @@ export class InferenceQueue implements IInferenceQueue {
       metrics: null,
       error: null,
       limitWarning: null,
+      pinnedExtraction: null,
     });
     // ...then return the queue to idle, ready to accept the next request.
     this.setState({ ...IDLE_STATE });
@@ -219,11 +270,33 @@ export function createInferenceQueue(
   overrides: Partial<InferenceQueueDeps> = {},
 ): InferenceQueue {
   return new InferenceQueue({
-    preprocess: preprocessImage,
+    // FR-049: enhancement (orient/crop/downscale) runs before the 512 ceiling.
+    preprocess: prepareImageForInference,
     isReadyForInference: () => false,
     engine,
     ...overrides,
   });
+}
+
+/**
+ * One notice slot, priority-ordered: an explicit budget stop explains the most,
+ * then tail-quality verdicts, then the near-context-limit warning.
+ */
+function resolveCompletionNotice(
+  budgetStopped: boolean,
+  verdict: 'complete' | 'truncated' | 'looping',
+  tokenCount: number,
+): string | null {
+  if (budgetStopped) {
+    return OUTPUT_LIMIT_NOTICE;
+  }
+  if (verdict === 'truncated') {
+    return TRUNCATED_ANSWER_NOTICE;
+  }
+  if (verdict === 'looping') {
+    return LOOPING_ANSWER_NOTICE;
+  }
+  return getResponseLimitWarning(tokenCount);
 }
 
 function toMessage(error: unknown): string {

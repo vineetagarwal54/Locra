@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { buildPinnedContextPrompt } from '../inference/ContextBuilder';
+import { parseExtractionWithRetry } from '../inference/ExtractionParser';
 import {
   createInferenceQueue,
   type InferenceEngineAdapter,
@@ -24,6 +26,12 @@ import { useModelStore } from './modelStore';
 // at module scope (not in React state) so the queue's bridge can read it
 // synchronously from outside the render cycle.
 let engineHandle: InferenceEngineHandle | null = null;
+
+// Turns served by THIS engine instance in THIS process. A hydrated thread
+// (reopened from history after a restart) has zero in-process engine history,
+// so waiting for messageHistory before its first follow-up would deadlock —
+// the pinned-context prompt is self-contained and needs no engine history.
+let engineTurnsServed = 0;
 
 // The turn currently being served, captured so a completed InferenceState
 // (which carries no imagePath/question) can be turned into a QASession update.
@@ -77,12 +85,15 @@ const bridgeEngine: InferenceEngineAdapter = {
     tokenCount: number;
     promptTokenCount?: number;
     totalTokenCount?: number;
+    pinnedExtraction?: string | null;
   }> => {
     const handle = requireEngine();
-    if (request.imagePath === undefined) {
-      await waitForMessageHistory(handle, signal);
+    if (request.imagePath === undefined && engineTurnsServed > 0) {
+      await waitForMessageHistoryAtLeast(handle, signal, 1);
     }
-    const unsubscribe = handle.subscribe(() => onToken(handle.getResponse()));
+    const unsubscribe = handle.subscribe(() =>
+      onToken(handle.getResponse(), handle.getGeneratedTokenCount())
+    );
     const onAbort = (): void => handle.cancel();
     if (signal.aborted) {
       handle.cancel();
@@ -90,16 +101,45 @@ const bridgeEngine: InferenceEngineAdapter = {
       signal.addEventListener('abort', onAbort);
     }
     try {
-      const response = await handle.submit(request.imagePath ?? null, request.question);
+      const rawResponse = await submitAndWaitForMessageHistory(
+        handle,
+        request.imagePath ?? null,
+        request.question,
+        signal
+      );
+      // An aborted signal here is either a user cancel (result discarded by
+      // the queue) or the FR-052 budget stop (partial answer kept) — in both
+      // cases resolve with what we have rather than failing the turn.
+      if (signal.aborted) {
+        return {
+          response: rawResponse,
+          tokenCount: handle.getGeneratedTokenCount(),
+          promptTokenCount: handle.getPromptTokenCount(),
+          totalTokenCount: handle.getTotalTokenCount(),
+          pinnedExtraction: null,
+        };
+      }
       const error = handle.getError();
       if (error !== null) {
         throw new Error(error);
+      }
+      let response = rawResponse;
+      let pinnedExtraction: string | null = null;
+      if (request.kind === 'extraction') {
+        const outcome = await parseExtractionWithRetry(
+          rawResponse,
+          (retryPrompt) => submitAndWaitForMessageHistory(handle, null, retryPrompt, signal),
+          request.originalQuestion ?? request.question
+        );
+        response = outcome.visibleAnswer;
+        pinnedExtraction = outcome.pinnedExtraction;
       }
       return {
         response,
         tokenCount: handle.getGeneratedTokenCount(),
         promptTokenCount: handle.getPromptTokenCount(),
         totalTokenCount: handle.getTotalTokenCount(),
+        pinnedExtraction,
       };
     } finally {
       unsubscribe();
@@ -118,6 +158,8 @@ const queue = createInferenceQueue(bridgeEngine, {
 });
 
 export interface InferenceStoreState extends InferenceState {
+  /** The persisted session id the current chat thread belongs to (FR-046). */
+  activeSessionId: string | null;
   /** Registers (or clears) the live engine handle from the host component. */
   registerEngine: (handle: InferenceEngineHandle | null) => void;
   /** Rejects if a request is already in-flight (single-flight, FR-006). */
@@ -125,11 +167,27 @@ export interface InferenceStoreState extends InferenceState {
   cancel: () => void;
   /** Flags the most recently completed session as a bad answer (US4, FR-016). */
   flagCurrentSession: (note?: string) => void;
+  /**
+   * Reopens a persisted thread from history (FR-046): loads its full turn
+   * list and pinned extraction so follow-ups continue the same session.
+   * Returns the hydrated session, or null when it no longer exists.
+   */
+  hydrateSession: (sessionId: string) => QASession | null;
+  /**
+   * FR-047: commits nothing new (completed turns are already persisted),
+   * cancels any in-flight turn, clears the engine's conversation history, and
+   * returns the store to a clean slate so a fresh capture starts context-free.
+   */
+  resetActiveChat: () => void;
 }
 
 export const useInferenceStore = create<InferenceStoreState>(() => ({
   ...queue.getState(),
+  activeSessionId: null,
   registerEngine: (handle: InferenceEngineHandle | null): void => {
+    if (handle !== engineHandle) {
+      engineTurnsServed = 0;
+    }
     engineHandle = handle;
   },
   submit: async (request: InferenceRequest): Promise<void> => {
@@ -137,8 +195,9 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
     activeTurn = turn;
     const options: InferenceSubmitOptions =
       turn.baseSession === null ? { turn: 'first' } : { turn: 'followUp' };
+    const queuedRequest = createQueuedRequest(turn);
     try {
-      await queue.submit(request, options);
+      await queue.submit(queuedRequest, options);
     } catch (error) {
       if (activeTurn === turn) {
         activeTurn = null;
@@ -148,6 +207,50 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
   },
   cancel: (): void => queue.cancel(),
   flagCurrentSession: (note?: string): void => flagLastSavedSession(note),
+  hydrateSession: (sessionId: string): QASession | null => {
+    const session = useHistoryStore.getState().get(sessionId);
+    if (session === null || session.status !== 'completed') {
+      return null;
+    }
+
+    if (isInFlightStatus(queue.getState().status)) {
+      queue.cancel();
+    }
+    activeTurn = null;
+    // The hydrated session becomes the follow-up base: submits against its
+    // imagePath route through the pinned-context follow-up path (FR-042).
+    lastSavedSession = session;
+    useInferenceStore.setState({
+      activeSessionId: session.id,
+      status: 'idle',
+      response: '',
+      metrics: session.metrics,
+      error: null,
+      limitWarning: null,
+      pinnedExtraction: session.pinnedExtraction,
+    });
+    return session;
+  },
+  resetActiveChat: (): void => {
+    if (isInFlightStatus(queue.getState().status)) {
+      queue.cancel();
+    }
+    activeTurn = null;
+    lastSavedSession = null;
+    // FR-047: a fresh capture must carry zero context from the prior thread —
+    // wipe the engine's managed conversation history, not just app state.
+    engineHandle?.clearHistory();
+    engineTurnsServed = 0;
+    useInferenceStore.setState({
+      activeSessionId: null,
+      status: 'idle',
+      response: '',
+      metrics: null,
+      error: null,
+      limitWarning: null,
+      pinnedExtraction: null,
+    });
+  },
 }));
 
 // Mirror every queue transition into the store so screens re-render, and persist
@@ -159,6 +262,7 @@ queue.subscribe((state: InferenceState) => {
     metrics: state.metrics,
     error: state.error,
     limitWarning: state.limitWarning,
+    pinnedExtraction: state.pinnedExtraction,
   });
   if (state.status === 'completed' && state.metrics !== null && activeTurn !== null) {
     saveCompletedTurn(activeTurn, state);
@@ -188,6 +292,13 @@ let lastSavedSession: QASession | null = null;
 function saveToHistoryStore(session: QASession): void {
   lastSavedSession = session;
   useHistoryStore.getState().save(session);
+  // The saved session is the active thread — new first turns acquire their id
+  // here, so History can immediately reopen/continue it (FR-046).
+  useInferenceStore.setState({ activeSessionId: session.id });
+}
+
+function isInFlightStatus(status: InferenceState['status']): boolean {
+  return status === 'preprocessing' || status === 'loading_model' || status === 'streaming';
 }
 
 /** Dev/inspection hook for tests and local debugging. */
@@ -230,6 +341,7 @@ function saveCompletedTurn(turn: PendingTurn, state: InferenceState): void {
 }
 
 function saveFirstTurnSession(request: InferenceRequest, state: InferenceState): void {
+  const pinnedExtraction = state.pinnedExtraction ?? state.response;
   saveToHistoryStore({
     id: generateSessionId(),
     createdAt: Date.now(),
@@ -237,6 +349,7 @@ function saveFirstTurnSession(request: InferenceRequest, state: InferenceState):
     question: request.question,
     answer: state.response,
     turns: [{ question: request.question, answer: state.response }],
+    pinnedExtraction,
     status: 'completed',
     errorMessage: null,
     metrics: state.metrics,
@@ -255,6 +368,7 @@ function saveFollowUpTurnSession(
     status: 'completed',
     errorMessage: null,
     metrics: baseSession.metrics ?? state.metrics,
+    pinnedExtraction: baseSession.pinnedExtraction,
     turns: [
       ...normalizedTurns(baseSession),
       { question: request.question, answer: state.response },
@@ -273,33 +387,109 @@ function generateSessionId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function waitForMessageHistory(handle: InferenceEngineHandle, signal: AbortSignal): Promise<void> {
-  if (handle.getMessageHistoryLength() > 0) {
+function createQueuedRequest(turn: PendingTurn): InferenceRequest {
+  if (turn.baseSession === null) {
+    return turn.request;
+  }
+
+  return {
+    ...turn.request,
+    question: buildPinnedContextPrompt({
+      pinnedExtraction: getPinnedExtraction(turn.baseSession),
+      turns: normalizedTurns(turn.baseSession),
+      question: turn.request.question,
+    }),
+  };
+}
+
+function getPinnedExtraction(session: QASession): string {
+  const normalized = normalizedTurns(session);
+  return session.pinnedExtraction ?? normalized[0]?.answer ?? session.answer;
+}
+
+async function submitAndWaitForMessageHistory(
+  handle: InferenceEngineHandle,
+  imagePath: string | null,
+  prompt: string,
+  signal: AbortSignal
+): Promise<string> {
+  if (signal.aborted) {
+    throw new Error('Follow-up cancelled before conversation context was ready.');
+  }
+  const historyLengthBeforeSubmit = handle.getMessageHistoryLength();
+  const response = await handle.submit(imagePath, prompt);
+  engineTurnsServed += 1;
+  // After an interrupt (cancel or budget stop) the engine may never append
+  // this turn to messageHistory — don't wait on it; the response is in hand.
+  if (!signal.aborted) {
+    await waitForMessageHistoryGrowth(handle, signal, historyLengthBeforeSubmit);
+  }
+  return response;
+}
+
+function waitForMessageHistoryAtLeast(
+  handle: InferenceEngineHandle,
+  signal: AbortSignal,
+  minimumLength: number
+): Promise<void> {
+  return waitForMessageHistory(
+    handle,
+    signal,
+    () => handle.getMessageHistoryLength() >= minimumLength
+  );
+}
+
+function waitForMessageHistoryGrowth(
+  handle: InferenceEngineHandle,
+  signal: AbortSignal,
+  previousLength: number
+): Promise<void> {
+  // Post-submit wait: the response is already in hand, so an abort mid-wait
+  // resolves (letting the partial answer through) instead of failing the turn.
+  return waitForMessageHistory(
+    handle,
+    signal,
+    () => handle.getMessageHistoryLength() > previousLength,
+    'resolve'
+  );
+}
+
+function waitForMessageHistory(
+  handle: InferenceEngineHandle,
+  signal: AbortSignal,
+  isReady: () => boolean,
+  onAbortBehavior: 'reject' | 'resolve' = 'reject'
+): Promise<void> {
+  if (isReady()) {
     return Promise.resolve();
   }
   if (signal.aborted) {
-    return Promise.reject(new Error('Follow-up cancelled before conversation context was ready.'));
+    return onAbortBehavior === 'resolve'
+      ? Promise.resolve()
+      : Promise.reject(new Error('Follow-up cancelled before conversation context was ready.'));
   }
 
   return new Promise<void>((resolve, reject) => {
     let unsubscribe: (() => void) | null = null;
-    const timeout = setTimeout(() => {
+    const cleanup = (): void => {
       unsubscribe?.();
       signal.removeEventListener('abort', onAbort);
-      reject(new Error('The previous answer is not available for follow-up context yet.'));
-    }, 250);
+    };
     const settle = (): void => {
-      if (handle.getMessageHistoryLength() === 0) {
+      // A surfaced engine error means history will never grow — stop waiting
+      // and let the caller's error check own it, rather than hanging forever.
+      if (!isReady() && handle.getError() === null) {
         return;
       }
-      clearTimeout(timeout);
-      unsubscribe?.();
-      signal.removeEventListener('abort', onAbort);
+      cleanup();
       resolve();
     };
     const onAbort = (): void => {
-      clearTimeout(timeout);
-      unsubscribe?.();
+      cleanup();
+      if (onAbortBehavior === 'resolve') {
+        resolve();
+        return;
+      }
       reject(new Error('Follow-up cancelled before conversation context was ready.'));
     };
 
