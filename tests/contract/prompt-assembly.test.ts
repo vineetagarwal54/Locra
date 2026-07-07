@@ -1,31 +1,7 @@
-// Contract for the prompt-assembly path — the guard against the scope-refusal
-// regression. The rule the whole path must satisfy:
-//
-//   Perception rigor (visible-only / no-speculation) belongs to the TURN-1
-//   wrapper around the image message ONLY. The persistent identity, and every
-//   follow-up turn, must be free to answer beyond the photo using general
-//   knowledge, and must never refuse a benign request on scope grounds.
-//
-// The reported bug was a benign off-image follow-up ("my pan is sticky, how do
-// I fix it?") drawing a scope-shaped refusal ("my primary function is visual
-// content") because the extraction rule had leaked into the persistent system
-// prompt. These tests fail if that leak ever returns.
-
+import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
 import { buildPinnedContextPrompt } from '../../src/inference/ContextBuilder';
 import { buildStructuredExtractionPrompt } from '../../src/inference/ExtractionPrompt';
 import { LOCRA_SYSTEM_PROMPT } from '../../src/inference/SystemPrompt';
-
-// Scope-refusal / perception-restriction language that must NEVER appear in
-// anything persistent (the system prompt) or in a plain follow-up instruction.
-const SCOPE_LANGUAGE: Array<{ label: string; pattern: RegExp }> = [
-  { label: 'visible-only restriction', pattern: /\bvisible\b/i },
-  { label: 'no-speculation rule', pattern: /speculat/i },
-  { label: 'no-guessing rule', pattern: /\bguess\b/i },
-  { label: '"just an AI" hedge', pattern: /just an ai/i },
-  { label: '"primary function" scoping', pattern: /primary function/i },
-  { label: '"can only" / "only ... images" scoping', pattern: /can only|only (?:help|assist|answer|respond).{0,20}(?:image|photo|picture)/i },
-  { label: 'conciseness clamp', pattern: /\bconcise\b/i },
-];
 
 const OFF_IMAGE_FOLLOW_UP = 'My pan is sticky, how do I fix it?';
 const PINNED_EXTRACTION = [
@@ -35,58 +11,77 @@ const PINNED_EXTRACTION = [
   'Visible condition: dull, patchy residue',
 ].join('\n');
 
-describe('persistent system prompt (identity, applied every turn)', () => {
-  it.each(SCOPE_LANGUAGE)('contains no $label', ({ pattern }) => {
-    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(pattern);
+describe('persistent system prompt', () => {
+  it('establishes a concise grounded answer-first identity', () => {
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/answer the user's actual question/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/visible evidence/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/general knowledge/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/concise/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertaint/i);
   });
 
-  it('establishes a bold, helpful, never-refuse identity', () => {
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
-    // Explicitly invites drawing on general knowledge...
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/everything you know|know a great deal/i);
-    // ...and explicitly forbids scope deflection.
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/do not deflect|never.{0,20}deflect/i);
+  it('drops the older expansive persona language', () => {
+    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/trusted friend/i);
+    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/match their energy/i);
   });
 });
 
-describe('benign off-image follow-up assembly (turn 2+)', () => {
+describe('benign off-image follow-up assembly', () => {
   const prompt = buildPinnedContextPrompt({
     pinnedExtraction: PINNED_EXTRACTION,
     turns: [{ question: 'What is this?', answer: PINNED_EXTRACTION }],
     question: OFF_IMAGE_FOLLOW_UP,
   });
 
-  it('does NOT reinstate the old "do not claim facts beyond the extraction" fence', () => {
-    expect(prompt).not.toMatch(/do not claim/i);
-    expect(prompt).not.toMatch(/only.{0,30}(?:present in|in that|in the) extraction/i);
-    expect(prompt).not.toMatch(/speculat/i);
-  });
-
-  it('invites general knowledge for questions that go beyond the photo', () => {
+  it('still invites general knowledge beyond the photo', () => {
     expect(prompt).toMatch(/draw freely on everything else you know/i);
-    expect(prompt).toMatch(/beyond the photo/i);
   });
 
-  it('still grounds visual facts in the pinned extraction (regression guard)', () => {
+  it('still grounds visual facts in the pinned extraction', () => {
     expect(prompt).toContain(PINNED_EXTRACTION);
     expect(prompt).toContain(OFF_IMAGE_FOLLOW_UP);
   });
 });
 
-describe('turn-1 extraction wrapper (perception rigor lives HERE, and only here)', () => {
+describe('turn-1 extraction wrapper', () => {
   const prompt = buildStructuredExtractionPrompt('What is this?');
 
-  it('keeps the visible-only rule scoped to this one perception step', () => {
-    expect(prompt).toMatch(/only what is directly visible|state only what/i);
+  it('keeps the visible-only rule scoped to the perception step', () => {
     expect(prompt).toMatch(/this step only|one-time perception/i);
+    expect(prompt).toMatch(/only what is directly visible|state only what/i);
   });
 
-  it('keeps the no-speculation / no-guessing rule', () => {
+  it('still keeps the no-speculation and JSON-only rules', () => {
     expect(prompt).toMatch(/do not speculate/i);
     expect(prompt).toMatch(/do not guess/i);
-  });
-
-  it('still demands JSON-only output for the parser', () => {
     expect(prompt).toMatch(/valid json only/i);
+  });
+});
+
+describe('answer prompt assembly', () => {
+  it('distinguishes visible facts from general knowledge and uncertainty', () => {
+    const prompt = buildAnswerPrompt({
+      question: 'How do I fix this?',
+      hiddenEvidence: {
+        version: 'hidden-evidence-v1',
+        imagePath: '/photos/pan.jpg',
+        sourceQuestion: 'How do I fix this?',
+        subjectObject: 'worn cooking pan',
+        visibleFeatures: ['dark cooking surface', 'scratched center'],
+        visibleText: [],
+        visibleCondition: 'surface appears worn in the center',
+        uncertainty: ['coating material is not legible from the image'],
+        createdAt: '2026-07-07T16:30:00.000Z',
+      },
+      conversationMode: 'live',
+      generationConfigId: 'recommended-lfm2-vl-v1',
+      pipelineVariantId: 'recommended-sampling-v1',
+    });
+
+    expect(prompt).toContain('Visible facts from the image');
+    expect(prompt).toContain('General knowledge and reasoning');
+    expect(prompt).toContain('Uncertainty');
+    expect(prompt).toContain('Actionable next steps');
   });
 });

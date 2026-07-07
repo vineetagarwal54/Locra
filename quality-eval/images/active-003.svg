@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#eef6ed"/>
+  <rect x="314" y="82" width="106" height="180" fill="#e6f8ff" stroke="#333" stroke-width="6"/>
+  <rect x="190" y="334" width="104" height="64" fill="#a45f2b"/>
+  <path d="M242 334c-78-68-52-136 30-108-8 46-6 76 0 108z" fill="#d4c13d"/>
+  <path d="M242 334c42-72 106-74 122-16-50 0-88 8-122 16z" fill="#3f8f46"/>
+  <text x="126" y="116" font-family="Arial" font-size="26" fill="#222">plant by window</text>
+</svg>

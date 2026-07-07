@@ -49,6 +49,14 @@ const capturedRequest: InferenceRequest = {
   imagePath: '/camera/raw-capture.jpg',
   question: 'What object is on the table?',
 };
+const extractionJson = JSON.stringify({
+  subjectObject: 'coffee mug',
+  visibleFeatures: ['white ceramic', 'on a table'],
+  visibleText: [],
+  visibleCondition: 'upright and intact',
+  uncertainty: [],
+});
+const visibleAnswer = 'It looks like a white ceramic coffee mug on the table.';
 
 function makePreprocess(): (imagePath: string) => Promise<PreprocessedImage> {
   return (imagePath) =>
@@ -90,9 +98,9 @@ describe('offline capture to answer integration flow', () => {
       loadModel: () => Promise.resolve(),
       generate: (request, onToken) => {
         generatedRequests.push(request);
-        onToken('It looks like');
-        onToken('It looks like a coffee mug.');
-        return Promise.resolve({ response: 'It looks like a coffee mug.', tokenCount: 7 });
+        const response = request.kind === 'extraction' ? extractionJson : visibleAnswer;
+        onToken(response);
+        return Promise.resolve({ response, tokenCount: 7 });
       },
     };
     const queue = new InferenceQueue({
@@ -106,6 +114,7 @@ describe('offline capture to answer integration flow', () => {
 
     const state = queue.getState();
     expect(state.status).toBe('completed');
+    expect(state.response).toBe(visibleAnswer);
     expect(generatedRequests[0]).toEqual(
       expect.objectContaining({
         imagePath: '/camera/raw-capture.jpg.preprocessed',
@@ -115,6 +124,14 @@ describe('offline capture to answer integration flow', () => {
     );
     expect(generatedRequests[0].question).toMatch(/subject\/object/i);
     expect(generatedRequests[0].question).toContain(capturedRequest.question);
+    expect(generatedRequests[1]).toEqual(
+      expect.objectContaining({
+        kind: 'answer',
+        originalQuestion: capturedRequest.question,
+      })
+    );
+    expect(generatedRequests[1].imagePath).toBeUndefined();
+    expect(generatedRequests[1].question).toContain('Visible facts from the image');
 
     const session: QASession = {
       id: 'completed-flow',
@@ -123,7 +140,8 @@ describe('offline capture to answer integration flow', () => {
       question: capturedRequest.question,
       answer: state.response,
       turns: [{ question: capturedRequest.question, answer: state.response }],
-      pinnedExtraction: null,
+      pinnedExtraction: state.pinnedExtraction,
+      hiddenEvidence: state.hiddenEvidence,
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,
@@ -133,6 +151,9 @@ describe('offline capture to answer integration flow', () => {
     history.save(session);
 
     expect(history.list()).toEqual([session]);
+    expect(session.answer).toBe(visibleAnswer);
+    expect(session.pinnedExtraction).toContain('Subject/object: coffee mug');
+    expect(session.hiddenEvidence?.subjectObject).toBe('coffee mug');
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrSpy).not.toHaveBeenCalled();
     expect(webSocketSpy).not.toHaveBeenCalled();

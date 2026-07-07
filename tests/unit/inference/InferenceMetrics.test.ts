@@ -130,6 +130,31 @@ describe('InferenceMetricsRecorder', () => {
     }
   });
 
+  it('computes two-stage objective timings for production result records', () => {
+    const clock = makeClock();
+    const recorder = new InferenceMetricsRecorder(clock.now);
+
+    clock.advanceTo(100);
+    recorder.markRequestStart();
+    clock.advanceTo(250);
+    recorder.markPerceptionStart();
+    clock.advanceTo(850);
+    recorder.markPerceptionEnd();
+    clock.advanceTo(900);
+    recorder.markAnswerStart();
+    clock.advanceTo(1125);
+    recorder.markAnswerFirstToken();
+    clock.advanceTo(2100);
+    recorder.markAnswerEnd();
+
+    expect(recorder.buildObjectiveTimings()).toEqual({
+      perceptionLatencyMs: 600,
+      answerTtftMs: 225,
+      answerGenerationLatencyMs: 1200,
+      totalEndToEndLatencyMs: 2000,
+    });
+  });
+
   it('throws rather than emitting a partial metrics object when a mark is missing', () => {
     const clock = makeClock();
     const recorder = new InferenceMetricsRecorder(clock.now);

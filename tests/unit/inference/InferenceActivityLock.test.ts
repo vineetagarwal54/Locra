@@ -4,11 +4,11 @@ jest.mock('expo-image-manipulator', () => ({
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
 
+import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import {
   InferenceActivityLock,
   inferenceActivityLock,
 } from '../../../src/inference/InferenceActivityLock';
-import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import {
   InferenceQueue,
   type InferenceEngineAdapter,

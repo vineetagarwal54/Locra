@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#1e1e1e"/>
+  <rect x="54" y="74" width="404" height="340" fill="#252526" stroke="#555" stroke-width="4"/>
+  <text x="82" y="130" font-family="Consolas, monospace" font-size="22" fill="#dcdcaa">const user = null;</text>
+  <text x="82" y="176" font-family="Consolas, monospace" font-size="22" fill="#9cdcfe">user.name.toUpperCase()</text>
+  <text x="82" y="258" font-family="Consolas, monospace" font-size="24" fill="#f48771">TypeError:</text>
+  <text x="82" y="294" font-family="Consolas, monospace" font-size="20" fill="#f48771">Cannot read property name</text>
+</svg>

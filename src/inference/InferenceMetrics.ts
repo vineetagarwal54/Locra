@@ -8,6 +8,13 @@ import type { PerformanceMetrics } from '../types/models';
 
 export type Clock = () => number;
 
+export interface ObjectiveInferenceTimings {
+  perceptionLatencyMs: number;
+  answerTtftMs: number;
+  answerGenerationLatencyMs: number;
+  totalEndToEndLatencyMs: number;
+}
+
 /**
  * Records lifecycle timestamps for a single inference and computes the five
  * {@link PerformanceMetrics} fields from them. Inject a {@link Clock} for
@@ -23,6 +30,12 @@ export class InferenceMetricsRecorder {
   private inferenceStart: number | null = null;
   private firstTokenAt: number | null = null;
   private inferenceEnd: number | null = null;
+  private requestStart: number | null = null;
+  private perceptionStart: number | null = null;
+  private perceptionEnd: number | null = null;
+  private answerStart: number | null = null;
+  private answerFirstTokenAt: number | null = null;
+  private answerEnd: number | null = null;
   private tokenCount = 0;
 
   constructor(now: Clock = Date.now) {
@@ -43,6 +56,32 @@ export class InferenceMetricsRecorder {
 
   markPreprocessingEnd(): void {
     this.preprocessingEnd = this.now();
+  }
+
+  markRequestStart(): void {
+    this.requestStart = this.now();
+  }
+
+  markPerceptionStart(): void {
+    this.perceptionStart = this.now();
+  }
+
+  markPerceptionEnd(): void {
+    this.perceptionEnd = this.now();
+  }
+
+  markAnswerStart(): void {
+    this.answerStart = this.now();
+  }
+
+  markAnswerFirstToken(): void {
+    if (this.answerFirstTokenAt === null) {
+      this.answerFirstTokenAt = this.now();
+    }
+  }
+
+  markAnswerEnd(): void {
+    this.answerEnd = this.now();
   }
 
   /** The moment the generation request is dispatched (ExecuTorch `sendMessage`). */
@@ -90,6 +129,23 @@ export class InferenceMetricsRecorder {
       firstTokenLatencyMs: firstTokenAt - inferenceStart,
       tokensPerSecond,
       totalWallTimeMs: inferenceEnd - inferenceStart,
+    };
+  }
+
+  buildObjectiveTimings(): ObjectiveInferenceTimings {
+    const requestStart = this.require(this.requestStart, 'request start');
+    const perceptionStart = this.perceptionStart;
+    const perceptionEnd = this.perceptionEnd;
+    const answerStart = this.require(this.answerStart, 'answer start');
+    const answerFirstTokenAt = this.require(this.answerFirstTokenAt, 'answer first token');
+    const answerEnd = this.require(this.answerEnd, 'answer end');
+
+    return {
+      perceptionLatencyMs:
+        perceptionStart === null || perceptionEnd === null ? 0 : perceptionEnd - perceptionStart,
+      answerTtftMs: answerFirstTokenAt - answerStart,
+      answerGenerationLatencyMs: answerEnd - answerStart,
+      totalEndToEndLatencyMs: answerEnd - requestStart,
     };
   }
 

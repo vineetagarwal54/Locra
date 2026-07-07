@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#eef6ed"/>
+  <rect x="200" y="326" width="112" height="72" fill="#a45f2b"/>
+  <path d="M256 326c-8-80-80-138-128-98 44 10 74 42 92 98z" fill="#418a45"/>
+  <path d="M256 326c8-86 82-144 132-96-48 8-78 42-96 96z" fill="#3c8d4a"/>
+  <path d="M256 326c-28-62 8-122 70-108-20 42-30 78-24 108z" fill="#d5c13a"/>
+  <text x="135" y="112" font-family="Arial" font-size="28" fill="#222">one yellow leaf</text>
+</svg>

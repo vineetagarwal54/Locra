@@ -2,59 +2,71 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import {
-  LOCRA_GENERATION_CONFIG,
+  CURRENT_GENERATION_CONFIG_ID,
+  CURRENT_PIPELINE_VARIANT_ID,
+  GENERATION_CONFIG_IDS,
   OUTPUT_TOKEN_BUDGET,
+  PIPELINE_VARIANT_IDS,
 } from '../../../src/inference/GenerationTuning';
 import { LOCRA_SYSTEM_PROMPT } from '../../../src/inference/SystemPrompt';
 
-describe('generation tuning (FR-051, FR-052)', () => {
-  it('uses only 0.9.2-verified generationConfig fields, tuned for expansiveness', () => {
-    expect(LOCRA_GENERATION_CONFIG).toEqual({
-      temperature: 0.7,
-      topP: 0.95,
-      minP: 0.05,
-      repetitionPenalty: 1.05,
-    });
-    // Warmer than the model card's clipped 0.1 default, for bolder answers.
-    expect(LOCRA_GENERATION_CONFIG.temperature).toBeGreaterThan(0.35);
-  });
-
-  it('never references topK, maxTokens, or sequenceLength — none exist on the installed API', () => {
-    const config = LOCRA_GENERATION_CONFIG as Record<string, unknown>;
-
-    expect(config.topK).toBeUndefined();
-    expect(config.maxTokens).toBeUndefined();
-    expect(config.sequenceLength).toBeUndefined();
-
+describe('generation tuning', () => {
+  it('keeps only stable generation identifiers and no custom runtime sampling object', () => {
     const source = readFileSync(
       join(process.cwd(), 'src/inference/GenerationTuning.ts'),
-      'utf8'
+      'utf8',
     );
-    expect(source).not.toMatch(/config\.topK|topK:/);
+
+    expect(source).not.toMatch(/LOCRA_GENERATION_CONFIG|GenerationConfig\s*=/);
+    expect(source).not.toMatch(/temperature:|topP:|minP:|repetitionPenalty:/);
   });
 
-  it('enforces output length at the app level with a positive, expansive budget (FR-052)', () => {
+  it('never references topK, maxTokens, or sequenceLength', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'src/inference/GenerationTuning.ts'),
+      'utf8',
+    );
+
+    expect(source).not.toMatch(/topK:|config\.topK/);
+    expect(source).not.toMatch(/maxTokens|sequenceLength/);
+  });
+
+  it('keeps stable generation and pipeline identifiers for reporting', () => {
+    expect(GENERATION_CONFIG_IDS).toEqual([
+      'lfm2-vl-preset',
+      'recommended-lfm2-vl-v1',
+    ]);
+    expect(PIPELINE_VARIANT_IDS).toEqual([
+      'baseline-current',
+      'recommended-sampling-v1',
+      'two-stage-v1',
+    ]);
+    expect(CURRENT_GENERATION_CONFIG_ID).toBe('recommended-lfm2-vl-v1');
+    expect(CURRENT_PIPELINE_VARIANT_ID).toBe('recommended-sampling-v1');
+  });
+
+  it('keeps the app-level output token budget', () => {
     expect(OUTPUT_TOKEN_BUDGET).toBeGreaterThan(256);
   });
 
-  it('the persistent system prompt is expansive identity, NOT perception constraints (FR-050)', () => {
+  it('uses a concise grounded persistent system prompt', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
-    // The perception rules (visible-only / speculation) must NOT be persistent —
-    // they now live only in the turn-1 extraction wrapper.
-    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/visible/i);
-    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/speculat/i);
-    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/concise/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/answer the user's actual question/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/visible evidence/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/general knowledge/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/concise/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertaint/i);
   });
 
-  it('useInferenceEngine configures the tuned generationConfig and the Locra system prompt', () => {
+  it('useInferenceEngine configures chat context without runtime generation overrides', () => {
     const source = readFileSync(
       join(process.cwd(), 'src/inference/useInferenceEngine.ts'),
-      'utf8'
+      'utf8',
     );
 
-    expect(source).toContain('LOCRA_GENERATION_CONFIG');
     expect(source).toContain('LOCRA_SYSTEM_PROMPT');
-    expect(source).toContain('generationConfig');
+    expect(source).not.toContain('LOCRA_GENERATION_CONFIG');
+    expect(source).not.toMatch(/generationConfig\s*:/);
     expect(source).not.toContain('DEFAULT_SYSTEM_PROMPT');
   });
 });

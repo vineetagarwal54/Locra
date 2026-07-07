@@ -2,7 +2,8 @@ const EXTRACTION_SCHEMA = `{
   "subjectObject": "short visible subject/object description",
   "visibleFeatures": ["visible color, shape, material, layout, or other concrete feature"],
   "visibleText": ["exact visible text, or an empty array"],
-  "visibleCondition": "visible condition, pose, state, damage, freshness, or cleanliness"
+  "visibleCondition": "visible condition, pose, state, damage, freshness, or cleanliness",
+  "uncertainty": ["brief note for unclear, partial, or unreadable visual evidence"]
 }`;
 
 export function buildStructuredExtractionPrompt(userQuestion: string): string {
@@ -18,6 +19,7 @@ export function buildStructuredExtractionPrompt(userQuestion: string): string {
     '- visible features',
     '- visible text',
     '- visible condition',
+    '- uncertainty',
     'JSON schema:',
     EXTRACTION_SCHEMA,
   ].join('\n');
@@ -28,7 +30,7 @@ export function buildExtractionRetryPrompt(rawResponse: string, userQuestion: st
     'Your previous image extraction was not valid JSON.',
     `User question for context: ${sanitizePromptText(userQuestion)}`,
     'Rewrite the previous response as valid JSON only, preserving only visible facts.',
-    'Required labeled findings: subject/object, visible features, visible text, visible condition.',
+    'Required labeled findings: subject/object, visible features, visible text, visible condition, uncertainty.',
     'JSON schema:',
     EXTRACTION_SCHEMA,
     'Previous response:',

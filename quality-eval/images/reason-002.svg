@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f7f4ef"/>
+  <path d="M86 270c80-150 150 150 236 0s132 68 86 98" fill="none" stroke="#1f1f1f" stroke-width="18" stroke-linecap="round"/>
+  <path d="M152 288c80-108 126 88 202-34" fill="none" stroke="#555" stroke-width="14" stroke-linecap="round"/>
+  <text x="138" y="126" font-family="Arial" font-size="28" fill="#222">tangled cable</text>
+</svg>

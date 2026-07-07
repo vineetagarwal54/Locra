@@ -1,16 +1,18 @@
 // Enforces constitution Principles II (single-flight), IV (memory-safe
 // preprocessing before any tensor code), and III (OOM never crashes). This
-// module has ZERO imports from src/screens/ or any UI/networking primitive —
-// screens depend on it, never the reverse (contracts/inference-pipeline.contract.md,
-// Principle X).
+// module has ZERO imports from src/screens/ or UI/networking primitives.
 
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, InferenceStatus } from '../types/models';
 
 import { postProcessAnswer } from './AnswerPostProcessor';
+import { buildAnswerPrompt } from './AnswerPrompt';
+import { parseExtractionWithRetry } from './ExtractionParser';
 import { buildStructuredExtractionPrompt } from './ExtractionPrompt';
 import { getResponseLimitWarning } from './GenerationLimits';
 import {
+  CURRENT_GENERATION_CONFIG_ID,
+  CURRENT_PIPELINE_VARIANT_ID,
   LOOPING_ANSWER_NOTICE,
   OUTPUT_LIMIT_NOTICE,
   OUTPUT_TOKEN_BUDGET,
@@ -20,43 +22,31 @@ import { prepareImageForInference } from './ImageEnhancer';
 import { type PreprocessedImage } from './ImagePreprocessor';
 import { inferenceActivityLock, type ActivityLock } from './InferenceActivityLock';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
+import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
 
-/**
- * Plain-function adapter over the actual streaming model. In production this is
- * fulfilled by `useInferenceEngine` (T017), which isolates the single sanctioned
- * `useLLM` call; here the queue depends only on this narrow interface so it
- * stays hook-free and unit-testable.
- */
 export interface EngineGenerateRequest {
   question: string;
   imagePath?: string;
-  kind?: 'extraction' | 'chat';
+  kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat';
   originalQuestion?: string;
 }
 
+export interface EngineGenerateResult {
+  response: string;
+  tokenCount: number;
+  promptTokenCount?: number;
+  totalTokenCount?: number;
+  pinnedExtraction?: string | null;
+  hiddenEvidence?: InferenceState['hiddenEvidence'];
+}
+
 export interface InferenceEngineAdapter {
-  /** Ensures the model is resident and ready; resolves once loaded. */
   loadModel(): Promise<void>;
-  /**
-   * Runs generation, invoking {@link onToken} with the cumulative response
-   * (and, when available, the generated-token count so far) on each streamed
-   * update, and resolving with the final response + token count.
-   * MUST honour {@link signal}: on abort, generation stops and the promise
-   * RESOLVES with the partial response so far — it must not reject. The queue
-   * uses the same abort path for both user cancellation (where the resolved
-   * value is discarded) and the FR-052 output-length cap (where it is kept).
-   */
   generate(
     request: EngineGenerateRequest,
     onToken: (cumulativeResponse: string, generatedTokenCount?: number) => void,
     signal: AbortSignal,
-  ): Promise<{
-    response: string;
-    tokenCount: number;
-    promptTokenCount?: number;
-    totalTokenCount?: number;
-    pinnedExtraction?: string | null;
-  }>;
+  ): Promise<EngineGenerateResult>;
 }
 
 export interface InferenceSubmitOptions {
@@ -67,10 +57,14 @@ export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
   isReadyForInference: () => boolean;
   engine: InferenceEngineAdapter;
-  /** Factory so each request gets a fresh recorder; defaults to a real one. */
   createRecorder?: () => InferenceMetricsRecorder;
-  /** Shared voice⇄VLM lock (FR-033); defaults to the process-wide singleton. */
   activityLock?: ActivityLock;
+  getDeviceBuildMetadata?: () => DeviceBuildMetadata;
+}
+
+export interface DeviceBuildMetadata {
+  deviceNameModel: string;
+  appBuildId: string;
 }
 
 const IN_FLIGHT: ReadonlyArray<InferenceStatus> = ['preprocessing', 'loading_model', 'streaming'];
@@ -82,6 +76,8 @@ const IDLE_STATE: InferenceState = {
   error: null,
   limitWarning: null,
   pinnedExtraction: null,
+  hiddenEvidence: null,
+  objectiveResult: null,
 };
 
 interface ActiveRequest {
@@ -113,14 +109,10 @@ export class InferenceQueue implements IInferenceQueue {
   }
 
   async submit(request: InferenceRequest, options: InferenceSubmitOptions = {}): Promise<void> {
-    // Single-flight guard (Principle II, FR-006): reject synchronously WITHOUT
-    // acquiring the lock or mutating state if a request is already in-flight.
-    // The module never trusts the caller to have disabled its own control.
     if (this.isInFlight()) {
       return Promise.reject(new Error('An inference is already in progress.'));
     }
 
-    // FR-033: refuse to start while voice input holds the shared lock.
     if (!this.activityLock.tryAcquire('vlm')) {
       return Promise.reject(
         new Error('Voice input is in progress. Try again in a moment.'),
@@ -132,7 +124,6 @@ export class InferenceQueue implements IInferenceQueue {
     const recorder = this.createRecorder();
     const isFollowUp = options.turn === 'followUp';
 
-    // Acquire the lock: reset any prior terminal state and enter 'preprocessing'.
     this.setState({
       status: 'preprocessing',
       response: '',
@@ -140,11 +131,12 @@ export class InferenceQueue implements IInferenceQueue {
       error: null,
       limitWarning: null,
       pinnedExtraction: null,
+      hiddenEvidence: null,
+      objectiveResult: null,
     });
 
     try {
-      // Principle IV: the 512x512 ceiling is enforced before any model/tensor
-      // code runs.
+      recorder.markRequestStart();
       recorder.markPreprocessingStart();
       const processed = isFollowUp
         ? null
@@ -166,60 +158,42 @@ export class InferenceQueue implements IInferenceQueue {
 
       this.setState({ status: 'streaming' });
       recorder.markInferenceStart();
-      const generateRequest: EngineGenerateRequest =
-        processed === null
-          ? { question: request.question }
-          : {
-              imagePath: processed.path,
-              question: buildStructuredExtractionPrompt(request.question),
-              kind: 'extraction',
-              originalQuestion: request.question,
-            };
-      // FR-052: no native max-output setting exists on the installed library,
-      // so the queue itself stops generation once the app-level budget is hit.
-      // Aborting the signal is NOT a user cancel — `active.cancelled` stays
-      // false, so the partial response completes normally below.
+
       let budgetStopped = false;
-      const result = await this.deps.engine.generate(
-        generateRequest,
-        (cumulative, generatedTokenCount) => {
-          if (active.cancelled) return;
-          recorder.markFirstToken();
-          this.setState({ response: cumulative });
-          if (
-            !budgetStopped &&
-            generatedTokenCount !== undefined &&
-            generatedTokenCount >= OUTPUT_TOKEN_BUDGET
-          ) {
-            budgetStopped = true;
-            active.controller.abort();
-          }
-        },
-        active.controller.signal,
-      );
+      const markBudgetStopped = (): void => {
+        budgetStopped = true;
+      };
+      const result =
+        processed === null
+          ? await this.generateVisibleAnswer(request.question, active, recorder, markBudgetStopped)
+          : await this.generateFirstImageAnswer(request, processed, active, recorder, markBudgetStopped);
       if (active.cancelled) return;
 
       recorder.setTokenCount(result.tokenCount);
+      recorder.markAnswerEnd();
       recorder.markInferenceEnd();
-      // FR-054: trim and inspect the tail before the answer becomes visible or
-      // persistable; a truncated/looping tail surfaces as a distinct notice.
       const processedAnswer = postProcessAnswer(result.response);
+      const notice = resolveCompletionNotice(
+        budgetStopped,
+        processedAnswer.verdict,
+        result.tokenCount,
+      );
       this.setState({
         status: 'completed',
         response: processedAnswer.text,
         metrics: recorder.build(),
-        limitWarning: resolveCompletionNotice(
-          budgetStopped,
-          processedAnswer.verdict,
-          result.tokenCount,
-        ),
+        limitWarning: notice,
         pinnedExtraction: result.pinnedExtraction ?? null,
+        hiddenEvidence: result.hiddenEvidence ?? null,
+        objectiveResult: this.buildObjectiveResult(
+          processedAnswer.text,
+          processedAnswer.verdict,
+          result,
+          recorder,
+        ),
       });
     } catch (error) {
-      // A cancel already drove state to its terminal value — don't overwrite it.
       if (active.cancelled) return;
-      // OOM (or any failure) resolves to 'errored' with a human-readable message,
-      // never an unhandled rejection or crash (FR-023, Principle III).
       this.setState({
         status: 'errored',
         response: '',
@@ -227,13 +201,13 @@ export class InferenceQueue implements IInferenceQueue {
         error: toMessage(error),
         limitWarning: null,
         pinnedExtraction: null,
+        hiddenEvidence: null,
+        objectiveResult: null,
       });
     } finally {
-      // Release the lock on every exit path.
       if (this.active === active) {
         this.active = null;
       }
-      // Release the shared voice⇄VLM lock (FR-033) on every exit path too.
       this.activityLock.release('vlm');
     }
   }
@@ -246,8 +220,6 @@ export class InferenceQueue implements IInferenceQueue {
     active.controller.abort();
     this.active = null;
 
-    // Notify subscribers of the terminal 'cancelled' state (contract), discarding
-    // the partial response so nothing residual is ever persisted (FR-007)...
     this.setState({
       status: 'cancelled',
       response: '',
@@ -255,9 +227,158 @@ export class InferenceQueue implements IInferenceQueue {
       error: null,
       limitWarning: null,
       pinnedExtraction: null,
+      hiddenEvidence: null,
+      objectiveResult: null,
     });
-    // ...then return the queue to idle, ready to accept the next request.
     this.setState({ ...IDLE_STATE });
+  }
+
+  private async generateFirstImageAnswer(
+    request: InferenceRequest,
+    processed: PreprocessedImage,
+    active: ActiveRequest,
+    recorder: InferenceMetricsRecorder,
+    markBudgetStopped: () => void
+  ): Promise<EngineGenerateResult> {
+    recorder.markPerceptionStart();
+    const extractionResult = await this.deps.engine.generate(
+      {
+        imagePath: processed.path,
+        question: buildStructuredExtractionPrompt(request.question),
+        kind: 'extraction',
+        originalQuestion: request.question,
+      },
+      () => {
+        // Hidden perception output never streams into visible queue state.
+      },
+      active.controller.signal,
+    );
+    recorder.markPerceptionEnd();
+    if (active.cancelled) {
+      return extractionResult;
+    }
+
+    const extractionOutcome = await parseExtractionWithRetry(
+      extractionResult.response,
+      async (retryPrompt) => {
+        const retryResult = await this.deps.engine.generate(
+          {
+            question: retryPrompt,
+            kind: 'extractionRetry',
+            originalQuestion: request.question,
+          },
+          () => {
+            // Retry output is hidden for the same reason as first perception.
+          },
+          active.controller.signal,
+        );
+        return retryResult.response;
+      },
+      request.question,
+      processed.path,
+    );
+    if (active.cancelled) {
+      return extractionResult;
+    }
+
+    if (extractionOutcome.hiddenEvidence === null) {
+      recorder.markAnswerStart();
+      recorder.markFirstToken();
+      recorder.markAnswerFirstToken();
+      this.setState({ response: extractionOutcome.visibleAnswer });
+      return {
+        response: extractionOutcome.visibleAnswer,
+        tokenCount: extractionResult.tokenCount,
+        pinnedExtraction: extractionOutcome.pinnedExtraction,
+        hiddenEvidence: null,
+      };
+    }
+
+    const answerPrompt = buildAnswerPrompt({
+      question: request.question,
+      hiddenEvidence: extractionOutcome.hiddenEvidence,
+      conversationMode: 'live',
+      generationConfigId: CURRENT_GENERATION_CONFIG_ID,
+      pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
+    });
+    const answerResult = await this.generateVisibleAnswer(
+      answerPrompt,
+      active,
+      recorder,
+      markBudgetStopped,
+      {
+        kind: 'answer',
+        originalQuestion: request.question,
+      },
+    );
+
+    return {
+      ...answerResult,
+      pinnedExtraction: extractionOutcome.pinnedExtraction,
+      hiddenEvidence: extractionOutcome.hiddenEvidence,
+    };
+  }
+
+  private generateVisibleAnswer(
+    question: string,
+    active: ActiveRequest,
+    recorder: InferenceMetricsRecorder,
+    markBudgetStopped: () => void,
+    requestPatch: Partial<EngineGenerateRequest> = {}
+  ): Promise<EngineGenerateResult> {
+    recorder.markAnswerStart();
+    return this.deps.engine.generate(
+      { question, ...requestPatch },
+      (cumulative, generatedTokenCount) => {
+        if (active.cancelled) return;
+        recorder.markFirstToken();
+        recorder.markAnswerFirstToken();
+        this.setState({ response: cumulative });
+        if (
+          generatedTokenCount !== undefined &&
+          generatedTokenCount >= OUTPUT_TOKEN_BUDGET &&
+          !active.controller.signal.aborted
+        ) {
+          markBudgetStopped();
+          active.controller.abort();
+        }
+      },
+      active.controller.signal,
+    );
+  }
+
+  private buildObjectiveResult(
+    answerText: string,
+    verdict: 'complete' | 'truncated' | 'looping',
+    result: EngineGenerateResult,
+    recorder: InferenceMetricsRecorder
+  ): ObjectiveInferenceResultRecord {
+    const timings = recorder.buildObjectiveTimings();
+    const metadata = this.resolveDeviceBuildMetadata();
+    const record: ObjectiveInferenceResultRecord = {
+      answerText,
+      ...timings,
+      generatedTokens: result.tokenCount,
+      truncated: verdict === 'truncated',
+      looping: verdict === 'looping',
+      timestamp: new Date().toISOString(),
+      modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+      generationConfigId: CURRENT_GENERATION_CONFIG_ID,
+      pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
+      deviceNameModel: metadata.deviceNameModel,
+      appBuildId: metadata.appBuildId,
+    };
+    if (result.promptTokenCount !== undefined) {
+      record.promptTokens = result.promptTokenCount;
+    }
+    return record;
+  }
+
+  private resolveDeviceBuildMetadata(): DeviceBuildMetadata {
+    return this.deps.getDeviceBuildMetadata?.() ?? {
+      deviceNameModel: 'unknown-device',
+      appBuildId: 'unknown-build',
+    };
   }
 
   private isInFlight(): boolean {
@@ -272,19 +393,11 @@ export class InferenceQueue implements IInferenceQueue {
   }
 }
 
-/**
- * Default wiring. The `isReadyForInference` fallback is fail-closed (`() => false`)
- * — a queue built without a real readiness gate never loads the model. The
- * composition root (inferenceStore, T027) injects the real
- * `modelStore.isReadyForInference()` via `overrides`. `engine` must be supplied —
- * the real one arrives with `useInferenceEngine` (T017).
- */
 export function createInferenceQueue(
   engine: InferenceEngineAdapter,
   overrides: Partial<InferenceQueueDeps> = {},
 ): InferenceQueue {
   return new InferenceQueue({
-    // FR-049: enhancement (orient/crop/downscale) runs before the 512 ceiling.
     preprocess: prepareImageForInference,
     isReadyForInference: () => false,
     engine,
@@ -292,10 +405,6 @@ export function createInferenceQueue(
   });
 }
 
-/**
- * One notice slot, priority-ordered: an explicit budget stop explains the most,
- * then tail-quality verdicts, then the near-context-limit warning.
- */
 function resolveCompletionNotice(
   budgetStopped: boolean,
   verdict: 'complete' | 'truncated' | 'looping',

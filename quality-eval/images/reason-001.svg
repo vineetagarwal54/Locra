@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#eef2f5"/>
+  <rect x="112" y="120" width="96" height="260" fill="none" stroke="#222" stroke-width="8"/>
+  <rect x="120" y="188" width="80" height="184" fill="#5aa8e8"/>
+  <rect x="304" y="120" width="96" height="260" fill="none" stroke="#222" stroke-width="8"/>
+  <rect x="312" y="286" width="80" height="86" fill="#5aa8e8"/>
+  <text x="104" y="430" font-family="Arial" font-size="26" fill="#222">left is fuller</text>
+</svg>

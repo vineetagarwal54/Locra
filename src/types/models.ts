@@ -1,5 +1,8 @@
 // Shared domain types — data-model.md is the source of truth for field shapes.
 
+import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
+import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
+
 export type QASessionStatus = 'streaming' | 'completed' | 'cancelled' | 'errored';
 
 export interface PerformanceMetrics {
@@ -18,6 +21,7 @@ export interface QASession {
   answer: string;
   turns: Array<{ question: string; answer: string }>;
   pinnedExtraction: string | null;
+  hiddenEvidence?: HiddenVisualEvidence | null;
   status: QASessionStatus;
   errorMessage: string | null;
   metrics: PerformanceMetrics | null;
@@ -63,6 +67,8 @@ export interface InferenceState {
   error: string | null;
   limitWarning: string | null;
   pinnedExtraction: string | null;
+  hiddenEvidence?: HiddenVisualEvidence | null;
+  objectiveResult?: ObjectiveInferenceResultRecord | null;
 }
 
 export interface ModelState {
