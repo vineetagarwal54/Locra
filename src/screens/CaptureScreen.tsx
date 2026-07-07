@@ -20,10 +20,12 @@ import {
 } from 'react-native-vision-camera';
 
 import { OfflineIndicator } from '../components/OfflineIndicator';
+import { VoiceButton } from '../components/VoiceButton';
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useInferenceStore } from '../store/inferenceStore';
 import { useMediaStore } from '../store/mediaStore';
+import { useVoiceStore, type VoicePhase } from '../store/voiceStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Capture'>;
 
@@ -41,6 +43,9 @@ export function CaptureScreen({ navigation }: Props) {
   const status = useInferenceStore((s) => s.status);
   const submit = useInferenceStore((s) => s.submit);
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
+  const voicePhase = useVoiceStore((s) => s.phase);
+  const voiceProgress = useVoiceStore((s) => s.downloadProgress);
+  const voiceError = useVoiceStore((s) => s.error);
 
   const isFocused = useIsFocused();
   const device = useCameraDevice(position);
@@ -125,6 +130,11 @@ export function CaptureScreen({ navigation }: Props) {
     setCaptureError(null);
   }, [inFlight]);
 
+  const onVoiceTranscript = useCallback((text: string): void => {
+    // Dictation fills the field for review/edit — it never auto-submits (FR-033).
+    setPrompt((prev) => (prev.trim() === '' ? text : `${prev.trim()} ${text}`));
+  }, []);
+
   const onOpenGallery = useCallback(async (): Promise<void> => {
     if (inFlight) {
       return;
@@ -186,14 +196,24 @@ export function CaptureScreen({ navigation }: Props) {
 
           {selectedImagePath !== null ? (
             <View style={styles.promptWrap}>
-              <TextInput
-                style={styles.promptInput}
-                value={prompt}
-                onChangeText={setPrompt}
-                placeholder="Ask about this photo"
-                placeholderTextColor={theme.textSecondary}
-                multiline
-              />
+              <View style={styles.promptRow}>
+                <TextInput
+                  style={styles.promptInput}
+                  value={prompt}
+                  onChangeText={setPrompt}
+                  placeholder="Ask about this photo, or hold the mic to talk"
+                  placeholderTextColor={theme.textSecondary}
+                  multiline
+                />
+                <VoiceButton disabled={inFlight} onTranscript={onVoiceTranscript} />
+              </View>
+              {voiceHintFor(voicePhase, voiceProgress, voiceError) !== null ? (
+                <Text
+                  style={[styles.voiceHint, voicePhase === 'error' && styles.voiceHintError]}
+                >
+                  {voiceHintFor(voicePhase, voiceProgress, voiceError)}
+                </Text>
+              ) : null}
             </View>
           ) : (
             <Text style={styles.captureHint}>
@@ -299,6 +319,26 @@ function toInferencePath(path: string): string {
   return path.startsWith('file://') ? path.slice('file://'.length) : path;
 }
 
+function voiceHintFor(
+  phase: VoicePhase,
+  progress: number,
+  error: string | null
+): string | null {
+  if (phase === 'loading') {
+    return `Preparing voice… ${Math.round(progress * 100)}%`;
+  }
+  if (phase === 'recording') {
+    return 'Listening… release to add it to your question';
+  }
+  if (phase === 'transcribing') {
+    return 'Transcribing…';
+  }
+  if (phase === 'error') {
+    return error ?? 'Voice input is unavailable right now.';
+  }
+  return null;
+}
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -372,7 +412,13 @@ const styles = StyleSheet.create({
   promptWrap: {
     marginTop: theme.space4,
   },
+  promptRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: theme.space2,
+  },
   promptInput: {
+    flex: 1,
     minHeight: theme.space6 * 3,
     paddingHorizontal: theme.space4,
     paddingVertical: theme.space3,
@@ -383,6 +429,15 @@ const styles = StyleSheet.create({
     color: theme.textPrimary,
     fontSize: theme.fontSizeMd,
     lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+  },
+  voiceHint: {
+    marginTop: theme.space2,
+    marginLeft: theme.space2,
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeSm,
+  },
+  voiceHintError: {
+    color: theme.error,
   },
   captureHint: {
     color: theme.textSecondary,

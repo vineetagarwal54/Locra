@@ -16,7 +16,18 @@ describe('pinned context builder', () => {
 
     expect(prompt).toContain(pinnedExtraction);
     expect(prompt).toContain('What color is it?');
-    expect(prompt).toContain('Previous turns');
+    expect(prompt).toContain('Conversation so far');
+  });
+
+  it('invites general knowledge instead of fencing the answer to the photo', () => {
+    const prompt = buildPinnedContextPrompt({
+      pinnedExtraction,
+      turns: [],
+      question: 'My pan is sticky, how do I fix it?',
+    });
+
+    expect(prompt).toMatch(/draw freely on everything else you know/i);
+    expect(prompt).not.toMatch(/do not claim/i);
   });
 
   it('keeps pinned extraction when the verbatim turn window is exceeded', () => {

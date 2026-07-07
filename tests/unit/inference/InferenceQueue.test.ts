@@ -191,22 +191,27 @@ describe('InferenceQueue', () => {
 });
 
 describe('InferenceQueue output-length cap (FR-052)', () => {
+  // Advance the simulated token count in batches (like a real token batch) so
+  // the cap trips in a few ticks regardless of how large OUTPUT_TOKEN_BUDGET is
+  // tuned — the test stays fast and budget-agnostic.
+  const TOKENS_PER_TICK = 16;
+
   it('aborts generation once the token budget is reached and still resolves completed', async () => {
-    // Engine that streams one token per tick forever unless the signal aborts.
+    // Engine that streams a batch of tokens per tick forever unless it aborts.
     let streamedTokens = 0;
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
       generate: (_req, onToken, signal) =>
         new Promise((resolve) => {
           const interval = setInterval(() => {
-            streamedTokens += 1;
-            onToken('word '.repeat(streamedTokens).trim(), streamedTokens);
+            streamedTokens += TOKENS_PER_TICK;
+            onToken(`streamed ${streamedTokens} tokens`, streamedTokens);
           }, 1);
           signal.addEventListener('abort', () => {
             clearInterval(interval);
             // Contract: on abort, generate resolves with the partial response.
             resolve({
-              response: 'word '.repeat(streamedTokens).trim(),
+              response: `streamed ${streamedTokens} tokens`,
               tokenCount: streamedTokens,
             });
           });
@@ -218,7 +223,9 @@ describe('InferenceQueue output-length cap (FR-052)', () => {
 
     const state = queue.getState();
     expect(state.status).toBe('completed');
-    expect(streamedTokens).toBeLessThan(OUTPUT_TOKEN_BUDGET + 8);
+    // Stopped near the budget, not run unbounded.
+    expect(streamedTokens).toBeGreaterThanOrEqual(OUTPUT_TOKEN_BUDGET);
+    expect(streamedTokens).toBeLessThan(OUTPUT_TOKEN_BUDGET + TOKENS_PER_TICK * 3);
     expect(state.response).not.toBe('');
     expect(state.limitWarning).toMatch(/length limit/i);
   });
@@ -248,12 +255,12 @@ describe('InferenceQueue output-length cap (FR-052)', () => {
       generate: (_req, onToken, signal) =>
         new Promise((resolve) => {
           const interval = setInterval(() => {
-            streamedTokens += 1;
-            onToken('t'.repeat(streamedTokens), streamedTokens);
+            streamedTokens += TOKENS_PER_TICK;
+            onToken(`streamed ${streamedTokens} tokens`, streamedTokens);
           }, 1);
           signal.addEventListener('abort', () => {
             clearInterval(interval);
-            resolve({ response: 't'.repeat(streamedTokens), tokenCount: streamedTokens });
+            resolve({ response: `streamed ${streamedTokens} tokens`, tokenCount: streamedTokens });
           });
         }),
     };

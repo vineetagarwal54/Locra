@@ -5,7 +5,10 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
     "ios": {
       "supportsTablet": true
     },
@@ -20,7 +23,8 @@
       "package": "com.locra.app",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -33,6 +37,12 @@
         "@kesha-antonov/react-native-background-downloader",
         {
           "skipMmkvDependency": true
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Locra uses the microphone only to turn your spoken question into text, entirely on this device."
         }
       ]
     ],

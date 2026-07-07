@@ -60,6 +60,8 @@ export class ModelDownloadManager {
   private state: ModelState = { ...INITIAL_STATE };
   private readonly listeners = new Set<(state: ModelState) => void>();
   private lastModelConfig: ModelConfig | null = null;
+  private activeDownloadPromise: Promise<void> | null = null;
+  private downloadRunId = 0;
 
   constructor(private readonly deps: ModelDownloadManagerDeps) {}
 
@@ -78,7 +80,25 @@ export class ModelDownloadManager {
     return this.state.downloadStatus === 'downloaded' && this.state.integrityVerified;
   }
 
-  async startDownload(): Promise<void> {
+  startDownload(): Promise<void> {
+    if (this.activeDownloadPromise !== null) {
+      return this.activeDownloadPromise;
+    }
+    if (this.isReadyForInference()) {
+      return Promise.resolve();
+    }
+
+    const runId = this.nextDownloadRun();
+    const promise = this.runDownload(runId).finally(() => {
+      if (this.activeDownloadPromise === promise) {
+        this.activeDownloadPromise = null;
+      }
+    });
+    this.activeDownloadPromise = promise;
+    return promise;
+  }
+
+  private async runDownload(runId: number): Promise<void> {
     this.setState({
       downloadStatus: 'downloading',
       downloadProgress: 0,
@@ -88,16 +108,27 @@ export class ModelDownloadManager {
     let didStartFetch = false;
     try {
       const config = await this.deps.getModelConfig();
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
       this.lastModelConfig = config;
       didStartFetch = true;
       await this.finishDownload(
         this.deps.fetcher.fetch(
-          (progress) => this.setState({ downloadProgress: progress }),
+          (progress) => {
+            if (this.isCurrentRun(runId)) {
+              this.setState({ downloadProgress: progress });
+            }
+          },
           ...this.deps.sources
         ),
-        config
+        config,
+        runId
       );
     } catch (error) {
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
       if (didStartFetch) {
         await this.safeDelete();
       }
@@ -110,13 +141,21 @@ export class ModelDownloadManager {
   }
 
   async reattachExistingDownload(): Promise<boolean> {
+    if (this.activeDownloadPromise !== null) {
+      return true;
+    }
     if (!this.deps.fetcher.reattachExistingDownloads) {
       return false;
     }
 
+    const runId = this.nextDownloadRun();
     try {
       const reattached = await this.deps.fetcher.reattachExistingDownloads(
-        (progress) => this.setState({ downloadProgress: progress }),
+        (progress) => {
+          if (this.isCurrentRun(runId)) {
+            this.setState({ downloadProgress: progress });
+          }
+        },
         ...this.deps.sources
       );
       if (!reattached) {
@@ -129,7 +168,13 @@ export class ModelDownloadManager {
         integrityVerified: false,
         error: null,
       });
-      void this.finishReattachedDownload(reattached.promise);
+      const promise = this.finishReattachedDownload(reattached.promise, runId).finally(() => {
+        if (this.activeDownloadPromise === promise) {
+          this.activeDownloadPromise = null;
+        }
+      });
+      this.activeDownloadPromise = promise;
+      void promise;
       return true;
     } catch {
       return false;
@@ -154,15 +199,13 @@ export class ModelDownloadManager {
         this.setState({ ...INITIAL_STATE });
         return;
       }
-      // Cheap, memory-safe guard against a partial/truncated download, using the
-      // remote size metadata fetched during this JS session.
-      if (this.lastModelConfig !== null) {
-        const size = await this.deps.getFileSize(models[0]);
-        if (size < this.lastModelConfig.expectedSize) {
-          await this.safeDelete();
-          this.setState({ ...INITIAL_STATE });
-          return;
-        }
+      const config = this.lastModelConfig ?? await this.deps.getModelConfig();
+      this.lastModelConfig = config;
+      const size = await this.deps.getFileSize(models[0]);
+      if (size < config.expectedSize) {
+        await this.safeDelete();
+        this.setState({ ...INITIAL_STATE });
+        return;
       }
       this.setState({
         downloadStatus: 'downloaded',
@@ -212,12 +255,17 @@ export class ModelDownloadManager {
   }
 
   async cancelDownload(): Promise<void> {
+    const cancelledPromise = this.activeDownloadPromise;
+    this.downloadRunId += 1;
     try {
       await this.deps.fetcher.cancelFetching(...this.deps.sources);
     } catch {
       // Nothing active to cancel.
     }
     await this.safeDelete();
+    if (this.activeDownloadPromise === cancelledPromise) {
+      this.activeDownloadPromise = null;
+    }
     this.setState({ ...INITIAL_STATE });
   }
 
@@ -230,13 +278,20 @@ export class ModelDownloadManager {
   }
 
   private async finishReattachedDownload(
-    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>
+    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
+    runId: number
   ): Promise<void> {
     try {
       const config = await this.deps.getModelConfig();
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
       this.lastModelConfig = config;
-      await this.finishDownload(downloadPromise, config);
+      await this.finishDownload(downloadPromise, config, runId);
     } catch (error) {
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
       try {
         await this.deps.fetcher.cancelFetching(...this.deps.sources);
       } catch {
@@ -253,10 +308,17 @@ export class ModelDownloadManager {
 
   private async finishDownload(
     downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
-    config: ModelConfig
+    config: ModelConfig,
+    runId: number
   ): Promise<void> {
     const { paths } = await downloadPromise;
+    if (!this.isCurrentRun(runId)) {
+      return;
+    }
     const verified = await this.deps.verifyIntegrity(paths[0], config.expectedSha256);
+    if (!this.isCurrentRun(runId)) {
+      return;
+    }
     if (verified) {
       this.setState({
         downloadStatus: 'downloaded',
@@ -282,6 +344,15 @@ export class ModelDownloadManager {
     for (const listener of this.listeners) {
       listener(this.state);
     }
+  }
+
+  private nextDownloadRun(): number {
+    this.downloadRunId += 1;
+    return this.downloadRunId;
+  }
+
+  private isCurrentRun(runId: number): boolean {
+    return runId === this.downloadRunId;
   }
 }
 

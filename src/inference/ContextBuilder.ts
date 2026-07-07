@@ -16,17 +16,25 @@ export function buildPinnedContextPrompt(input: BuildPinnedContextPromptInput): 
   const recentTurns = input.turns.slice(-resolveRecentTurnLimit(input.recentTurnLimit));
   const previousTurns =
     recentTurns.length === 0
-      ? 'No previous user turns are available.'
+      ? 'This is the first follow-up in the conversation.'
       : recentTurns.map(formatTurn).join('\n\n');
 
+  // The extraction is grounding for facts ABOUT the photo, never a fence around
+  // the whole answer — follow-ups routinely leave the image behind entirely
+  // ("my pan is sticky, how do I fix it?") and must get real, knowledgeable help.
   return [
-    'Use the pinned visual extraction as non-evictable image context.',
-    'Do not claim visual facts that are not present in that extraction.',
-    'Pinned visual extraction:',
+    'Here is what you already observed in the photo this chat is about. Treat it as a',
+    'reliable record of what the image shows, and rely on it for anything about the',
+    'picture itself:',
     input.pinnedExtraction,
-    'Previous turns:',
+    '',
+    'Conversation so far:',
     previousTurns,
-    'Current follow-up question:',
+    '',
+    'Now answer their next message. Use the photo notes above when the picture is',
+    'relevant, and draw freely on everything else you know to give a genuinely useful,',
+    'confident answer — including when the question goes well beyond the photo.',
+    '',
     input.question.trim(),
   ].join('\n');
 }

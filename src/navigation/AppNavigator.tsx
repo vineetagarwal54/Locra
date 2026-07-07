@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
+import { VoiceTranscriptionHost } from '../components/VoiceTranscriptionHost';
 import { AnswerScreen } from '../screens/AnswerScreen';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
@@ -13,6 +14,7 @@ import { ModelSetupScreen } from '../screens/ModelSetupScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
+import { useVoiceStore } from '../store/voiceStore';
 
 export type RootStackParamList = {
   Welcome: undefined;
@@ -59,6 +61,9 @@ export function AppNavigator() {
     (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
   );
   const [engineHostMounted, setEngineHostMounted] = useState(false);
+  // FR-033: the voice host mounts lazily, only once the user activates voice, so
+  // the Whisper model is never downloaded for users who never dictate.
+  const voiceEnabled = useVoiceStore((s) => s.enabled);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -104,6 +109,7 @@ export function AppNavigator() {
   return (
     <NavigationContainer>
       {engineHostMounted ? <InferenceEngineHost /> : null}
+      {voiceEnabled ? <VoiceTranscriptionHost /> : null}
       <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
         <Stack.Screen name="Capture" component={Capture} />

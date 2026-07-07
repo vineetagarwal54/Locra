@@ -526,3 +526,48 @@ suspects, in order of how directly each explains the reported symptom:
 Neither is confirmed as *the* root cause yet — that determination is T065's
 job, via a contract test that asserts turn 2's outgoing context contains turn
 1 under realistic timing, per Principle IX (verify, don't guess further here).
+
+## Phase 2 Voice Input Findings (verified 2026-07-07, T057–T059)
+
+Verified against the actually-installed packages (`react-native-executorch`
+0.9.2, `expo-audio` `~56.0.12`) before writing any voice code, per Principle IX.
+
+### `useWhisper` does not exist — the real hook is `useSpeechToText`
+
+**Finding**: `node_modules/react-native-executorch/lib/typescript/hooks/natural_language_processing/`
+contains `useSpeechToText`, not `useWhisper` (T058's task text named the
+latter). Its type (`types/stt.d.ts`) shows `transcribe(waveform: Float32Array)`
+→ `TranscriptionResult { text }`, and `streamInsert`/`stream` for chunked
+input. The model is passed as a `SpeechToTextModelConfig` — the pre-built
+`WHISPER_TINY_EN` constant (English, `isMultilingual: false`) matches it
+field-for-field. Whisper is a **separate** on-device model from the VLM, with
+its own auto-download when the hook mounts.
+
+**Impact**: `useSpeechToText` only *transcribes a supplied 16 kHz Float32Array*
+— it does not capture microphone audio. Voice therefore needs a separate audio
+source.
+
+### expo-audio's `useAudioStream` is the clean capture path (no custom native module)
+
+**Finding**: expo-audio's file recorder on Android (`RecordingOptionsAndroid`)
+only outputs lossy container formats (`aac_adts`, `amrnb`, `3gp`, `webm`, …) —
+**no raw PCM/WAV**, so a pure-JS WAV decoder is not viable there. However
+expo-audio also exposes `useAudioStream({ sampleRate, channels, encoding:
+'float32', onBuffer })` for **real-time PCM microphone capture**, delivering
+`Float32` samples already normalized to [-1, 1] (`AudioStream.types.d.ts`).
+Requested rate may differ from hardware, so the app resamples to 16 kHz.
+
+**Decision**: capture with `useAudioStream` (16 kHz / mono / float32), buffer
+the chunks, concatenate + linear-resample to 16 kHz
+(`src/inference/AudioWaveform.ts`), and hand the waveform to
+`useSpeechToText.transcribe`. This needs **no custom native audio module** —
+both hooks are Expo/executorch-managed — so it stays inside the constitution's
+native-dependency rule (expo-audio is a config-plugin package, pure Kotlin, no
+CMake/NDK). Permission: `RECORD_AUDIO` + the expo-audio plugin's
+`microphonePermission` message in `app.json`.
+
+**Mutual exclusion (FR-033)**: a shared `InferenceActivityLock`
+(`'vlm'` | `'voice'`) both the `InferenceQueue` and the voice path acquire, so
+a transcription and a VLM inference can never run at once. The Whisper host is
+mounted lazily (only after first voice use) so the ~40 MB model is not
+downloaded for users who never dictate.

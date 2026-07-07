@@ -7,9 +7,12 @@ const EXTRACTION_SCHEMA = `{
 
 export function buildStructuredExtractionPrompt(userQuestion: string): string {
   return [
-    'Inspect the attached image and extract only facts that are directly visible.',
+    'This is a one-time perception pass over the attached image. For THIS step only,',
+    'record just what the pixels show. State only what is directly visible.',
+    'Do not speculate and do not guess hidden details, and do not fold in outside',
+    'knowledge yet (that comes freely in later turns). If it is not visible, leave it out.',
     `User question for context: ${sanitizePromptText(userQuestion)}`,
-    'Return valid JSON only. Do not add markdown, commentary, or speculation.',
+    'Return valid JSON only. Do not add markdown or commentary.',
     'Required labeled findings:',
     '- subject/object',
     '- visible features',

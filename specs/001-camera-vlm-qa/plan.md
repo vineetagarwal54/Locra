@@ -47,6 +47,14 @@ Navigation, React Native Reanimated `4.3.1` + `react-native-worklets`
 `0.8.3` (the exact pair Expo SDK 56 resolves natively — see Build Strategy
 for why this specific pair matters).
 
+**Dependencies added since this section was originally written** (Phase
+2/3 work, each vetted against the same NDK-26/EAS constraints above before
+adopting): `expo-clipboard` (T055, copy answer), `expo-image-manipulator`
+(T084, image enhancement — no CMake/NDK surface, config-plugin only) and
+`expo-audio` (T058, voice capture — also config-plugin only, no native
+build risk). None of these required revisiting the NDK pin or Build
+Strategy decisions above.
+
 **Storage**: MMKV only (constitution Principle VIII) — see `data-model.md`
 for the four entities (`QASession`, `PerformanceMetrics`, `OnDeviceModel`,
 `DeviceCompatibilityResult`) and their MMKV key-namespace mapping.
@@ -231,26 +239,34 @@ Covers spec.md's Phase 3 Additions (FR-039–FR-054). No new project/backend;
 all changes stay inside the existing `src/inference/`, `src/store/`,
 `src/history/`, `src/screens/` boundaries from the Project Structure above.
 
-**New dependency**: `expo-image-manipulator` — for FR-049's auto-orient/
-crop/contrast-normalize step. This runs *before*
-`src/inference/ImagePreprocessor.ts`'s existing 512×512-ceiling resize (which
-uses `react-native-nitro-image` and stays exactly as-is per Principle IV) —
-the two are sequenced stages, not a replacement of one by the other. Also
-carries forward the already-flagged `expo-clipboard` dependency for T055
-(unimplemented Phase 2 task, still pending).
+**New dependency**: `expo-image-manipulator` — for FR-049's auto-orient/crop
+step (contrast normalization was found not to be available on this or any
+other currently-installed image library — see `research.md`'s Phase 3 API
+Verification (d) — and was dropped from scope rather than faked). This runs
+*before* `src/inference/ImagePreprocessor.ts`'s existing 512×512-ceiling
+resize (which uses `react-native-nitro-image` and stays exactly as-is per
+Principle IV) — the two are sequenced stages, not a replacement of one by the
+other. `expo-clipboard` (for T055) and `expo-audio` (for T058) were added the
+same way, as their respective workstreams were implemented.
+
+**Historical note**: this section originally described `generationConfig` as
+"currently unused" and `expo-clipboard`/T055 as "unimplemented... still
+pending." Both have since been implemented (T055/T056 and T090) — see below
+for the current state.
 
 **Generation config ceiling**: per `research.md`'s Phase 3 API Verification,
 `GenerationConfig` on the installed `react-native-executorch` 0.9.2 exposes
 only `temperature`, `topP`, `minP`, `repetitionPenalty`,
 `outputTokenBatchSize`, `batchTimeInterval` — no `topK`, no `maxTokens`, no
 `sequenceLength`. FR-051/FR-052 are scoped to that reality: tuning goes
-through `configure({ generationConfig })` (currently unused —
-`useInferenceEngine.ts`'s `configureForLongResponses()` today only sets
-`chatConfig`, never `generationConfig`, so model-registry defaults
-`{temperature: 0.1, minP: 0.15, repetitionPenalty: 1.05}` are what actually
-run); output-length capping goes through watching
-`getGeneratedTokenCount()` (already exposed on `InferenceEngineHandle`) and
-calling `interrupt()`, not a config field.
+through `configure({ generationConfig })` — `useInferenceEngine.ts`'s
+`configureForLongResponses()` now sets both `chatConfig` and
+`generationConfig` (`src/inference/GenerationTuning.ts`'s
+`LOCRA_GENERATION_CONFIG`, T090), superseding the model-registry defaults
+(`{temperature: 0.1, minP: 0.15, repetitionPenalty: 1.05}`) that ran before
+that task landed; output-length capping goes through watching
+`getGeneratedTokenCount()` (exposed on `InferenceEngineHandle`) and aborting
+the request once a configured budget is hit (T092), not a config field.
 
 **No new architectural boundary for the extraction/pinned-context work**:
 the structured-extraction turn (FR-041) and pinned-context construction
