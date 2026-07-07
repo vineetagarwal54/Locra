@@ -31,6 +31,7 @@ export const theme = {
 
   // Semantic
   error: '#FF5E57',
+  errorGlow: 'rgba(255, 94, 87, 0.15)',
   success: '#00D4A4',
 
   // Radius

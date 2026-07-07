@@ -13,8 +13,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AnswerActions } from '../components/AnswerActions';
 import { OfflineIndicator } from '../components/OfflineIndicator';
-import { ReportButton } from '../components/ReportButton';
 import { haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
@@ -302,6 +302,8 @@ export function AnswerScreen({ navigation, route }: Props) {
         {turns.map((turn, index) => {
           const isPendingTurn = index === pendingIndexRef.current;
           const hasTurnAnswer = turn.answer.trim() !== '';
+          const isLatestTurn = index === turns.length - 1;
+          const showActions = isLatestTurn && hasTurnAnswer && !isGenerating;
           return (
             <View key={`turn-${index}`} style={styles.turnBlock}>
               <View style={styles.userBubble}>
@@ -319,6 +321,17 @@ export function AnswerScreen({ navigation, route }: Props) {
                   <Animated.View style={[styles.cursor, cursorStyle]} />
                 ) : null}
               </View>
+              {showActions ? (
+                <View style={styles.actionsRow}>
+                  <AnswerActions
+                    question={turn.question}
+                    answer={turn.answer}
+                    flagged={flagged}
+                    flagDisabled={flagged || !canFlag}
+                    onFlag={onFlag}
+                  />
+                </View>
+              ) : null}
             </View>
           );
         })}
@@ -355,13 +368,8 @@ export function AnswerScreen({ navigation, route }: Props) {
           </View>
         ) : null}
 
-        {canFlag || flagged ? (
-          <View style={styles.reportBlock}>
-            <ReportButton reported={flagged} disabled={!canFlag && !flagged} onReport={onFlag} />
-            {flagged ? (
-              <Text style={styles.flaggedConfirm}>Saved as flagged on this phone.</Text>
-            ) : null}
-          </View>
+        {flagged ? (
+          <Text style={styles.flaggedConfirm}>Saved as flagged on this phone.</Text>
         ) : null}
       </ScrollView>
 
@@ -595,14 +603,13 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSizeXs,
     marginTop: theme.space1,
   },
-  reportBlock: {
-    marginTop: theme.space2,
+  actionsRow: {
+    marginTop: theme.space3,
   },
   flaggedConfirm: {
     marginTop: theme.space3,
     color: theme.success,
     fontSize: theme.fontSizeSm,
-    textAlign: 'center',
   },
   bottomDock: {
     paddingHorizontal: theme.space4,

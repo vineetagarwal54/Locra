@@ -92,7 +92,8 @@ export function useInferenceEngine(): InferenceEngineHandle {
         initialMessageHistory: [],
         contextStrategy: new SlidingWindowContextStrategy(RESPONSE_TOKEN_BUDGET),
       },
-      // FR-051: only research.md-verified fields — no topK/maxTokens on 0.9.2.
+      // Only 0.9.2-verified fields (temperature/topP/minP/repetitionPenalty);
+      // no topK/maxTokens exist on this version. See GenerationTuning.ts.
       generationConfig: LOCRA_GENERATION_CONFIG,
     });
     configuredRef.current = true;

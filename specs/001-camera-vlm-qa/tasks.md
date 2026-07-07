@@ -196,18 +196,23 @@ touches model loading."
 - [X] T052 — Unit tests for multi-turn follow-up exchanges — Write tests (e.g. `tests/unit/inference/MultiTurnFollowUp.test.ts`) covering: the image is attached only on the first turn; follow-up turns are sent text-only via `useLLM`'s `messageHistory`/`SlidingWindowContextStrategy`; the full exchange persists as one history entry (FR-030); must fail before implementation — blocks: T053
 - [X] T053 — Implement multi-turn follow-up flow — Wire `InferenceQueue`/`useInferenceEngine` so a follow-up `submit()` on an already-completed session sends a text-only turn relying on `useLLM`'s built-in conversation history, and persist the growing `turns[]` array as a single `HistoryStore` entry per session id; depends on T051, T052; satisfies T052 — blocks: T054
 - [X] T054 — Follow-up question UI on `AnswerScreen.tsx` — After an answer completes, show a question input allowing another turn about the same image without navigating away, appending each exchange to the visible thread (FR-030); depends on T053 — blocks: none
-- [ ] T055 — [P] Copy answer to clipboard — Add a copy button on `AnswerScreen.tsx`, visible once inference completes, that copies the answer text via `expo-clipboard` with a haptic + brief toast confirmation and no navigation (FR-031); requires adding the `expo-clipboard` dependency — blocks: none
-- [ ] T056 — [P] Share answer — Add a share button on `AnswerScreen.tsx`, visible once inference completes, that opens the native Android share sheet with the question and answer as plain text via React Native's built-in `Share` API (no new dependency, no image, no network activity) (FR-032) — blocks: none
-- [ ] T057 — [P] Unit tests for voice/VLM mutual exclusion — Write tests asserting an in-progress voice transcription blocks a VLM `submit()` and vice versa, sharing (or coordinating with) `InferenceQueue`'s single-flight lock (FR-033); must fail before implementation — blocks: T058
-- [ ] T058 — On-device voice transcription via `useWhisper` — Implement `src/inference/useVoiceTranscription.ts` as the sanctioned `useWhisper` (react-native-executorch) call site, mirroring `useInferenceEngine.ts`'s hook-isolation pattern, enforcing mutual exclusion with the VLM `InferenceQueue` (FR-033); satisfies T057 — blocks: T059
-- [ ] T059 — Hold-to-record button on `CaptureScreen.tsx` — Add a hold-to-record control that transcribes speech into the question input for the user to review/edit before submitting (does not auto-submit) (FR-033); depends on T058 — blocks: none
-- [ ] T060 — Text-only fallback model recommendation — Extend `modelStore`/`ModelSetupScreen.tsx` to recommend the Qwen 3 0.6B text-only model when `DeviceCompatibilityResult` indicates the vision model cannot run (<6GB RAM), keeping `IModelLifecycle` platform-agnostic (model selection stays a store-level concern) (FR-034); depends on T064 (multi-model selector, F14) — blocks: none
-- [ ] T061 — [P] Flag with optional note — Add an optional free-text note (max 120 characters) shown when the user taps "Flag answer" on `AnswerScreen.tsx`, wired to the existing `historyStore.setFlag(id, true, note)` action; display the note beside the flagged indicator in `HistoryScreen.tsx` (FR-035) — blocks: none
-- [ ] T062 — [P] Search history by question text — Add a search input to `HistoryScreen.tsx` filtering the in-memory session list by case-insensitive substring match against `question`, with no additional MMKV reads (FR-036) — blocks: none
-- [ ] T063 — [P] Pinch-to-zoom on the captured image — Add bounded pinch-to-zoom on the image thumbnail in `AnswerScreen.tsx` using Reanimated gestures, resetting zoom on navigation away; verify `react-native-gesture-handler` is configured with a `GestureHandlerRootView` at the app root (likely already present transitively via React Navigation, but unconfirmed) (FR-037) — blocks: none
-- [ ] T064 — Multi-model selector — `ModelSetupScreen.tsx` lists available on-device models with recommended status (from `DeviceCompatibilityResult`), storage size, and minimum RAM requirement, letting the user choose which single model is active; keep `IModelLifecycle` platform-agnostic — model selection stays a store-level concern (FR-038); prerequisite for T060 (F10) — blocks: T060
+- [X] T055 — [P] Copy answer to clipboard — installed `expo-clipboard` `~56.0.4`; `src/components/AnswerActions.tsx` copies the answer via `Clipboard.setStringAsync` with a success haptic and an inline "Copied ✓" confirmation (the button label/icon swap for ~1.6s, ChatGPT-style), no navigation; covered by `tests/unit/components/AnswerActions.test.ts` (FR-031) — blocks: none
+- [X] T056 — [P] Share answer — `AnswerActions.tsx` shares the Q&A pair as plain text via React Native's built-in `Share` API (exported pure `buildShareText` helper, image-free, no new dependency, no network); covered by `tests/unit/components/AnswerActions.test.ts` (FR-032) — blocks: none. Both actions live in one compact action row under the latest completed answer, alongside Flag (the standalone `ReportButton` was folded into `AnswerActions` and removed).
+- [X] T057 — [P] Unit tests for voice/VLM mutual exclusion — `tests/unit/inference/InferenceActivityLock.test.ts`: the shared `InferenceActivityLock` grants one owner (`'vlm'` | `'voice'`) at a time; a VLM `submit()` is rejected while voice holds the lock (and vice versa); the lock is released on the VLM completed AND errored paths so voice can then acquire. Plus `tests/unit/inference/AudioWaveform.test.ts` for the capture math (FR-033) — blocks: T058
+- [X] T058 — On-device voice transcription — **API correction (Principle IX)**: implemented against the REAL 0.9.2 API, not the nonexistent `useWhisper`. `src/inference/useVoiceTranscription.ts` is the one sanctioned call site for `useSpeechToText` (model `WHISPER_TINY_EN`, transcribes a 16 kHz `Float32Array`) **and** expo-audio's `useAudioStream` (real-time Float32 PCM mic capture — no custom native module, no WAV-decode needed). `src/inference/AudioWaveform.ts` concatenates the streamed chunks and resamples to 16 kHz. Mutual exclusion via the shared `InferenceActivityLock` (T057) wired into `InferenceQueue`. The Whisper model is a SECOND on-device model that auto-downloads when the voice host mounts — the host (`src/components/VoiceTranscriptionHost.tsx`) mounts lazily, only after the user first enables voice, so non-voice users never download it. Driven through `src/store/voiceStore.ts` (Principle X). Covered by `tests/unit/store/voiceStore.test.ts` (FR-033) — blocks: T059
+- [X] T059 — Hold-to-record button on `CaptureScreen.tsx` — `src/components/VoiceButton.tsx`: press-and-hold to dictate (pulsing red while recording), release to transcribe; the recognized text is appended to the question field for review/edit and NEVER auto-submits. First press lazily enables voice (starts the Whisper download); the mic is disabled while a VLM inference runs (mutual exclusion); a status line shows Preparing/Listening/Transcribing/error. Mic permission added to `app.json` (`RECORD_AUDIO` + expo-audio plugin message) (FR-033); depends on T058 — blocks: none
 
-**Checkpoint**: All fourteen Phase 2 features implemented and tested; F10/F14's cross-dependency (T064 before T060) resolved regardless of numeric order.
+> **Voice implemented** (2026-07-07, `/speckit-implement`, user chose "build full voice"). Clean-path deps: `expo-audio` `~56.0.12` (`useAudioStream` gives 16 kHz Float32 PCM directly — sidesteps the Android "no raw PCM/WAV recorder" limitation and needs no custom native audio module) + the built-in `useSpeechToText`/`WHISPER_TINY_EN`. **Status**: implemented in code and covered by automated tests; on-device validation pending a fresh EAS build: `quickstart.md` Scenario 11 (added) — first-use model download, hold-to-record, transcript-fills-field-without-submitting, mic-blocked-during-inference, and permission-denied handling. FR-033's spec text is tech-agnostic so needs no edit; the `useWhisper`→`useSpeechToText` correction is recorded in `research.md`.
+
+> **T060–T064 moved to the Deferred Backlog.** These four post-MVP features
+> (text-only fallback model, flag-note UI, history search, pinch-to-zoom,
+> multi-model selector) are intentionally **not required** to close Phase
+> 001. Their original task text is preserved unchanged in the "Deferred
+> Backlog" section near the end of this file (and in `DEFERRED_BACKLOG.md`,
+> the spec-level view) — nothing was deleted, only relocated so this
+> checkpoint reflects what Phase 001 actually needs.
+
+**Checkpoint**: Ten of fourteen Phase 2 post-MVP features are implemented and tested (T044–T059). The remaining four (T060–T064, covering FR-034/FR-035's UI/FR-036/FR-037/FR-038) are intentionally deferred — see the Deferred Backlog section — and do not block Phase 001 closure.
 
 ---
 
@@ -215,7 +220,15 @@ touches model loading."
 
 **Purpose**: Six workstreams, in build order, layered onto the completed Phase 1+2 app: (1) fix the T054 multi-turn context-loss report, (2) split inference into a vision-once extraction turn plus text-only follow-up turns on one long-lived engine instance, (3) make pinned-extraction-plus-sliding-window the explicit context-management floor, (4) persist and resume full chat threads with a clean-slate reset on new capture, (5) preprocess captured images and tighten the system prompt, (6) tune generation output quality within the library's actually-confirmed API surface. Numbering continues from T064.
 
-**Do NOT implement yet — this phase is written for the user to trigger one task at a time.**
+**Historical note (superseded)**: this phase was originally written with the
+instruction "Do NOT implement yet — this phase is written for the user to
+trigger one task at a time," when it was first drafted as a plan for future
+work. That instruction is now stale and no longer applies: Workstreams 1–6
+(T065–T101) have since been implemented and tested, one task at a time, as
+originally intended. Only the four `[DEVICE]`-tagged manual validation tasks
+(T068, T083, T095, plus the bug-fix workstream) remain open — see this
+phase's own checkpoint below and the consolidated "Phase 11: Physical-Device
+Release Validation Gate" section near the end of this file.
 
 **Device-gated tasks** are marked `[DEVICE]` — they require a physical Android 13+ device (an EAS-built dev client, per `plan.md`'s Build Strategy; local Gradle builds remain permanently out of scope on this machine) and cannot be completed by a unit/integration test alone.
 
@@ -258,11 +271,11 @@ touches model loading."
 - [X] T085 [P] Unit tests for the image-enhancement stage — `tests/unit/inference/ImageEnhancer.test.ts` (10 tests): orientation-bake pass always runs first; large images downscale to the 1024 intermediate ceiling on the correct axis; extreme aspect ratios center-crop to 16:9; provided subject regions clamp to bounds; normal frames stay uncropped (the sensible centered default is the full frame); enhance→preprocess chaining and the fallback-on-failure path (FR-049) — depends on T084 — blocks: T086
 - [X] T086 Implement the image-enhancement stage — `src/inference/ImageEnhancer.ts`: two-pass `manipulateAsync` (EXIF-orientation bake → crop/downscale), `resolveCropRegion` with subject-region clamping, 1024 intermediate ceiling. Contrast normalization omitted — impossible at the RN layer with current dependencies (research.md (d)); spec FR-049 amended accordingly — depends on T085 — blocks: T087
 - [X] T087 Wire the enhancement stage into the inference pipeline — `prepareImageForInference` (enhance → 512 ceiling, with graceful fallback to the raw capture if enhancement fails) is now `createInferenceQueue`'s default `preprocess`; asserted in `tests/unit/inference/InferenceQueue.test.ts` (FR-049) — depends on T086 — blocks: none
-- [X] T088 [P] Author the negative-constraint system prompt — `src/inference/SystemPrompt.ts` (`LOCRA_SYSTEM_PROMPT`: role + visible-only/no-speculation/concise/finish-sentences constraints) replaces `DEFAULT_SYSTEM_PROMPT` in `configureForLongResponses()`; asserted in `tests/unit/inference/GenerationTuning.test.ts` (FR-050) — depends on none — blocks: none
+- [X] T088 [P] Author the negative-constraint system prompt — `src/inference/SystemPrompt.ts` (`LOCRA_SYSTEM_PROMPT`) replaces `DEFAULT_SYSTEM_PROMPT` in `configureForLongResponses()` (FR-050) — depends on none — blocks: none. **⚠ Superseded by T099**: this task put the visible-only/no-speculation/concise constraints in the *persistent* prompt, which caused the scope-refusal bug; those constraints were moved to the turn-1 wrapper and the persistent prompt rewritten.
 
 ### Workstream 6 — Output enhancements
 
-- [X] T089 [P] Unit tests for tuned generation config — `tests/unit/inference/GenerationTuning.test.ts`: `LOCRA_GENERATION_CONFIG` equals exactly `{ temperature: 0.35, repetitionPenalty: 1.05, minP: 0.05 }`, no `topK`/`maxTokens`/`sequenceLength` anywhere, and `useInferenceEngine` passes it to `configure()` (FR-051) — blocks: T090
+- [X] T089 [P] Unit tests for tuned generation config — `tests/unit/inference/GenerationTuning.test.ts`: `LOCRA_GENERATION_CONFIG` field set + no `topK`/`maxTokens`/`sequenceLength`, and `useInferenceEngine` passes it to `configure()` (FR-051) — blocks: T090. **Values updated by T101** (temperature 0.35→0.7, +topP, budget 256→640 for expansiveness).
 - [X] T090 Apply the tuned generation config — `src/inference/GenerationTuning.ts` + `configureForLongResponses()` now passes `generationConfig: LOCRA_GENERATION_CONFIG` alongside `chatConfig`, satisfying T089 (FR-051) — depends on T089 — blocks: none
 - [X] T091 [P] Unit tests for the app-level output-length cap — extended `tests/unit/inference/InferenceQueue.test.ts`: an engine streaming indefinitely is aborted once `generatedTokenCount` reaches `OUTPUT_TOKEN_BUDGET` (256) and still resolves `'completed'` with the partial response + a visible length-limit notice; under-budget runs are untouched; a budget stop is NOT a user cancel (no `'cancelled'` transition, metrics populated) (FR-052) — blocks: T092
 - [X] T092 Implement the app-level output-length cap — `onToken` now carries `generatedTokenCount`; the queue aborts the request signal at budget without setting the cancelled flag, and the engine-adapter contract now requires generate to RESOLVE with the partial on abort (the bridge in `inferenceStore.ts` implements this, including skipping the post-submit history wait after an interrupt) (FR-052) — depends on T091 — blocks: none
@@ -275,7 +288,16 @@ touches model loading."
 - [X] T096 Integration test: full vision-once → multi-turn → resumed-thread flow — `tests/integration/vision-once-chat-flow.test.ts`: real `inferenceStore` + real `HistoryStore` over in-memory storage (only the engine handle and native modules mocked), covering capture → extraction → two follow-ups → reset (navigate away) → hydrate from history → one more follow-up; asserts pinned extraction in every follow-up prompt, single session id throughout, four persisted turns — depends on T074, T081, T082
 - [X] T097 Update contracts for Phase 3 — `contracts/inference-pipeline.contract.md` gained a Phase 3 addendum (abort-resolves adapter contract, `onToken` token-count arg + output cap, deterministic history wait with the hydrated-thread skip, enhance→ceiling preprocessing, post-processing, pinned extraction); `contracts/history-store.contract.md` gained the `pinnedExtraction` persistence + legacy-normalization + session-as-thread rules — depends on T066, T072, T092, T094
 
-**Checkpoint**: Multi-turn context loss is root-caused and fixed; vision-once/text-chat is the standing inference model; pinned-plus-sliding-window context management is explicit and tested; chat threads are fully resumable with a clean-slate reset on new capture; captured images are enhanced before inference; output quality is tuned within the library's verified API surface. FR-043 (Look again) and rolling summarization remain deliberately deferred.
+### Bug fix — scope-refusal on off-image follow-ups (FR-050 correction)
+
+**Symptom**: benign off-image follow-ups ("my pan is sticky, how do I fix it?") drew a scope-shaped refusal ("my primary function is visual content"). **Root cause**: T088's system prompt conflated assistant identity with the turn-1 extraction task — it placed the visible-only / no-speculation / concise rules in the PERSISTENT prompt, so they governed every turn. Not a model guardrail; our own prompt.
+
+- [X] T098 Contract test for the prompt-assembly path — `tests/contract/prompt-assembly.test.ts` (14 tests): the persistent `LOCRA_SYSTEM_PROMPT` contains no scope language (no visible/speculat/guess/"just an AI"/"primary function"/"can only ... image"/concise) and does establish a bold never-refuse identity; a benign off-image follow-up assembled via `buildPinnedContextPrompt` reinstates no fence and invites general knowledge; the turn-1 wrapper still carries visible-only + no-speculation + JSON-only. Must fail against the pre-fix prompts (FR-050) — blocks: T099
+- [X] T099 Rewrite the persistent system prompt — `src/inference/SystemPrompt.ts` `LOCRA_SYSTEM_PROMPT` is now a bold, expansive, never-refuse personal-assistant identity with zero perception rules; the visible-only/no-speculation rigor moved into the turn-1 wrapper (`ExtractionPrompt.ts`, strengthened + scoped to "this step only"), and the turn-2+ wrapper (`ContextBuilder.ts`) drops its "do not claim facts beyond the extraction" fence and explicitly invites general knowledge beyond the photo. `GenerationTuning.test.ts` and `ContextBuilder.test.ts` updated to the new expectations (FR-050) — depends on T098 — blocks: none
+- [X] T100 Purge residual scoping / `DEFAULT_SYSTEM_PROMPT` remnants — grep of the whole prompt-assembly path confirms `speculat` now appears only in the turn-1 `ExtractionPrompt.ts` (plus explanatory comments), no `DEFAULT_SYSTEM_PROMPT` anywhere in `src/`, and the `LOCRA_SYSTEM_PROMPT` string carries none of the scope words — depends on T099 — blocks: none
+- [X] T101 Tune output for expansiveness — verified `GenerationConfig` fields against installed 0.9.2 source again (temperature/topP/minP/repetitionPenalty confirmed; no topK/maxTokens); `LOCRA_GENERATION_CONFIG` now `{ temperature: 0.7, topP: 0.95, minP: 0.05, repetitionPenalty: 1.05 }` and `OUTPUT_TOKEN_BUDGET` raised 256 → 640, both framed as device-tunable defaults; the `OUTPUT_LIMIT_NOTICE` copy no longer says "concise". `quickstart.md` Scenario 10 (T095) covers the on-device expansiveness/refusal check (FR-051, FR-052) — depends on T099 — blocks: none
+
+**Checkpoint**: Multi-turn context loss is root-caused and fixed; vision-once/text-chat is the standing inference model; pinned-plus-sliding-window context management is explicit and tested; chat threads are fully resumable with a clean-slate reset on new capture; captured images are enhanced before inference; output quality is tuned within the library's verified API surface; the persistent identity is bold and never scope-refuses while turn-1 keeps full extraction rigor. FR-043 (Look again) and rolling summarization remain deliberately deferred.
 
 ---
 
@@ -384,3 +406,62 @@ With more than one contributor:
 - Every module-level implementation task names the exact test task it must satisfy, per constitution Principle VI
 - Commit after each task or logical group, per the "single agent session" scoping requested for this feature
 - Verify each test task's tests fail before starting its paired implementation task
+
+---
+
+## Deferred Backlog (Not Required for Phase 001 Closure)
+
+Relocated from Phase 9 (original task text preserved verbatim, IDs unchanged
+— nothing here was deleted, only moved so Phase 9's checkpoint reflects what
+Phase 001 actually needs). See `DEFERRED_BACKLOG.md` for the spec-level
+rationale behind each deferral.
+
+- [ ] T060 — Text-only fallback model recommendation — Extend `modelStore`/`ModelSetupScreen.tsx` to recommend the Qwen 3 0.6B text-only model when `DeviceCompatibilityResult` indicates the vision model cannot run (<6GB RAM), keeping `IModelLifecycle` platform-agnostic (model selection stays a store-level concern) (FR-034); depends on T064 (multi-model selector, F14) — blocks: none
+- [ ] T061 — [P] Flag with optional note — Add an optional free-text note (max 120 characters) shown when the user taps "Flag answer" on `AnswerScreen.tsx`, wired to the existing `historyStore.setFlag(id, true, note)` action; display the note beside the flagged indicator in `HistoryScreen.tsx` (FR-035) — blocks: none. **Note**: the backend for this already exists (`historyStore.setFlag`/`inferenceStore.flagCurrentSession` both accept an optional note); only the UI entry point is deferred.
+- [ ] T062 — [P] Search history by question text — Add a search input to `HistoryScreen.tsx` filtering the in-memory session list by case-insensitive substring match against `question`, with no additional MMKV reads (FR-036) — blocks: none
+- [ ] T063 — [P] Pinch-to-zoom on the captured image — Add bounded pinch-to-zoom on the image thumbnail in `AnswerScreen.tsx` using Reanimated gestures, resetting zoom on navigation away; verify `react-native-gesture-handler` is configured with a `GestureHandlerRootView` at the app root (likely already present transitively via React Navigation, but unconfirmed) (FR-037) — blocks: none
+- [ ] T064 — Multi-model selector — `ModelSetupScreen.tsx` lists available on-device models with recommended status (from `DeviceCompatibilityResult`), storage size, and minimum RAM requirement, letting the user choose which single model is active; keep `IModelLifecycle` platform-agnostic — model selection stays a store-level concern (FR-038); prerequisite for T060 (F10) — blocks: T060
+
+**Explicit deferral note**: Multi-model selection (T064/FR-038) and additional/alternative model downloads (T060/FR-034) are intentionally out of scope for Phase 001. Pick these up as a dedicated future feature (its own spec), not as an in-place extension of this one.
+
+Also deferred, already marked in place in Phase 10 (not relocated, since they're tightly coupled to their workstream's narrative — cross-referenced here for a single source of truth):
+- **T075** — "Look again" re-extraction (FR-043) — see Workstream 2, Phase 10.
+- **T077** — Rolling summarization beyond the sliding window (part of FR-044) — see Workstream 3, Phase 10.
+
+---
+
+## Phase 11: Physical-Device Release Validation Gate (Required to Close Phase 001)
+
+**Purpose**: A single consolidated checklist of every manual, physical-device
+validation still needed before Phase 001 can be marked fully complete. This
+supersedes the scattered device-gated tasks elsewhere in this file
+(`T043`, `T068`, `T083`, `T095`) by cross-referencing them rather than
+duplicating their work — those task lines are unchanged and still open.
+
+**Current status**: per `quickstart-results.md`, **zero** scenarios have been
+executed on a physical device as of this writing. Every row below is
+"Pending physical-device validation." Do not mark any row complete without
+recording an actual pass/fail result in `quickstart-results.md` — this gate
+exists specifically to prevent optimistic sign-off.
+
+| # | Validation item | Quickstart scenario | Cross-ref | Status |
+|---|---|---|---|---|
+| 1 | Model download completes successfully on a physical device | Scenario 3 | T043 | Pending physical-device validation |
+| 2 | Background download survives both backgrounding and full app-process death (kill + relaunch) | Scenario 3 (extended) | T047 | Pending physical-device validation |
+| 3 | Pause/resume/cancel work from both the in-app controls and the persistent notification | Scenario 3 (extended) | T047, T049 | Pending physical-device validation |
+| 4 | App restart / process-death recovery reattaches an in-progress download and resolves to the correct state | Scenario 3 (extended) | T047 | Pending physical-device validation |
+| 5 | Notification shows accurate, updating download percentage and MB downloaded | Scenario 3 (extended) | T047 | Pending physical-device validation |
+| 6 | Tapping the download notification returns the user to `ModelSetupScreen` | Scenario 3 (extended) | T047 | Pending physical-device validation |
+| 7 | Model integrity (SHA-256) verification detects a corrupted file and routes to the download screen rather than crashing | Scenario 3 | T044, T021 | Pending physical-device validation |
+| 8 | Full capture→answer flow completes in airplane mode with zero network activity | Scenario 1 | T041, T043 | Pending physical-device validation |
+| 9 | Multi-turn follow-up questions retain turn-1 context across 3+ turns | Scenario 8 | T065–T067, T068 | Pending physical-device validation |
+| 10 | Reopening a thread from History hydrates it in full and accepts further follow-ups | Scenario 9 | T078–T082, T083 | Pending physical-device validation |
+| 11 | Starting a new capture resets to a clean slate with zero context bleed from the prior thread | Scenario 9 | T081, T083 | Pending physical-device validation |
+| 12 | Answer quality holds up under the current (Scenario 10) criteria — see below | Scenario 10 | T086–T101, T095 | Pending physical-device validation |
+| 13 | Voice recording captures microphone audio and on-device transcription fills the question field without auto-submitting | Scenario 11 | T057–T059 | Implemented in code and automated tests; physical-device validation pending |
+| 14 | Repeated use (50 consecutive asks) never crashes the app | Scenario 7 | T043 (SC-008) | Pending physical-device validation |
+| 15 | Device storage behaves reasonably during normal camera/chat use (no runaway growth from temp images or model files) | Scenario 12 (added) | — | Pending physical-device validation |
+
+**Do not mark Phase 001 "fully complete"** (only "Implementation Complete —
+Device Validation Pending," per `spec.md`'s Status line) until every row
+above has a recorded, actual pass result in `quickstart-results.md`.

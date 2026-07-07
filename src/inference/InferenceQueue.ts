@@ -18,6 +18,7 @@ import {
 } from './GenerationTuning';
 import { prepareImageForInference } from './ImageEnhancer';
 import { type PreprocessedImage } from './ImagePreprocessor';
+import { inferenceActivityLock, type ActivityLock } from './InferenceActivityLock';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
 
 /**
@@ -68,6 +69,8 @@ export interface InferenceQueueDeps {
   engine: InferenceEngineAdapter;
   /** Factory so each request gets a fresh recorder; defaults to a real one. */
   createRecorder?: () => InferenceMetricsRecorder;
+  /** Shared voice⇄VLM lock (FR-033); defaults to the process-wide singleton. */
+  activityLock?: ActivityLock;
 }
 
 const IN_FLIGHT: ReadonlyArray<InferenceStatus> = ['preprocessing', 'loading_model', 'streaming'];
@@ -91,9 +94,11 @@ export class InferenceQueue implements IInferenceQueue {
   private readonly listeners = new Set<(state: InferenceState) => void>();
   private active: ActiveRequest | null = null;
   private readonly createRecorder: () => InferenceMetricsRecorder;
+  private readonly activityLock: ActivityLock;
 
   constructor(private readonly deps: InferenceQueueDeps) {
     this.createRecorder = deps.createRecorder ?? (() => new InferenceMetricsRecorder());
+    this.activityLock = deps.activityLock ?? inferenceActivityLock;
   }
 
   getState(): InferenceState {
@@ -113,6 +118,13 @@ export class InferenceQueue implements IInferenceQueue {
     // The module never trusts the caller to have disabled its own control.
     if (this.isInFlight()) {
       return Promise.reject(new Error('An inference is already in progress.'));
+    }
+
+    // FR-033: refuse to start while voice input holds the shared lock.
+    if (!this.activityLock.tryAcquire('vlm')) {
+      return Promise.reject(
+        new Error('Voice input is in progress. Try again in a moment.'),
+      );
     }
 
     const active: ActiveRequest = { controller: new AbortController(), cancelled: false };
@@ -221,6 +233,8 @@ export class InferenceQueue implements IInferenceQueue {
       if (this.active === active) {
         this.active = null;
       }
+      // Release the shared voice⇄VLM lock (FR-033) on every exit path too.
+      this.activityLock.release('vlm');
     }
   }
 

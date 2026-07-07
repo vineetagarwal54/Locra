@@ -4,7 +4,17 @@
 
 **Created**: 2026-07-03
 
-**Status**: Draft
+**Status**: Implementation Complete — Device Validation Pending
+
+**Status detail**: All functional requirements (FR-001–FR-054) have code-level
+implementations and passing automated tests (188 tests as of 2026-07-07; see
+`tasks.md`). No physical-device validation has yet been recorded — see
+`quickstart-results.md`, which shows every scenario as "Pending physical-device
+validation." This feature MUST NOT be considered fully closed until the
+`quickstart.md` scenarios are actually run on a physical device and their
+results recorded. A small number of Phase 2 items (FR-034 through FR-038,
+excluding FR-035's backend) and one Phase 3 item (FR-043) are intentionally
+deferred out of Phase 001's closure — see `DEFERRED_BACKLOG.md`.
 
 **Input**: User description: "Build Locra Phase 1 — an Android app where a user captures a still image with their camera, types a question about it, and receives a streamed answer from a vision-language model running entirely on their device. Core user journey: open app, camera is ready, user points at something, types a question, taps submit, sees a streamed answer with performance metrics below it. The app must work in airplane mode from first inference onward. No network call is made during or after inference. No account, no login, no API key, no data leaves the device. The app has five screens: camera and prompt input, streamed answer with metrics, local Q&A history, model download and setup, and a benchmark visualization screen. The single hardest engineering problem in Phase 1 is memory-safe inference on a constrained Android device."
 
@@ -152,6 +162,19 @@ of this document for the reconciliation).
 - **FR-037**: System MUST allow the user to pinch-to-zoom the captured image shown on the answer screen, within bounded zoom limits, and MUST reset the zoom level when the user navigates away from that screen.
 - **FR-038**: System MUST present the user with a list of available on-device models, each showing its recommended status (based on device compatibility), storage size, and minimum RAM requirement, and MUST allow the user to select which single model is active at a time.
 
+> **Deferred from Phase 001 closure**: FR-034 (text-only fallback model) and
+> FR-038 (multi-model selector) are specified here but are **explicitly not
+> implemented** and **not required** to close this feature. Multi-model
+> selection and any additional/alternative model downloads are intentionally
+> out of scope for Phase 001 — they require their own model-lifecycle design
+> work (a second model's download/verify/storage lifecycle, a selection UI,
+> and a recommendation rule) that is better scoped as a dedicated future
+> feature. FR-036 (history search) and FR-037 (pinch-to-zoom) are likewise
+> deferred as low-priority UI polish. FR-035's backend (optional flag note)
+> is implemented (`historyStore.setFlag(id, flagged, note)`); only its UI
+> entry point remains deferred. See `DEFERRED_BACKLOG.md` for the full list,
+> rationale, and originating task IDs — nothing here is silently dropped.
+
 #### Phase 3 Additions (Multi-Turn Reliability, Vision-Once/Text-Chat, Resumable Threads)
 
 These requirements extend Phase 2's multi-turn follow-up capability
@@ -217,10 +240,23 @@ truth and this spec defers to it rather than assuming.
   Verification (d) confirms the current RN-layer image libraries expose no
   contrast operation, so that sub-step is omitted until a vetted native
   module exists (see Phase 3 Scope Note).
-- **FR-050**: System MUST send a system prompt that establishes the model's
-  role and explicit negative constraints (answer only from what is visible in
-  the image, do not speculate beyond it, keep answers concise), and MAY
-  include a small fixed set of example exchanges to steer output formatting.
+- **FR-050**: System MUST send a **persistent** system prompt that establishes
+  a bold, helpful, expansive assistant identity that draws freely on general
+  knowledge and does not refuse benign requests on scope grounds. The
+  persistent system prompt MUST NOT contain perception constraints
+  (visible-only, no-speculation, conciseness clamps): those constraints belong
+  exclusively to the turn-1 extraction wrapper (FR-041/FR-053), which governs
+  the single perception pass over the image and no later turn. **Correction
+  note**: an earlier revision of this requirement placed the visible-only /
+  no-speculation / concise constraints in the persistent prompt; because that
+  prompt governs every turn, it caused the model to refuse off-image
+  follow-ups ("my primary function is visual content") — the perception rule
+  had leaked into the assistant's identity. The constraints are now scoped to
+  the turn-1 wrapper, and a contract test
+  (`tests/contract/prompt-assembly.test.ts`) asserts the persistent prompt
+  contains no such scope language and that a benign off-image follow-up is not
+  fenced to the photo. System MAY include a small fixed set of example
+  exchanges to steer output formatting.
 - **FR-051**: System MUST configure generation parameters for every inference
   call using only fields confirmed to exist on the installed library's
   generation-configuration surface (`temperature`, `topP`, `minP`,
@@ -233,7 +269,9 @@ truth and this spec defers to it rather than assuming.
   verification), System MUST enforce an app-level output-length budget by
   observing the engine's generated-token count during streaming and stopping
   generation once a configured budget is reached, rather than assuming a
-  native field for this exists.
+  native field for this exists. The budget, temperature, and other generation
+  values are device-tunable defaults (currently sized for expansive,
+  multi-paragraph answers), not fixed constants.
 - **FR-053**: For the structured-extraction turn (FR-041), System MUST
   prompt the model to produce a specific JSON-shaped response, attempt to
   parse the result as JSON, and — if parsing fails — retry generation exactly
@@ -310,11 +348,12 @@ to fix cannot recur silently.
   specified so the requirement exists and is not forgotten, but no task in
   this batch's `tasks.md` implements it; it is tracked as a standalone future
   task to pick up once the vision-once/text-chat split (FR-041/FR-042) is
-  live and stable.
+  live and stable. Also listed in `DEFERRED_BACKLOG.md`.
 - **Rolling summarization of context beyond the sliding-window floor
   (referenced in FR-044) is explicitly out of scope for this batch.** Build
   it only once a real conversation is observed overflowing the context
   window in practice — do not build it speculatively ahead of that evidence.
+  Also listed in `DEFERRED_BACKLOG.md`.
 - **FR-051/FR-052/FR-053 are bounded by `research.md`'s Phase 3 API
   Verification findings, not by the feature input's original assumptions.**
   The feature input that commissioned this batch of work asserted `topK`,

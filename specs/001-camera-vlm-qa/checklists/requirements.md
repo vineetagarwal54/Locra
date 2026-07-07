@@ -37,3 +37,27 @@
   defaults are documented in the spec's Assumptions section instead.
 - Ready for `/speckit-plan` (or `/speckit-clarify` if the user wants to
   revisit any documented assumption first).
+
+### Scope clarification (added during Phase 001 closure cleanup)
+
+The "No implementation details" and "No implementation details leak into
+specification" items above were evaluated against, and remain true of, the
+**original Phase 1 product specification** — the requirements as originally
+written (FR-001 through FR-024, the five User Stories, and the Success
+Criteria) describe user-facing behavior without naming a tech stack.
+
+They do **not** apply to the same standard to the **Phase 2 and Phase 3
+Additions** (`FR-025` onward, especially `FR-039` onward). Those sections
+were authored later, as implementation-driven corrections and bug fixes
+(e.g. FR-050's correction of a scope-refusal bug, FR-051/FR-052/FR-053's
+grounding in `research.md`'s verified library API surface) — they
+deliberately reference concrete library APIs, field names, and verified
+technical constraints because their entire purpose is to pin the spec to
+what was actually found true of the installed dependencies (constitution
+Principle IX, "verify before assuming"), not to describe a product need from
+a blank slate. This is intentional and does not represent a checklist
+failure; it reflects a different authoring context that the checklist
+above was never designed to evaluate. No spec rewrite was performed to
+force those addenda back into implementation-detail-free language, since
+doing so would remove the exact information (verified API reality) they
+exist to record.

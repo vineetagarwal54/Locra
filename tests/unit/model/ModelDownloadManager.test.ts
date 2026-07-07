@@ -116,6 +116,45 @@ describe('ModelDownloadManager', () => {
     expect(manager.getState().downloadStatus).toBe('failed');
   });
 
+  it('deduplicates repeated startDownload calls while one transfer is active', async () => {
+    const { manager, fetch, verifyIntegrity } = makeHarness();
+    const fetchDeferred = defer<FetchResult>();
+    fetch.mockReturnValue(fetchDeferred.promise);
+
+    const firstStart = manager.startDownload();
+    await flush();
+    const secondStart = manager.startDownload();
+
+    expect(secondStart).toBe(firstStart);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(manager.getState().downloadStatus).toBe('downloading');
+
+    fetchDeferred.resolve(successfulFetchResult());
+    await firstStart;
+
+    expect(verifyIntegrity).toHaveBeenCalledTimes(1);
+    expect(manager.getState().downloadStatus).toBe('downloaded');
+  });
+
+  it('keeps cancelled state from being overwritten by the rejected in-flight fetch', async () => {
+    const { manager, fetch, cancelFetching } = makeHarness();
+    const fetchDeferred = defer<FetchResult>();
+    fetch.mockReturnValue(fetchDeferred.promise);
+
+    const startPromise = manager.startDownload();
+    await flush();
+    expect(manager.getState().downloadStatus).toBe('downloading');
+
+    await manager.cancelDownload();
+    expect(cancelFetching).toHaveBeenCalledWith(...SOURCES);
+    expect(manager.getState().downloadStatus).toBe('not_started');
+
+    fetchDeferred.reject(new Error('Download cancelled.'));
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(manager.getState().downloadStatus).toBe('not_started');
+    expect(manager.isReadyForInference()).toBe(false);
+  });
+
   it('pauseDownload() no-ops safely when there is nothing active to pause', async () => {
     const { manager, pauseFetching } = makeHarness();
     // The underlying fetcher throws ResourceFetcherAlreadyPaused when idle.
@@ -232,7 +271,7 @@ describe('ModelDownloadManager', () => {
 
   describe('reconcile (launch-time disk reconciliation)', () => {
     it('reports ready when a present model has the expected size, without re-hashing a multi-GB file', async () => {
-      const { manager, listDownloadedModels, getFileSize, verifyIntegrity } = makeHarness();
+      const { manager, listDownloadedModels, getFileSize, verifyIntegrity, getModelConfig } = makeHarness();
       listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
       getFileSize.mockResolvedValue(EXPECTED_SIZE);
 
@@ -243,7 +282,8 @@ describe('ModelDownloadManager', () => {
       // fails), so launch trusts that cached result — a cheap size check — instead
       // of loading 2.4 GB into memory to re-hash it on every cold start.
       expect(verifyIntegrity).not.toHaveBeenCalled();
-      expect(getFileSize).not.toHaveBeenCalled();
+      expect(getModelConfig).toHaveBeenCalledTimes(1);
+      expect(getFileSize).toHaveBeenCalledWith(LOCAL_MODEL_PATH);
       expect(manager.getState().downloadStatus).toBe('downloaded');
       expect(manager.getState().integrityVerified).toBe(true);
       expect(manager.isReadyForInference()).toBe(true);
