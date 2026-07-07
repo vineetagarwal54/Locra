@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Image } from 'expo-image';
 import type { ReactElement } from 'react';
@@ -6,6 +7,7 @@ import { FlatList, Pressable, StyleSheet, Text, type ListRenderItem, View } from
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { haptics, theme } from '../constants/theme';
+import { assessAnswerQuality } from '../inference/AnswerPostProcessor';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
 
@@ -44,17 +46,27 @@ export function HistoryScreen({ navigation }: Props) {
     navigation.navigate('Benchmark');
   }, [navigation]);
 
+  const onContinue = useCallback(
+    (sessionId: string): void => {
+      void haptics.tap();
+      // FR-046: reopening a thread hydrates its full turn list and continues it.
+      navigation.navigate('Answer', { sessionId });
+    },
+    [navigation]
+  );
+
   const renderItem: ListRenderItem<HistorySession> = useCallback(
     ({ item }): ReactElement => (
       <HistoryItem
         session={item}
+        onContinue={onContinue}
         onDelete={(id) => {
           void haptics.tap();
           deleteSession(id);
         }}
       />
     ),
-    [deleteSession]
+    [deleteSession, onContinue]
   );
 
   return (
@@ -111,14 +123,20 @@ export function HistoryScreen({ navigation }: Props) {
 
 interface HistoryItemProps {
   session: HistorySession;
+  onContinue: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
-function HistoryItem({ session, onDelete }: HistoryItemProps) {
+function HistoryItem({ session, onContinue, onDelete }: HistoryItemProps) {
   const turns = getSessionTurns(session);
 
   return (
-    <View style={styles.card}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Continue chat about ${session.question}`}
+      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      onPress={() => onContinue(session.id)}
+    >
       <View style={styles.cardHeader}>
         <Image
           style={styles.thumb}
@@ -131,6 +149,7 @@ function HistoryItem({ session, onDelete }: HistoryItemProps) {
             {session.question}
           </Text>
         </View>
+        <MaterialCommunityIcons name="chevron-right" size={22} color={theme.textMuted} />
       </View>
 
       <View style={styles.turnList}>
@@ -142,7 +161,10 @@ function HistoryItem({ session, onDelete }: HistoryItemProps) {
                 <Text style={styles.turnQuestion}>{turn.question}</Text>
               </>
             ) : null}
-            <Text style={styles.turnAnswer}>{turn.answer}</Text>
+            <Text style={styles.turnAnswer} numberOfLines={4}>
+              {turn.answer}
+            </Text>
+            <AnswerQualityTag answer={turn.answer} />
           </View>
         ))}
       </View>
@@ -165,15 +187,44 @@ function HistoryItem({ session, onDelete }: HistoryItemProps) {
 
       <View style={styles.cardFooter}>
         {session.flagged ? <Text style={styles.flaggedLabel}>Flagged</Text> : <View />}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Delete history entry for ${session.question}`}
-          style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
-          onPress={() => onDelete(session.id)}
-        >
-          <Text style={styles.deleteButtonLabel}>Delete</Text>
-        </Pressable>
+        <View style={styles.footerActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Continue chat about ${session.question}`}
+            style={({ pressed }) => [styles.continueButton, pressed && styles.continueButtonPressed]}
+            onPress={() => onContinue(session.id)}
+          >
+            <Text style={styles.continueButtonLabel}>Continue</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Delete history entry for ${session.question}`}
+            style={({ pressed }) => [styles.deleteButton, pressed && styles.deleteButtonPressed]}
+            onPress={() => onDelete(session.id)}
+          >
+            <Text style={styles.deleteButtonLabel}>Delete</Text>
+          </Pressable>
+        </View>
       </View>
+    </Pressable>
+  );
+}
+
+/**
+ * FR-054: persisted answers get the same tail-quality check the live answer
+ * screen shows, derived from the text itself — no schema change needed.
+ */
+function AnswerQualityTag({ answer }: { answer: string }) {
+  const verdict = assessAnswerQuality(answer);
+  if (verdict === 'complete') {
+    return null;
+  }
+  return (
+    <View style={styles.qualityTag}>
+      <MaterialCommunityIcons name="alert-circle-outline" size={12} color={theme.textSecondary} />
+      <Text style={styles.qualityTagText}>
+        {verdict === 'truncated' ? 'May be cut off' : 'Repetition trimmed'}
+      </Text>
     </View>
   );
 }
@@ -311,6 +362,40 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     padding: theme.space4,
     marginBottom: theme.space4,
+  },
+  cardPressed: {
+    backgroundColor: theme.surface2,
+  },
+  footerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  continueButton: {
+    paddingVertical: theme.space2,
+    paddingHorizontal: theme.space4,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accentGlow,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    marginRight: theme.space2,
+  },
+  continueButtonPressed: {
+    backgroundColor: theme.surface3,
+  },
+  continueButtonLabel: {
+    color: theme.accent,
+    fontSize: theme.fontSizeSm,
+    fontWeight: '700',
+  },
+  qualityTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: theme.space1,
+  },
+  qualityTagText: {
+    color: theme.textSecondary,
+    fontSize: theme.fontSizeXs,
+    marginLeft: theme.space1,
   },
   cardHeader: {
     flexDirection: 'row',

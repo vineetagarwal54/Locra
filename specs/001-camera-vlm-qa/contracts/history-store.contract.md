@@ -45,3 +45,18 @@ interface HistoryStore {
   `@react-native-async-storage/async-storage` or any SQLite binding
   (Principle VIII enforced structurally, same pattern as the network-call
   prohibition in the inference module).
+
+## Phase 3 addendum (FR-041, FR-044–FR-046)
+
+- A `QASession` now carries `pinnedExtraction: string | null` (data-model.md):
+  the structured visual extraction produced on turn 1, pinned as un-evictable
+  context for every later turn. `save()` MUST persist it verbatim; a follow-up
+  save MUST carry forward the base session's `pinnedExtraction` unchanged.
+- Sessions read back from storage that predate the field (Phase 1/2 records)
+  MUST normalize `pinnedExtraction` to `null` rather than `undefined`, so
+  callers can rely on the field's presence.
+- A session IS the resumable chat-thread record (FR-045): `get(id)` returning
+  a `'completed'` session with N turns is the sole hydration source for
+  reopening that thread from history (FR-046) — there is no separate thread
+  entity, and `save()` on a continued thread overwrites the same id with the
+  appended `turns[]`.

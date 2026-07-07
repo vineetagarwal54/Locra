@@ -30,6 +30,11 @@ yarn-error.*
 
 # macOS
 .DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
 *.pem
 
 # local env files

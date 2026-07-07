@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react';
 import {
-  DEFAULT_SYSTEM_PROMPT,
   LFM2_5_VL_1_6B_QUANTIZED,
   SlidingWindowContextStrategy,
   useLLM,
 } from 'react-native-executorch';
 
 import { RESPONSE_TOKEN_BUDGET } from './GenerationLimits';
+import { LOCRA_GENERATION_CONFIG } from './GenerationTuning';
+import { LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // This file is the ONE sanctioned `useLLM` call site in the entire codebase
@@ -44,6 +45,11 @@ export interface InferenceEngineHandle {
   getTotalTokenCount(): number;
   /** Current managed-mode message history length, owned by `useLLM`. */
   getMessageHistoryLength(): number;
+  /**
+   * Clears the managed conversation history (FR-047) so a new capture starts
+   * from a clean slate with zero context bleed from the prior thread.
+   */
+  clearHistory(): void;
   /** Human-readable load/generation error, or null. */
   getError(): string | null;
   /** Fires on every streaming-relevant state change; returns an unsubscribe. */
@@ -82,10 +88,12 @@ export function useInferenceEngine(): InferenceEngineHandle {
 
     current.configure({
       chatConfig: {
-        systemPrompt: DEFAULT_SYSTEM_PROMPT,
+        systemPrompt: LOCRA_SYSTEM_PROMPT,
         initialMessageHistory: [],
         contextStrategy: new SlidingWindowContextStrategy(RESPONSE_TOKEN_BUDGET),
       },
+      // FR-051: only research.md-verified fields — no topK/maxTokens on 0.9.2.
+      generationConfig: LOCRA_GENERATION_CONFIG,
     });
     configuredRef.current = true;
   };
@@ -116,6 +124,13 @@ export function useInferenceEngine(): InferenceEngineHandle {
       getPromptTokenCount: (): number => llmRef.current.getPromptTokenCount(),
       getTotalTokenCount: (): number => llmRef.current.getTotalTokenCount(),
       getMessageHistoryLength: (): number => llmRef.current.messageHistory.length,
+      clearHistory: (): void => {
+        // deleteMessage(0) drops every message from index 0 onward — the
+        // managed-mode way to empty the conversation without re-configuring.
+        if (llmRef.current.messageHistory.length > 0) {
+          llmRef.current.deleteMessage(0);
+        }
+      },
       getError: (): string | null => (llmRef.current.error ? llmRef.current.error.message : null),
       subscribe: (listener: () => void): (() => void) => {
         listeners.add(listener);

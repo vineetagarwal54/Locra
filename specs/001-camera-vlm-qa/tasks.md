@@ -211,6 +211,90 @@ touches model loading."
 
 ---
 
+## Phase 10: Phase 3 Enhancements (Multi-Turn Reliability, Vision-Once Text-Chat, Resumable Threads, Input/Output Quality)
+
+**Purpose**: Six workstreams, in build order, layered onto the completed Phase 1+2 app: (1) fix the T054 multi-turn context-loss report, (2) split inference into a vision-once extraction turn plus text-only follow-up turns on one long-lived engine instance, (3) make pinned-extraction-plus-sliding-window the explicit context-management floor, (4) persist and resume full chat threads with a clean-slate reset on new capture, (5) preprocess captured images and tighten the system prompt, (6) tune generation output quality within the library's actually-confirmed API surface. Numbering continues from T064.
+
+**Do NOT implement yet — this phase is written for the user to trigger one task at a time.**
+
+**Device-gated tasks** are marked `[DEVICE]` — they require a physical Android 13+ device (an EAS-built dev client, per `plan.md`'s Build Strategy; local Gradle builds remain permanently out of scope on this machine) and cannot be completed by a unit/integration test alone.
+
+**Verified-API constraint governing this whole phase** (`research.md`'s "Phase 3 API Verification", checked against the actually-installed `react-native-executorch` 0.9.2): `topK`, native `maxTokens`, and native `sequenceLength` do **not** exist on this version's `GenerationConfig`, and no grammar/JSON-constrained decoding feature exists at all. Every task below that touches generation config or output-length/structure enforcement is written to that verified reality — do not reintroduce any of those three names into code without re-verifying against whatever `react-native-executorch` version is installed at the time.
+
+### Workstream 1 — Multi-turn context fix (T054 root cause; highest priority)
+
+- [X] T065 [P] Contract test: turn 2's context contains turn 1 under realistic timing — add a test (e.g. `tests/unit/store/inferenceStore.followUpContext.test.ts`) that simulates the render-tick delay between a completed first turn and `useLLM`'s `messageHistory` update (`research.md`'s root-cause note, suspect 1) and asserts a follow-up submitted in that window still carries turn 1's context rather than rejecting or silently losing it (FR-040); must fail against the current fixed-250ms `waitForMessageHistory` (`src/store/inferenceStore.ts:276-310`) before T066 — blocks: T066
+- [X] T066 Replace the fixed-timeout race with a deterministic wait — rework `waitForMessageHistory` in `src/store/inferenceStore.ts` so a follow-up waits on the engine's actual settled state rather than a hardcoded 250ms timer, satisfying T065 (FR-039, FR-040) — depends on T065 — blocks: T067
+- [X] T067 Harden the engine-host mount against mid-session remount — make `src/navigation/AppNavigator.tsx`'s conditional `InferenceEngineHost` mount (currently gated on the `engineReady` boolean derived from `modelStore`) structurally unable to unmount/remount once mounted for the app process's lifetime, and add a unit test asserting `configureForLongResponses()` (`src/inference/useInferenceEngine.ts:77-91`) never re-fires with `initialMessageHistory: []` after its first successful configure (FR-039) — depends on T066 (same subsystem, sequenced to avoid conflicting edits) — blocks: T068
+- [ ] T068 [DEVICE] Manual on-device validation of multi-turn context — on a physical Android 13+ device, run a 3+ turn follow-up conversation about one captured image and confirm the final turn's answer correctly reflects turn 1's context; record the scenario and result in `quickstart.md` — depends on T066, T067
+
+### Workstream 2 — Vision-once → text-chat (single VLM instance, no second model)
+
+- [X] T069 [P] Unit tests for the structured-extraction prompt — `tests/unit/inference/ExtractionPrompt.test.ts`: the built prompt instructs labeled findings for subject/object, visible features, visible text, and visible condition; must fail before implementation (FR-041) — blocks: T070
+- [X] T070 Implement the extraction-prompt builder — `src/inference/ExtractionPrompt.ts`, satisfying T069 (FR-041) — depends on T069 — blocks: T072
+- [X] T071 [P] Unit tests for JSON extraction parsing + single retry — `tests/unit/inference/ExtractionParser.test.ts`: well-formed JSON parses to the labeled fields; malformed JSON triggers exactly one corrective retry using the extraction prompt; a second failure falls back to storing the raw text rather than throwing; must fail before implementation (FR-053) — blocks: T072
+- [X] T072 Implement extraction parsing + retry — `src/inference/ExtractionParser.ts`, satisfying T071; consumes T070's prompt builder for the corrective retry (FR-053) — depends on T070, T071 — blocks: T073
+- [X] T073 Wire turn 1 as the extraction turn — update `saveFirstTurnSession`'s call path in `src/store/inferenceStore.ts` to run the image through T070's prompt and T072's parser, store the result on the new `QASession.pinnedExtraction` field (`data-model.md`), and surface the parsed findings as the visible turn-1 answer (FR-041, FR-053) — depends on T072 — blocks: T074
+- [X] T074 Wire turn 2+ as pinned-context, text-only turns — update the follow-up path in `src/inference/InferenceQueue.ts`/`src/store/inferenceStore.ts` so every follow-up's constructed context explicitly includes `pinnedExtraction` (FR-042) rather than relying solely on `useLLM`'s own raw `messageHistory`; add a unit test asserting the pinned extraction is present in a follow-up's context even when the underlying message history has been trimmed (FR-042, FR-044) — depends on T073 — blocks: T076
+- [ ] T075 [DEFERRED — do not schedule work against this yet] "Look again" re-extraction (FR-043) — re-run the structured-extraction step against a thread's original stored image without starting a new thread. Per the Phase 3 Scope Note in `spec.md`, this is specified but explicitly not part of this batch; pick up only once T069–T074 are live and stable on-device.
+
+### Workstream 3 — Context management
+
+- [X] T076 Enforce the pinned-plus-sliding-window floor explicitly — extend the context construction introduced in T074 so it demonstrably combines `pinnedExtraction` with the most recent K verbatim turns via the existing `SlidingWindowContextStrategy`, and add a unit test asserting the pinned extraction is never evicted even when K is exceeded (FR-044) — depends on T074 — blocks: none
+- [ ] T077 [P] [DEFERRED — do not schedule work against this yet] Rolling summarization of turns older than the sliding window — explicitly out of scope for this batch (FR-044 note, Phase 3 Scope Note in `spec.md`); build only once a real conversation is observed overflowing the context window, not speculatively.
+
+### Workstream 4 — Resumable chats + state reset
+
+- [X] T078 [P] Unit tests for chat-thread hydration — `tests/unit/store/inferenceStore.hydration.test.ts`: hydration loads the full persisted turn list, a post-hydration follow-up appends to the SAME session id without hanging (fresh-process path), unknown ids return null, reset clears thread + engine history, and a completed first turn records its id as the active thread (FR-045, FR-046) — blocks: T079
+- [X] T079 Implement thread hydration — `hydrateSession(sessionId)` + `activeSessionId` on `src/store/inferenceStore.ts`, satisfying T078 (FR-046). Includes the fresh-process deadlock fix: the pre-send message-history wait is skipped when no turn has been served by this engine instance in this process (`engineTurnsServed`), since a hydrated thread's pinned-context prompt is self-contained — depends on T078 — blocks: T080
+- [X] T080 Wire History → continue navigation — `HistoryScreen.tsx` cards are tappable (whole card + explicit Continue button), navigating to `Answer` keyed by `{ sessionId }`; `AnswerScreen.tsx` seeds its thread read-only from `historyStore.get()` and hydrates via T079 in a mount effect; `Answer` route params are now a union of fresh-ask and resume modes; delete/clear unchanged (FR-046) — depends on T079 — blocks: T081
+- [X] T081 Implement commit-on-navigate-away + clean-slate reset — `resetActiveChat()` on `inferenceStore` (cancels in-flight, clears `lastSavedSession`/`activeTurn`, wipes the engine's managed conversation history via the new `InferenceEngineHandle.clearHistory()`, resets to idle), wired to `CaptureScreen`'s navigation `focus` listener so every return-to-camera is a clean slate; completed turns were already committed at completion, and an in-flight turn on navigate-away is cancelled per FR-007 (never partial-saved); covered by T078's reset test + T096 (FR-047) — depends on T080 — blocks: T083
+- [X] T082 [P] Call `interrupt()` before the chat screen unmounts — unmount effect in `AnswerScreen.tsx` cancels any in-flight generation; asserted by the screen-wiring test in `tests/unit/store/inferenceStore.hydration.test.ts` (no component-render test framework in this repo — source-assertion pattern per existing convention) (FR-048) — depends on none — blocks: T083
+- [ ] T083 [DEVICE] Manual on-device validation of resumable threads — run `quickstart.md` Scenario 9 (added) on a physical device and record pass/fail; requires a fresh EAS dev-client build since this batch adds the `expo-image-manipulator` native module — depends on T081, T082
+
+### Workstream 5 — Input enhancements
+
+- [X] T084 Add the `expo-image-manipulator` dependency — installed `~56.0.20` via `npx expo install` (SDK 56 band); verified its action surface at implementation time: resize/rotate/flip/crop only, NO contrast action — recorded as `research.md` Phase 3 API Verification (d) (FR-049) — blocks: T085
+- [X] T085 [P] Unit tests for the image-enhancement stage — `tests/unit/inference/ImageEnhancer.test.ts` (10 tests): orientation-bake pass always runs first; large images downscale to the 1024 intermediate ceiling on the correct axis; extreme aspect ratios center-crop to 16:9; provided subject regions clamp to bounds; normal frames stay uncropped (the sensible centered default is the full frame); enhance→preprocess chaining and the fallback-on-failure path (FR-049) — depends on T084 — blocks: T086
+- [X] T086 Implement the image-enhancement stage — `src/inference/ImageEnhancer.ts`: two-pass `manipulateAsync` (EXIF-orientation bake → crop/downscale), `resolveCropRegion` with subject-region clamping, 1024 intermediate ceiling. Contrast normalization omitted — impossible at the RN layer with current dependencies (research.md (d)); spec FR-049 amended accordingly — depends on T085 — blocks: T087
+- [X] T087 Wire the enhancement stage into the inference pipeline — `prepareImageForInference` (enhance → 512 ceiling, with graceful fallback to the raw capture if enhancement fails) is now `createInferenceQueue`'s default `preprocess`; asserted in `tests/unit/inference/InferenceQueue.test.ts` (FR-049) — depends on T086 — blocks: none
+- [X] T088 [P] Author the negative-constraint system prompt — `src/inference/SystemPrompt.ts` (`LOCRA_SYSTEM_PROMPT`: role + visible-only/no-speculation/concise/finish-sentences constraints) replaces `DEFAULT_SYSTEM_PROMPT` in `configureForLongResponses()`; asserted in `tests/unit/inference/GenerationTuning.test.ts` (FR-050) — depends on none — blocks: none
+
+### Workstream 6 — Output enhancements
+
+- [X] T089 [P] Unit tests for tuned generation config — `tests/unit/inference/GenerationTuning.test.ts`: `LOCRA_GENERATION_CONFIG` equals exactly `{ temperature: 0.35, repetitionPenalty: 1.05, minP: 0.05 }`, no `topK`/`maxTokens`/`sequenceLength` anywhere, and `useInferenceEngine` passes it to `configure()` (FR-051) — blocks: T090
+- [X] T090 Apply the tuned generation config — `src/inference/GenerationTuning.ts` + `configureForLongResponses()` now passes `generationConfig: LOCRA_GENERATION_CONFIG` alongside `chatConfig`, satisfying T089 (FR-051) — depends on T089 — blocks: none
+- [X] T091 [P] Unit tests for the app-level output-length cap — extended `tests/unit/inference/InferenceQueue.test.ts`: an engine streaming indefinitely is aborted once `generatedTokenCount` reaches `OUTPUT_TOKEN_BUDGET` (256) and still resolves `'completed'` with the partial response + a visible length-limit notice; under-budget runs are untouched; a budget stop is NOT a user cancel (no `'cancelled'` transition, metrics populated) (FR-052) — blocks: T092
+- [X] T092 Implement the app-level output-length cap — `onToken` now carries `generatedTokenCount`; the queue aborts the request signal at budget without setting the cancelled flag, and the engine-adapter contract now requires generate to RESOLVE with the partial on abort (the bridge in `inferenceStore.ts` implements this, including skipping the post-submit history wait after an interrupt) (FR-052) — depends on T091 — blocks: none
+- [X] T093 [P] Unit tests for post-processing (trim / truncation / loop detection) — `tests/unit/inference/AnswerPostProcessor.test.ts` (8 tests): trim, mid-sentence truncation detection, trailing-loop detection with repeat collapsing, legitimate non-loop repetition NOT flagged, empty-answer and pure-read (`assessAnswerQuality`) cases (FR-054) — blocks: T094
+- [X] T094 Implement post-processing — `src/inference/AnswerPostProcessor.ts` (trim + tail assessment + loop collapsing), applied by the queue on every completion before the answer is visible/persisted; distinct indicators: the `limitWarning` notice card on `AnswerScreen.tsx`, and a per-turn quality tag (`AnswerQualityTag`) on `HistoryScreen.tsx` derived pure-functionally from the persisted text — no schema change (FR-054) — depends on T093 — blocks: T095
+- [ ] T095 [DEVICE] On-device validation of output quality — run `quickstart.md` Scenario 10 (added) on a physical device and record pass/fail; requires the same fresh EAS build as T083 — depends on T090, T092, T094
+
+### Cross-cutting
+
+- [X] T096 Integration test: full vision-once → multi-turn → resumed-thread flow — `tests/integration/vision-once-chat-flow.test.ts`: real `inferenceStore` + real `HistoryStore` over in-memory storage (only the engine handle and native modules mocked), covering capture → extraction → two follow-ups → reset (navigate away) → hydrate from history → one more follow-up; asserts pinned extraction in every follow-up prompt, single session id throughout, four persisted turns — depends on T074, T081, T082
+- [X] T097 Update contracts for Phase 3 — `contracts/inference-pipeline.contract.md` gained a Phase 3 addendum (abort-resolves adapter contract, `onToken` token-count arg + output cap, deterministic history wait with the hydrated-thread skip, enhance→ceiling preprocessing, post-processing, pinned extraction); `contracts/history-store.contract.md` gained the `pinnedExtraction` persistence + legacy-normalization + session-as-thread rules — depends on T066, T072, T092, T094
+
+**Checkpoint**: Multi-turn context loss is root-caused and fixed; vision-once/text-chat is the standing inference model; pinned-plus-sliding-window context management is explicit and tested; chat threads are fully resumable with a clean-slate reset on new capture; captured images are enhanced before inference; output quality is tuned within the library's verified API surface. FR-043 (Look again) and rolling summarization remain deliberately deferred.
+
+---
+
+## Phase 10 Dependencies & Execution Order
+
+- **Workstream 1 (T065–T068)**: No dependency on the other five workstreams — start immediately; this is the user's stated highest priority.
+- **Workstream 2 (T069–T075)**: Independent of Workstream 1's fix, but T073/T074 touch the same `inferenceStore.ts`/`InferenceQueue.ts` files Workstream 1 modifies — sequence Workstream 2's file-touching tasks (T073, T074) after T066/T067 land to avoid merge conflicts, even though there is no functional dependency.
+- **Workstream 3 (T076–T077)**: Depends on Workstream 2's T074 (context construction must exist before it can be extended).
+- **Workstream 4 (T078–T083)**: Independent of Workstreams 2/3; T082 is independent of T078–T081 and can be done anytime.
+- **Workstream 5 (T084–T088)**: Independent of all other workstreams; T088 (system prompt) is independent of T084–T087 (image enhancement).
+- **Workstream 6 (T089–T095)**: Independent of all other workstreams; its three task pairs (T089–T090, T091–T092, T093–T094) are mutually independent of each other.
+- **Cross-cutting (T096–T097)**: T096 depends on Workstreams 2 and 4 being complete; T097 depends on the specific fixes/features it documents.
+
+### Parallel Opportunity
+
+With more than one contributor, Workstreams 1, 4, 5, and 6 can all start in parallel immediately; Workstream 2 should sequence its `inferenceStore.ts`/`InferenceQueue.ts`-touching tasks after Workstream 1 lands; Workstream 3 waits on Workstream 2.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

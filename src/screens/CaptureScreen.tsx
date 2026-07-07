@@ -53,6 +53,15 @@ export function CaptureScreen({ navigation }: Props) {
     }
   }, [hasPermission, requestPermission]);
 
+  // FR-047: returning to the camera means the previous chat thread is over.
+  // Its completed turns are already committed to history, so reset the active
+  // chat (and the engine's conversation memory) for a clean slate per capture.
+  useEffect(() => {
+    return navigation.addListener('focus', () => {
+      useInferenceStore.getState().resetActiveChat();
+    });
+  }, [navigation]);
+
   const inFlight =
     status === 'preprocessing' || status === 'loading_model' || status === 'streaming';
   const hasImage = selectedImagePath !== null;

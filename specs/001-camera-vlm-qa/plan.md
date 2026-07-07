@@ -224,3 +224,56 @@ discoveries/interpretations to confirm with you, not complexity being
 smuggled past the gate. Nothing here requires a "simpler alternative was
 rejected because" justification; there is no 4th project, no added
 architectural layer beyond what the constitution already mandates.
+
+## Phase 3 Technical Notes (Multi-Turn Reliability, Vision-Once, Resumable Threads)
+
+Covers spec.md's Phase 3 Additions (FR-039–FR-054). No new project/backend;
+all changes stay inside the existing `src/inference/`, `src/store/`,
+`src/history/`, `src/screens/` boundaries from the Project Structure above.
+
+**New dependency**: `expo-image-manipulator` — for FR-049's auto-orient/
+crop/contrast-normalize step. This runs *before*
+`src/inference/ImagePreprocessor.ts`'s existing 512×512-ceiling resize (which
+uses `react-native-nitro-image` and stays exactly as-is per Principle IV) —
+the two are sequenced stages, not a replacement of one by the other. Also
+carries forward the already-flagged `expo-clipboard` dependency for T055
+(unimplemented Phase 2 task, still pending).
+
+**Generation config ceiling**: per `research.md`'s Phase 3 API Verification,
+`GenerationConfig` on the installed `react-native-executorch` 0.9.2 exposes
+only `temperature`, `topP`, `minP`, `repetitionPenalty`,
+`outputTokenBatchSize`, `batchTimeInterval` — no `topK`, no `maxTokens`, no
+`sequenceLength`. FR-051/FR-052 are scoped to that reality: tuning goes
+through `configure({ generationConfig })` (currently unused —
+`useInferenceEngine.ts`'s `configureForLongResponses()` today only sets
+`chatConfig`, never `generationConfig`, so model-registry defaults
+`{temperature: 0.1, minP: 0.15, repetitionPenalty: 1.05}` are what actually
+run); output-length capping goes through watching
+`getGeneratedTokenCount()` (already exposed on `InferenceEngineHandle`) and
+calling `interrupt()`, not a config field.
+
+**No new architectural boundary for the extraction/pinned-context work**:
+the structured-extraction turn (FR-041) and pinned-context construction
+(FR-044) are additional responsibility inside the existing
+`src/inference/` module (a new pure `.ts` file, e.g.
+`ExtractionPrompt.ts`/`ContextBuilder.ts`, to be named at implementation
+time) — still zero UI imports, same Principle X boundary already
+established for `InferenceQueue.ts`.
+
+**Resumable threads (FR-045–FR-047) reuse `HistoryStore`/`historyStore`
+as-is**: `QASession.turns` (already implemented, `src/types/models.ts`) is
+already the full-thread record the spec calls for — no new persisted entity
+is introduced. The work here is screen-level: keying a chat screen by
+session id and wiring history-tap → hydrate → continue, which today's
+`HistoryScreen.tsx` does not do (its cards are read-only; tapping one does
+not navigate anywhere).
+
+**Root-cause fix for T054 (FR-039/FR-040) touches, at most, three existing
+files** — no new module: `src/store/inferenceStore.ts`'s
+`waitForMessageHistory` (replace the fixed 250 ms race with a deterministic
+wait, per `research.md`'s root-cause note), `src/navigation/AppNavigator.tsx`'s
+conditional `InferenceEngineHost` mount (harden so it cannot remount
+mid-app-lifetime), and `src/inference/useInferenceEngine.ts`'s
+`configureForLongResponses` (confirm it truly never re-fires after the first
+successful configure). See `research.md`'s root-cause note for the exact
+line references informing this fix.

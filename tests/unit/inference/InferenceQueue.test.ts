@@ -2,7 +2,15 @@
 // native react-native-nitro-image module at require time. Stub it out — this
 // suite injects its own preprocess and never touches the real backend.
 jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
+jest.mock('expo-image-manipulator', () => ({
+  manipulateAsync: jest.fn(),
+  SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
+}));
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import {
   InferenceQueue,
@@ -179,5 +187,133 @@ describe('InferenceQueue', () => {
     await queue.submit(request);
     expect(queue.getState().status).toBe('errored');
     await expect(queue.submit(request)).resolves.toBeUndefined();
+  });
+});
+
+describe('InferenceQueue output-length cap (FR-052)', () => {
+  it('aborts generation once the token budget is reached and still resolves completed', async () => {
+    // Engine that streams one token per tick forever unless the signal aborts.
+    let streamedTokens = 0;
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken, signal) =>
+        new Promise((resolve) => {
+          const interval = setInterval(() => {
+            streamedTokens += 1;
+            onToken('word '.repeat(streamedTokens).trim(), streamedTokens);
+          }, 1);
+          signal.addEventListener('abort', () => {
+            clearInterval(interval);
+            // Contract: on abort, generate resolves with the partial response.
+            resolve({
+              response: 'word '.repeat(streamedTokens).trim(),
+              tokenCount: streamedTokens,
+            });
+          });
+        }),
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    const state = queue.getState();
+    expect(state.status).toBe('completed');
+    expect(streamedTokens).toBeLessThan(OUTPUT_TOKEN_BUDGET + 8);
+    expect(state.response).not.toBe('');
+    expect(state.limitWarning).toMatch(/length limit/i);
+  });
+
+  it('does not abort or warn when generation finishes under the budget', async () => {
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        onToken('short answer.', 3);
+        return Promise.resolve({ response: 'short answer.', tokenCount: 3 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    const state = queue.getState();
+    expect(state.status).toBe('completed');
+    expect(state.limitWarning).toBeNull();
+  });
+
+  it('a budget stop is not a user cancel — the completed answer is persisted-eligible', async () => {
+    const seen: InferenceState[] = [];
+    let streamedTokens = 0;
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken, signal) =>
+        new Promise((resolve) => {
+          const interval = setInterval(() => {
+            streamedTokens += 1;
+            onToken('t'.repeat(streamedTokens), streamedTokens);
+          }, 1);
+          signal.addEventListener('abort', () => {
+            clearInterval(interval);
+            resolve({ response: 't'.repeat(streamedTokens), tokenCount: streamedTokens });
+          });
+        }),
+    };
+    const queue = makeQueue({ engine });
+    queue.subscribe((s) => seen.push({ ...s }));
+
+    await queue.submit(request);
+
+    expect(seen.some((s) => s.status === 'cancelled')).toBe(false);
+    expect(queue.getState().status).toBe('completed');
+    expect(queue.getState().metrics).not.toBeNull();
+  });
+});
+
+describe('InferenceQueue post-processing (FR-054)', () => {
+  it('trims the completed response and flags a truncated tail via the limit notice', async () => {
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        const raw = '  The mug is blue and the  ';
+        onToken(raw, 6);
+        return Promise.resolve({ response: raw, tokenCount: 6 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    const state = queue.getState();
+    expect(state.status).toBe('completed');
+    expect(state.response).toBe('The mug is blue and the');
+    expect(state.limitWarning).toMatch(/cut off/i);
+  });
+
+  it('collapses a looping tail and flags it', async () => {
+    const looping = 'It is a red bicycle. It is a red bicycle. It is a red bicycle.';
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        onToken(looping, 24);
+        return Promise.resolve({ response: looping, tokenCount: 24 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    const state = queue.getState();
+    expect(state.response).toBe('It is a red bicycle.');
+    expect(state.limitWarning).toMatch(/repeat/i);
+  });
+});
+
+describe('InferenceQueue default wiring (FR-049)', () => {
+  it('createInferenceQueue defaults preprocess to the enhance→ceiling pipeline', () => {
+    const source = readFileSync(
+      join(process.cwd(), 'src/inference/InferenceQueue.ts'),
+      'utf8'
+    );
+    expect(source).toContain('prepareImageForInference');
+    expect(source).toMatch(/preprocess:\s*prepareImageForInference/);
   });
 });

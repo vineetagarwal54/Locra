@@ -52,6 +52,7 @@ function makeSession(overrides: Partial<QASession> = {}): QASession {
     question: 'What is this?',
     answer: 'A mug.',
     turns: [{ question: 'What is this?', answer: 'A mug.' }],
+    pinnedExtraction: 'Subject/object: mug',
     status: 'completed',
     errorMessage: null,
     metrics,
