@@ -41,9 +41,10 @@ describe('grounded practical advice prompt assembly', () => {
       pipelineVariantId: 'recommended-sampling-v1',
     });
 
-    expect(prompt).toContain('Visible facts from the image');
-    expect(prompt).toContain('General knowledge and reasoning');
-    expect(prompt).toContain('Actionable next steps');
+    expect(prompt).toContain('Image evidence: worn cooking pan');
+    expect(prompt).not.toContain('Visible facts from the image');
+    expect(prompt).not.toContain('General knowledge and reasoning');
+    expect(prompt).not.toContain('Actionable next steps');
     expect(prompt).toContain('coating material is not legible');
   });
 });
@@ -63,6 +64,7 @@ jest.mock('expo-image-manipulator', () => ({
 }));
 
 import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
+import type { ModelRequestMessage } from '../../src/inference/ContextBuilder';
 import type { HiddenVisualEvidence } from '../../src/inference/OutputPipelineTypes';
 import type { InferenceEngineHandle } from '../../src/inference/useInferenceEngine';
 import { useHistoryStore } from '../../src/store/historyStore';
@@ -77,34 +79,31 @@ const EXTRACTION_JSON = JSON.stringify({
   visibleCondition: 'dusty but intact',
 });
 
-const PINNED = [
-  'Subject/object: green watering can',
-  'Visible features: plastic, long spout',
-  'Visible text: None visible',
-  'Visible condition: dusty but intact',
-].join('\n');
-
 function makeEngineHandle(): InferenceEngineHandle & {
-  submissions: Array<{ imagePath: string | null; prompt: string }>;
+  submissions: Array<{ imagePath: string | null; prompt: string; messages: ModelRequestMessage[] }>;
   clearHistoryCalls: number;
 } {
   const listeners = new Set<() => void>();
   let response = '';
-  let messageHistoryLength = 0;
   let followUpCounter = 0;
-  const submissions: Array<{ imagePath: string | null; prompt: string }> = [];
+  const submissions: Array<{
+    imagePath: string | null;
+    prompt: string;
+    messages: ModelRequestMessage[];
+  }> = [];
   const handle = {
     submissions,
     clearHistoryCalls: 0,
-    submit: async (imagePath: string | null, prompt: string): Promise<string> => {
-      submissions.push({ imagePath, prompt });
+    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+      const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
+      const prompt = messages.at(-1)?.content ?? '';
+      submissions.push({ imagePath, prompt, messages });
       if (imagePath !== null) {
         response = EXTRACTION_JSON;
       } else {
         followUpCounter += 1;
         response = `Follow-up answer ${followUpCounter}.`;
       }
-      messageHistoryLength += 2;
       for (const listener of listeners) listener();
       return response;
     },
@@ -115,10 +114,9 @@ function makeEngineHandle(): InferenceEngineHandle & {
     getGeneratedTokenCount: () => 12,
     getPromptTokenCount: () => 40,
     getTotalTokenCount: () => 52,
-    getMessageHistoryLength: () => messageHistoryLength,
+    getMessageHistoryLength: () => 0,
     clearHistory: (): void => {
       handle.clearHistoryCalls += 1;
-      messageHistoryLength = 0;
     },
     getError: () => null,
     subscribe: (listener: () => void): (() => void) => {
@@ -147,17 +145,27 @@ describe('vision-once → multi-turn → resumed-thread flow (T096)', () => {
     expect(sessionId).not.toBeNull();
 
     let persisted = useHistoryStore.getState().get(sessionId as string);
-    expect(persisted?.pinnedExtraction).toBe(PINNED);
+    expect(useInferenceStore.getState().hiddenEvidence?.subjectObject).toBe('green watering can');
+    expect(persisted?.pinnedExtraction).toBeNull();
+    expect(persisted?.hiddenEvidence).toBeNull();
     expect(persisted?.turns).toHaveLength(1);
 
-    // ── Turns 2–3: text-only follow-ups over the pinned context ──
+    // ── Turns 2-3: text-only follow-ups over canonical Locra context ──
     await store.submit({ imagePath: IMAGE_PATH, question: 'Is it usable?' });
     await store.submit({ imagePath: IMAGE_PATH, question: 'What color is the spout?' });
 
     expect(engine.submissions[1].imagePath).toBeNull();
     expect(engine.submissions[2].imagePath).toBeNull();
-    expect(engine.submissions[2].prompt).toContain(PINNED);
-    expect(engine.submissions[2].prompt).toContain('Is it usable?');
+    expect(engine.submissions[2].prompt).toBe('Is it usable?');
+    expect(engine.submissions[3].prompt).toBe('What color is the spout?');
+    expect(engine.submissions[3].messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+    ]);
 
     persisted = useHistoryStore.getState().get(sessionId as string);
     expect(persisted?.turns).toHaveLength(3);
@@ -182,14 +190,22 @@ describe('vision-once → multi-turn → resumed-thread flow (T096)', () => {
 
     const lastSubmission = engine.submissions.at(-1);
     expect(lastSubmission?.imagePath).toBeNull();
-    expect(lastSubmission?.prompt).toContain(PINNED);
-    expect(lastSubmission?.prompt).toContain('What color is the spout?');
-    expect(lastSubmission?.prompt).toContain('Where should I store it?');
+    expect(lastSubmission?.prompt).toBe('Where should I store it?');
+    expect(lastSubmission?.messages.map((message) => message.content)).toEqual(
+      expect.arrayContaining(['What color is the spout?', 'Where should I store it?'])
+    );
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: IMAGE_PATH, question: 'why?' });
+
+    expect(engine.submissions.at(-1)?.prompt).toBe('why?');
 
     persisted = useHistoryStore.getState().get(sessionId as string);
-    expect(persisted?.turns).toHaveLength(4);
+    expect(persisted?.turns).toHaveLength(5);
     expect(persisted?.turns[3].question).toBe('Where should I store it?');
-    expect(persisted?.pinnedExtraction).toBe(PINNED);
+    expect(persisted?.turns[4].question).toBe('why?');
+    expect(persisted?.pinnedExtraction).toBeNull();
     expect(persisted?.imagePath).toBe(IMAGE_PATH);
   });
 });

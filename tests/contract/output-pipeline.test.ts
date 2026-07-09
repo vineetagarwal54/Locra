@@ -71,18 +71,34 @@ describe('output pipeline contract', () => {
     await queue.submit(request);
 
     expect(seenRequests[0]).toMatchObject({
-      imagePath: '/camera/capture.jpg.512',
       kind: 'extraction',
       originalQuestion: request.question,
     });
+    expect(seenRequests[0]).toHaveProperty(
+      'messages',
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          mediaPath: '/camera/capture.jpg.512',
+        }),
+      ])
+    );
     expect(seenRequests[1]).toMatchObject({
       kind: 'answer',
       originalQuestion: request.question,
     });
-    expect(seenRequests[1]).toHaveProperty('question', expect.stringContaining('Visible facts from the image'));
+    expect(seenRequests[1]).toHaveProperty(
+      'messages',
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining('Image evidence: worn cooking pan'),
+        }),
+      ])
+    );
   });
 
-  it('active live follow-ups send only the new text message through the managed engine path', async () => {
+  it('active follow-ups send explicit bounded canonical messages through the runtime path', async () => {
     const preprocessSpy = jest.fn(preprocess);
     const loadModel = jest.fn(() => Promise.resolve());
     const generate = jest.fn((_generateRequest, onToken) => {
@@ -99,7 +115,14 @@ describe('output pipeline contract', () => {
     expect(preprocessSpy).not.toHaveBeenCalled();
     expect(loadModel).not.toHaveBeenCalled();
     expect(generate).toHaveBeenCalledWith(
-      { question: request.question },
+      {
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: 'system' }),
+          expect.objectContaining({ role: 'user', content: request.question }),
+        ]),
+        kind: 'chat',
+        originalQuestion: request.question,
+      },
       expect.any(Function),
       expect.any(AbortSignal),
     );

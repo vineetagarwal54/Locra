@@ -1,5 +1,6 @@
 // Shared domain types — data-model.md is the source of truth for field shapes.
 
+import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 
@@ -69,6 +70,7 @@ export interface InferenceState {
   pinnedExtraction: string | null;
   hiddenEvidence?: HiddenVisualEvidence | null;
   objectiveResult?: ObjectiveInferenceResultRecord | null;
+  inferenceTrace?: InferenceTrace | null;
 }
 
 export interface ModelState {

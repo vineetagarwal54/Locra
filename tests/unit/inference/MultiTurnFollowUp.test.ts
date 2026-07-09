@@ -28,9 +28,9 @@ jest.mock('react-native-nitro-image', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
 import {
   RESPONSE_LIMIT_WARNING_TOKEN_THRESHOLD,
-  RESPONSE_TOKEN_BUDGET,
   getResponseLimitWarning,
 } from '../../../src/inference/GenerationLimits';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
@@ -53,7 +53,10 @@ const historyStoreMock = jest.requireMock(
 ) as HistoryStoreMock;
 
 interface FollowUpSubmitter {
-  submit(request: InferenceRequest, options?: { turn: 'followUp' }): Promise<void>;
+  submit(
+    request: InferenceRequest,
+    options?: { turn: 'followUp'; canonicalTurns?: Array<{ question: string; answer: string }> }
+  ): Promise<void>;
 }
 
 const firstRequest: InferenceRequest = {
@@ -122,28 +125,35 @@ describe('multi-turn follow-up exchanges', () => {
 
     expect(generatedRequests[0]).toEqual(
       expect.objectContaining({
-        imagePath: '/camera/original.jpg.preprocessed',
         kind: 'extraction',
         originalQuestion: firstRequest.question,
       })
     );
-    expect(generatedRequests[0].question).toMatch(/subject\/object/i);
+    expect(generatedRequests[0].messages[1]).toEqual(
+      expect.objectContaining({
+        mediaPath: '/camera/original.jpg.preprocessed',
+        content: expect.stringMatching(/subject\/object/i),
+      })
+    );
     expect(generatedRequests[1]).toEqual(
       expect.objectContaining({
         kind: 'answer',
         originalQuestion: firstRequest.question,
       })
     );
-    expect(generatedRequests[1].imagePath).toBeUndefined();
-    expect(generatedRequests[1].question).toContain('Visible facts from the image');
+    expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
+    expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence');
     expect(generatedRequests[2]).toEqual(
-      {
-        question: followUpRequest.question,
-      }
+      expect.objectContaining({
+        kind: 'chat',
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: 'user', content: followUpRequest.question }),
+        ]),
+      })
     );
   });
 
-  it('persists pinned extraction and includes it in the follow-up context prompt', async () => {
+  it('persists pinned extraction but does not duplicate it into live follow-up prompts', async () => {
     const pinnedFirstRequest = withImagePath('/camera/pinned-original.jpg');
     const pinnedFollowUpRequest = {
       imagePath: pinnedFirstRequest.imagePath,
@@ -157,19 +167,19 @@ describe('multi-turn follow-up exchanges', () => {
     await useInferenceStore.getState().submit(pinnedFollowUpRequest);
 
     const savedSessions = historyStoreMock.mockSavedSessions as QASession[];
-    expect(savedSessions[0].pinnedExtraction).toBe(extractionAnswer);
-    expect(savedSessions[1].pinnedExtraction).toBe(extractionAnswer);
+    expect(savedSessions[0].pinnedExtraction).toBeNull();
+    expect(savedSessions[1].pinnedExtraction).toBeNull();
     expect(engine.submissions[2]).toEqual(
       expect.objectContaining({
         imagePath: null,
-        historyLengthBefore: 2,
+        historyLengthBefore: 0,
       })
     );
-    expect(engine.submissions[2].prompt).toContain(extractionAnswer);
-    expect(engine.submissions[2].prompt).toContain(pinnedFollowUpRequest.question);
+    expect(engine.submissions[2].prompt).toBe(pinnedFollowUpRequest.question);
+    expect(engine.submissions[2].prompt).not.toContain(extractionAnswer);
   });
 
-  it('keeps pinned extraction in follow-up context after many turns exceed the recent window', async () => {
+  it('keeps live follow-up prompts free of manual transcripts after many turns', async () => {
     const windowFirstRequest = withImagePath('/camera/window-original.jpg');
     const engine = makeEngineHandle();
 
@@ -184,8 +194,8 @@ describe('multi-turn follow-up exchanges', () => {
     }
 
     const lastPrompt = engine.submissions[engine.submissions.length - 1].prompt;
-    expect(lastPrompt).toContain(extractionAnswer);
-    expect(lastPrompt).toContain('Follow-up 6');
+    expect(lastPrompt).toBe('Follow-up 6');
+    expect(lastPrompt).not.toContain(extractionAnswer);
     expect(lastPrompt).not.toContain('Follow-up 0');
   });
 
@@ -220,10 +230,10 @@ describe('multi-turn follow-up exchanges', () => {
       })
     );
     expect(engine.submissions[0].prompt).toMatch(/subject\/object/i);
-    expect(engine.submissions[2].prompt).toContain(extractionAnswer);
+    expect(engine.submissions[2].prompt).toBe(fullFollowUpRequest.question);
   });
 
-  it('uses useLLM managed messageHistory for follow-up context instead of manual history or a new load', () => {
+  it('uses stateless generate with Locra-owned canonical context', () => {
     const source = readFileSync(
       join(process.cwd(), 'src/inference/useInferenceEngine.ts'),
       'utf8'
@@ -234,22 +244,15 @@ describe('multi-turn follow-up exchanges', () => {
     );
 
     expect(source).toContain('messageHistory');
-    expect(source).toContain('SlidingWindowContextStrategy');
-    expect(source).toContain('RESPONSE_TOKEN_BUDGET');
-    expect(source).toMatch(/sendMessage\(prompt\)/);
-    expect(source).toMatch(/sendMessage\(prompt,\s*\{\s*imagePath\s*\}\)/);
-    expect(source).not.toMatch(/\.generate\(/);
+    expect(source).toContain('generate(messages');
+    expect(source).not.toContain('SlidingWindowContextStrategy');
+    expect(source).not.toMatch(/sendMessage\(/);
     expect(countMatches(source, /\buseLLM\(/g)).toBe(1);
-    expect(source).toContain('configuredRef.current = true');
-    expect(source).toMatch(
-      /configuredRef\.current \|\| !current\.isReady \|\| current\.messageHistory\.length > 0/
-    );
     expect(navigatorSource).toContain('engineHostMounted');
     expect(navigatorSource).not.toContain('engineReady ? <InferenceEngineHost /> : null');
-    expect(RESPONSE_TOKEN_BUDGET).toBeGreaterThan(512);
   });
 
-  it('waits for managed turn 1 history before completing and sending turn 2', async () => {
+  it('does not wait for runtime message history before completing and sending turn 2', async () => {
     const delayedFirstRequest: InferenceRequest = {
       imagePath: '/camera/delayed-original.jpg',
       question: firstRequest.question,
@@ -258,7 +261,7 @@ describe('multi-turn follow-up exchanges', () => {
       imagePath: delayedFirstRequest.imagePath,
       question: followUpRequest.question,
     };
-    const engine = makeEngineHandle({ historyUpdateDelayMs: 50 });
+    const engine = makeEngineHandle();
 
     useInferenceStore.getState().registerEngine(engine);
 
@@ -271,10 +274,7 @@ describe('multi-turn follow-up exchanges', () => {
         historyLengthBefore: 0,
       })
     );
-    expect(historyStoreMock.mockSave).not.toHaveBeenCalled();
-
-    await sleep(40);
-    expect(historyStoreMock.mockSave).not.toHaveBeenCalled();
+    expect(historyStoreMock.mockSave).toHaveBeenCalledTimes(1);
 
     await firstSubmit;
 
@@ -283,7 +283,7 @@ describe('multi-turn follow-up exchanges', () => {
     expect(engine.submissions[2]).toEqual(
       expect.objectContaining({
         imagePath: null,
-        historyLengthBefore: 2,
+        historyLengthBefore: 0,
       })
     );
     expect(engine.submissions[2].prompt).toContain(delayedFollowUpRequest.question);
@@ -320,7 +320,6 @@ function makeEngineHandle(
   options: {
     firstStreamedResponse?: string;
     firstFinalResponse?: string;
-    historyUpdateDelayMs?: number;
   } = {}
 ): InferenceEngineHandle & {
   submissions: Array<{ imagePath: string | null; prompt: string; historyLengthBefore: number }>;
@@ -328,7 +327,7 @@ function makeEngineHandle(
   const listeners = new Set<() => void>();
   let response = '';
   let tokenCount = 0;
-  let messageHistoryLength = 0;
+  const messageHistoryLength = 0;
   const submissions: Array<{
     imagePath: string | null;
     prompt: string;
@@ -337,10 +336,12 @@ function makeEngineHandle(
 
   return {
     submissions,
-    submit: async (imagePath: string | null, prompt: string): Promise<string> => {
+    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+      const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
+      const prompt = messages.at(-1)?.content ?? '';
       submissions.push({ imagePath, prompt, historyLengthBefore: messageHistoryLength });
       const isExtractionTurn = imagePath !== null;
-      const isAnswerTurn = imagePath === null && prompt.includes('Visible facts from the image');
+      const isAnswerTurn = imagePath === null && prompt.includes('Image evidence:');
       const finalResponse = isExtractionTurn
         ? options.firstFinalResponse ?? extractionJson
         : isAnswerTurn
@@ -348,17 +349,6 @@ function makeEngineHandle(
         : 'It is black.';
       response = isExtractionTurn ? options.firstStreamedResponse ?? finalResponse : finalResponse;
       tokenCount = finalResponse.split(' ').length;
-      const publishHistoryUpdate = (): void => {
-        messageHistoryLength += 2;
-        for (const listener of listeners) {
-          listener();
-        }
-      };
-      if (options.historyUpdateDelayMs === undefined) {
-        publishHistoryUpdate();
-      } else {
-        setTimeout(publishHistoryUpdate, options.historyUpdateDelayMs);
-      }
       for (const listener of listeners) {
         listener();
       }
@@ -372,9 +362,7 @@ function makeEngineHandle(
     getPromptTokenCount: () => 10,
     getTotalTokenCount: () => 10 + tokenCount,
     getMessageHistoryLength: () => messageHistoryLength,
-    clearHistory: (): void => {
-      messageHistoryLength = 0;
-    },
+    clearHistory: (): void => {},
     getError: () => null,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);

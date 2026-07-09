@@ -7,6 +7,14 @@ import type { InferenceRequest, InferenceState, InferenceStatus } from '../types
 
 import { postProcessAnswer } from './AnswerPostProcessor';
 import { buildAnswerPrompt } from './AnswerPrompt';
+import {
+  buildCanonicalModelMessages,
+  buildPerceptionModelMessages,
+  buildPerceptionRetryModelMessages,
+  buildSingleUserModelMessages,
+  type ContextTurn,
+  type ModelRequestMessage,
+} from './ContextBuilder';
 import { parseExtractionWithRetry } from './ExtractionParser';
 import { buildStructuredExtractionPrompt } from './ExtractionPrompt';
 import { getResponseLimitWarning } from './GenerationLimits';
@@ -22,11 +30,16 @@ import { prepareImageForInference } from './ImageEnhancer';
 import { type PreprocessedImage } from './ImagePreprocessor';
 import { inferenceActivityLock, type ActivityLock } from './InferenceActivityLock';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
+import {
+  createInferenceTrace,
+  isDevelopmentInferenceTraceEnabled,
+  type InferenceTrace,
+  type InferenceTraceStageKind,
+} from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
 
 export interface EngineGenerateRequest {
-  question: string;
-  imagePath?: string;
+  messages: ModelRequestMessage[];
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat';
   originalQuestion?: string;
 }
@@ -51,6 +64,7 @@ export interface InferenceEngineAdapter {
 
 export interface InferenceSubmitOptions {
   turn?: 'first' | 'followUp';
+  canonicalTurns?: ContextTurn[];
 }
 
 export interface InferenceQueueDeps {
@@ -60,6 +74,7 @@ export interface InferenceQueueDeps {
   createRecorder?: () => InferenceMetricsRecorder;
   activityLock?: ActivityLock;
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
+  isTraceEnabled?: () => boolean;
 }
 
 export interface DeviceBuildMetadata {
@@ -78,10 +93,12 @@ const IDLE_STATE: InferenceState = {
   pinnedExtraction: null,
   hiddenEvidence: null,
   objectiveResult: null,
+  inferenceTrace: null,
 };
 
 interface ActiveRequest {
   readonly controller: AbortController;
+  readonly trace: InferenceTrace | null;
   cancelled: boolean;
 }
 
@@ -119,7 +136,9 @@ export class InferenceQueue implements IInferenceQueue {
       );
     }
 
-    const active: ActiveRequest = { controller: new AbortController(), cancelled: false };
+    const traceEnabled = this.deps.isTraceEnabled?.() ?? isDevelopmentInferenceTraceEnabled();
+    const trace = traceEnabled ? createInferenceTrace() : null;
+    const active: ActiveRequest = { controller: new AbortController(), trace, cancelled: false };
     this.active = active;
     const recorder = this.createRecorder();
     const isFollowUp = options.turn === 'followUp';
@@ -133,6 +152,7 @@ export class InferenceQueue implements IInferenceQueue {
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
+      inferenceTrace: trace,
     });
 
     try {
@@ -165,7 +185,13 @@ export class InferenceQueue implements IInferenceQueue {
       };
       const result =
         processed === null
-          ? await this.generateVisibleAnswer(request.question, active, recorder, markBudgetStopped)
+          ? await this.generateFollowUpAnswer(
+              request,
+              options.canonicalTurns ?? [],
+              active,
+              recorder,
+              markBudgetStopped
+            )
           : await this.generateFirstImageAnswer(request, processed, active, recorder, markBudgetStopped);
       if (active.cancelled) return;
 
@@ -173,6 +199,7 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markAnswerEnd();
       recorder.markInferenceEnd();
       const processedAnswer = postProcessAnswer(result.response);
+      this.recordFinalTraceResponse(active, processedAnswer.text);
       const notice = resolveCompletionNotice(
         budgetStopped,
         processedAnswer.verdict,
@@ -191,6 +218,7 @@ export class InferenceQueue implements IInferenceQueue {
           result,
           recorder,
         ),
+        inferenceTrace: active.trace,
       });
     } catch (error) {
       if (active.cancelled) return;
@@ -203,6 +231,7 @@ export class InferenceQueue implements IInferenceQueue {
         pinnedExtraction: null,
         hiddenEvidence: null,
         objectiveResult: null,
+        inferenceTrace: active.trace,
       });
     } finally {
       if (this.active === active) {
@@ -229,6 +258,7 @@ export class InferenceQueue implements IInferenceQueue {
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
+      inferenceTrace: null,
     });
     this.setState({ ...IDLE_STATE });
   }
@@ -241,13 +271,16 @@ export class InferenceQueue implements IInferenceQueue {
     markBudgetStopped: () => void
   ): Promise<EngineGenerateResult> {
     recorder.markPerceptionStart();
+    const extractionRequest: EngineGenerateRequest = {
+      messages: buildPerceptionModelMessages(
+        buildStructuredExtractionPrompt(request.question),
+        processed.path
+      ),
+      kind: 'extraction',
+      originalQuestion: request.question,
+    };
     const extractionResult = await this.deps.engine.generate(
-      {
-        imagePath: processed.path,
-        question: buildStructuredExtractionPrompt(request.question),
-        kind: 'extraction',
-        originalQuestion: request.question,
-      },
+      extractionRequest,
       () => {
         // Hidden perception output never streams into visible queue state.
       },
@@ -261,22 +294,28 @@ export class InferenceQueue implements IInferenceQueue {
     const extractionOutcome = await parseExtractionWithRetry(
       extractionResult.response,
       async (retryPrompt) => {
+        const retryRequest: EngineGenerateRequest = {
+          messages: buildPerceptionRetryModelMessages(retryPrompt),
+          kind: 'extractionRetry',
+          originalQuestion: request.question,
+        };
         const retryResult = await this.deps.engine.generate(
-          {
-            question: retryPrompt,
-            kind: 'extractionRetry',
-            originalQuestion: request.question,
-          },
+          retryRequest,
           () => {
             // Retry output is hidden for the same reason as first perception.
           },
           active.controller.signal,
         );
+        this.recordTraceStage(active, 'extractionRetry', retryRequest, retryResult);
         return retryResult.response;
       },
       request.question,
       processed.path,
     );
+    this.recordTraceStage(active, 'perception', extractionRequest, extractionResult, {
+      parsedOutput: extractionOutcome.hiddenEvidence,
+      processedOutput: extractionOutcome.visibleAnswer,
+    });
     if (active.cancelled) {
       return extractionResult;
     }
@@ -302,7 +341,7 @@ export class InferenceQueue implements IInferenceQueue {
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
     });
     const answerResult = await this.generateVisibleAnswer(
-      answerPrompt,
+      buildSingleUserModelMessages(answerPrompt),
       active,
       recorder,
       markBudgetStopped,
@@ -319,16 +358,42 @@ export class InferenceQueue implements IInferenceQueue {
     };
   }
 
+  private generateFollowUpAnswer(
+    request: InferenceRequest,
+    canonicalTurns: ContextTurn[],
+    active: ActiveRequest,
+    recorder: InferenceMetricsRecorder,
+    markBudgetStopped: () => void
+  ): Promise<EngineGenerateResult> {
+    return this.generateVisibleAnswer(
+      buildCanonicalModelMessages({
+        turns: canonicalTurns,
+        currentQuestion: request.question,
+      }),
+      active,
+      recorder,
+      markBudgetStopped,
+      {
+        kind: 'chat',
+        originalQuestion: request.question,
+      },
+    );
+  }
+
   private generateVisibleAnswer(
-    question: string,
+    messages: ModelRequestMessage[],
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
     markBudgetStopped: () => void,
     requestPatch: Partial<EngineGenerateRequest> = {}
   ): Promise<EngineGenerateResult> {
     recorder.markAnswerStart();
+    const generateRequest: EngineGenerateRequest = { messages, ...requestPatch };
+    const stage: InferenceTraceStageKind =
+      generateRequest.kind === 'chat' ? 'followUp' : 'answer';
+
     return this.deps.engine.generate(
-      { question, ...requestPatch },
+      generateRequest,
       (cumulative, generatedTokenCount) => {
         if (active.cancelled) return;
         recorder.markFirstToken();
@@ -344,7 +409,13 @@ export class InferenceQueue implements IInferenceQueue {
         }
       },
       active.controller.signal,
-    );
+    ).then((result) => {
+      const processed = postProcessAnswer(result.response);
+      this.recordTraceStage(active, stage, generateRequest, result, {
+        processedOutput: processed.text,
+      });
+      return result;
+    });
   }
 
   private buildObjectiveResult(
@@ -372,6 +443,35 @@ export class InferenceQueue implements IInferenceQueue {
       record.promptTokens = result.promptTokenCount;
     }
     return record;
+  }
+
+  private recordTraceStage(
+    active: ActiveRequest,
+    stage: InferenceTraceStageKind,
+    request: EngineGenerateRequest,
+    result: EngineGenerateResult,
+    parsed: { parsedOutput?: unknown; processedOutput?: string } = {}
+  ): void {
+    if (active.trace === null) {
+      return;
+    }
+
+    active.trace.stages.push({
+      stage,
+      modelInput: request.messages,
+      rawOutput: result.response,
+      ...parsed,
+    });
+    this.setState({ inferenceTrace: active.trace });
+  }
+
+  private recordFinalTraceResponse(active: ActiveRequest, finalResponse: string): void {
+    if (active.trace === null) {
+      return;
+    }
+
+    active.trace.finalResponse = finalResponse;
+    this.setState({ inferenceTrace: active.trace });
   }
 
   private resolveDeviceBuildMetadata(): DeviceBuildMetadata {

@@ -84,7 +84,7 @@ export class InferenceMetricsRecorder {
     this.answerEnd = this.now();
   }
 
-  /** The moment the generation request is dispatched (ExecuTorch `sendMessage`). */
+  /** The moment the generation request is dispatched to ExecuTorch. */
   markInferenceStart(): void {
     this.inferenceStart = this.now();
   }

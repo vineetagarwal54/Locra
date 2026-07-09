@@ -1,42 +1,60 @@
+import { LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
+
 export interface ContextTurn {
   question: string;
   answer: string;
 }
 
-export interface BuildPinnedContextPromptInput {
-  pinnedExtraction: string;
+export type ModelRequestRole = 'system' | 'user' | 'assistant';
+
+export interface ModelRequestMessage {
+  role: ModelRequestRole;
+  content: string;
+  mediaPath?: string;
+}
+
+export interface BuildCanonicalContextInput {
   turns: ContextTurn[];
-  question: string;
+  currentQuestion: string;
   recentTurnLimit?: number;
 }
 
-export const DEFAULT_RECENT_TURN_LIMIT = 4;
+export const DEFAULT_RECENT_TURN_LIMIT = 6;
+export const MAX_CONTEXT_MESSAGE_CHARS = 1200;
 
-export function buildPinnedContextPrompt(input: BuildPinnedContextPromptInput): string {
-  const recentTurns = input.turns.slice(-resolveRecentTurnLimit(input.recentTurnLimit));
-  const previousTurns =
-    recentTurns.length === 0
-      ? 'This is the first follow-up in the conversation.'
-      : recentTurns.map(formatTurn).join('\n\n');
+const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
+  'You are Locra internal visual evidence extraction. Return only the requested structured evidence.';
 
-  // The extraction is grounding for facts ABOUT the photo, never a fence around
-  // the whole answer — follow-ups routinely leave the image behind entirely
-  // ("my pan is sticky, how do I fix it?") and must get real, knowledgeable help.
+export function buildCanonicalModelMessages(
+  input: BuildCanonicalContextInput
+): ModelRequestMessage[] {
   return [
-    'Here is what you already observed in the photo this chat is about. Treat it as a',
-    'reliable record of what the image shows, and rely on it for anything about the',
-    'picture itself:',
-    input.pinnedExtraction,
-    '',
-    'Conversation so far:',
-    previousTurns,
-    '',
-    'Now answer their next message. Use the photo notes above when the picture is',
-    'relevant, and draw freely on everything else you know to give a genuinely useful,',
-    'confident answer — including when the question goes well beyond the photo.',
-    '',
-    input.question.trim(),
-  ].join('\n');
+    systemMessage(LOCRA_SYSTEM_PROMPT),
+    ...boundedTurns(input.turns, input.recentTurnLimit).flatMap(turnToMessages),
+    userMessage(input.currentQuestion),
+  ];
+}
+
+export function buildSingleUserModelMessages(content: string): ModelRequestMessage[] {
+  return [systemMessage(LOCRA_SYSTEM_PROMPT), userMessage(content)];
+}
+
+export function buildPerceptionModelMessages(
+  content: string,
+  imagePath: string
+): ModelRequestMessage[] {
+  return [
+    systemMessage(INTERNAL_PERCEPTION_SYSTEM_PROMPT),
+    { ...userMessage(content), mediaPath: imagePath },
+  ];
+}
+
+export function buildPerceptionRetryModelMessages(content: string): ModelRequestMessage[] {
+  return [systemMessage(INTERNAL_PERCEPTION_SYSTEM_PROMPT), userMessage(content)];
+}
+
+function boundedTurns(turns: ContextTurn[], recentTurnLimit: number | undefined): ContextTurn[] {
+  return turns.slice(-resolveRecentTurnLimit(recentTurnLimit));
 }
 
 function resolveRecentTurnLimit(limit: number | undefined): number {
@@ -46,6 +64,30 @@ function resolveRecentTurnLimit(limit: number | undefined): number {
   return Math.max(0, Math.floor(limit));
 }
 
-function formatTurn(turn: ContextTurn, index: number): string {
-  return [`Turn ${index + 1}`, `User: ${turn.question}`, `Locra: ${turn.answer}`].join('\n');
+function turnToMessages(turn: ContextTurn): ModelRequestMessage[] {
+  return [
+    userMessage(truncateContextText(turn.question)),
+    assistantMessage(truncateContextText(turn.answer)),
+  ];
+}
+
+function systemMessage(content: string): ModelRequestMessage {
+  return { role: 'system', content };
+}
+
+function userMessage(content: string): ModelRequestMessage {
+  return { role: 'user', content: content.trim() };
+}
+
+function assistantMessage(content: string): ModelRequestMessage {
+  return { role: 'assistant', content: content.trim() };
+}
+
+function truncateContextText(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= MAX_CONTEXT_MESSAGE_CHARS) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, MAX_CONTEXT_MESSAGE_CHARS).trimEnd()}...`;
 }

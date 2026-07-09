@@ -31,21 +31,21 @@
 - Immediately tune creative sampling by feel: rejected because the feature requires repeatable evidence.
 - Add unsupported settings such as `topK` or native `maxTokens`: rejected because they are not present in the verified 0.9.2 `GenerationConfig`.
 
-## Decision: Respect ExecuTorch managed live history
+## Decision: Locra-owned canonical conversation with stateless ExecuTorch generation
 
-**Decision**: In active live conversations where the managed engine context is valid, send only the new user follow-up through `sendMessage`. Do not rebuild and embed the full transcript on every follow-up.
+**Decision**: Locra owns the canonical user/assistant turn list and builds an explicit bounded `Message[]` for every model request. ExecuTorch is used through `generate(messages)`, which the installed 0.9.2 API documents as not managing conversation context.
 
-**Rationale**: React Native ExecuTorch managed mode already tracks message history. Replaying the transcript wastes context and can make the model repeat or drift. This resolves FR-010 while preserving the existing single long-lived `useLLM` instance.
+**Rationale**: Maintaining both ExecuTorch `messageHistory` and Locra's persisted conversation creates two semantic histories and can cause transcript replay, prompt echoing, and degraded short follow-ups. A stateless request keeps one source of truth while preserving the single long-lived `useLLM` instance.
 
 **Alternatives considered**:
-- Continue using `buildPinnedContextPrompt` for every follow-up: rejected for active live chats because it duplicates context already present in the engine.
-- Switch to stateless `generate`: rejected because the app already uses managed `sendMessage` and needs multi-turn context.
+- Continue using `buildPinnedContextPrompt` for every follow-up: rejected because it serializes transcript text inside a new prompt string.
+- Continue using managed `sendMessage`: rejected because ExecuTorch would keep a second hidden conversation history competing with Locra persistence.
 
-## Decision: Reconstruct persisted context once after resume
+## Decision: Rebuild resumed context from canonical turns
 
-**Decision**: When a persisted conversation is reopened and live engine history is unavailable, reconstruct the hidden visual evidence and recent turns once. Mark the resumed session as reconstructed, then send later follow-ups normally.
+**Decision**: When a persisted conversation is reopened, load the canonical turns and use the same bounded message-list builder used for live follow-ups. Hidden prompts, extraction outputs, and inference traces are not replayed.
 
-**Rationale**: Resumed sessions need enough context to answer image follow-ups, but repeated full-transcript embedding violates FR-012 and consumes limited context.
+**Rationale**: Resumed sessions need continuity, but that continuity must come from the same canonical conversation state used by UI and history, not from hidden evidence or stale runtime state.
 
 **Alternatives considered**:
 - Require users to reattach the image after resume: rejected because existing history is expected to resume conversations.

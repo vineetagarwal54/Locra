@@ -37,6 +37,7 @@ jest.mock('expo-image-manipulator', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
 import type { InferenceEngineHandle } from '../../../src/inference/useInferenceEngine';
 import { useInferenceStore } from '../../../src/store/inferenceStore';
 import type { QASession } from '../../../src/types/models';
@@ -90,26 +91,30 @@ function makePersistedSession(id: string, imagePath: string): QASession {
 }
 
 function makeEngineHandle(): InferenceEngineHandle & {
-  submissions: Array<{ imagePath: string | null; prompt: string }>;
+  submissions: Array<{ imagePath: string | null; prompt: string; messages: ModelRequestMessage[] }>;
   clearHistoryCalls: number;
 } {
   const listeners = new Set<() => void>();
   let response = '';
-  let messageHistoryLength = 0;
-  const submissions: Array<{ imagePath: string | null; prompt: string }> = [];
+  const submissions: Array<{
+    imagePath: string | null;
+    prompt: string;
+    messages: ModelRequestMessage[];
+  }> = [];
   const handle = {
     submissions,
     clearHistoryCalls: 0,
-    submit: async (imagePath: string | null, prompt: string): Promise<string> => {
-      submissions.push({ imagePath, prompt });
+    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+      const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
+      const prompt = messages.at(-1)?.content ?? '';
+      submissions.push({ imagePath, prompt, messages });
       if (imagePath !== null) {
         response = HIDDEN_EVIDENCE_JSON;
-      } else if (prompt.includes('Visible facts from the image')) {
+      } else if (prompt.includes('Image evidence:')) {
         response = FIRST_VISIBLE_ANSWER;
       } else {
         response = 'It is about ten centimeters tall.';
       }
-      messageHistoryLength += 2;
       for (const listener of listeners) listener();
       return response;
     },
@@ -120,10 +125,9 @@ function makeEngineHandle(): InferenceEngineHandle & {
     getGeneratedTokenCount: () => 8,
     getPromptTokenCount: () => 10,
     getTotalTokenCount: () => 18,
-    getMessageHistoryLength: () => messageHistoryLength,
+    getMessageHistoryLength: () => 0,
     clearHistory: (): void => {
       handle.clearHistoryCalls += 1;
-      messageHistoryLength = 0;
     },
     getError: () => null,
     subscribe: (listener: () => void): (() => void) => {
@@ -173,18 +177,111 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
       .getState()
       .submit({ imagePath: session.imagePath, question: 'How tall is it?' });
 
-    // Text-only turn on the long-lived instance, prompt self-contained.
+    // Text-only turn with canonical persisted turns supplied as separate messages.
     expect(engine.submissions).toHaveLength(1);
     expect(engine.submissions[0].imagePath).toBeNull();
-    expect(engine.submissions[0].prompt).toContain(PINNED);
-    expect(engine.submissions[0].prompt).toContain('Is it damaged?');
-    expect(engine.submissions[0].prompt).toContain('How tall is it?');
+    expect(engine.submissions[0].messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(engine.submissions[0].prompt).toBe('How tall is it?');
 
     const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
     expect(saved.id).toBe('sess-2');
     expect(saved.turns).toHaveLength(3);
     expect(saved.turns[2].question).toBe('How tall is it?');
-    expect(saved.pinnedExtraction).toBe(PINNED);
+    expect(saved.pinnedExtraction).toBeNull();
+    expect(saved.hiddenEvidence).toBeNull();
+  });
+
+  it('active live follow-ups send only the new message and do not duplicate app history', async () => {
+    const engine = makeEngineHandle();
+    useInferenceStore.getState().registerEngine(engine);
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: '/photos/live.jpg', question: 'What is this?' });
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: '/photos/live.jpg', question: 'shorter' });
+
+    expect(engine.submissions[2]).toEqual(
+      expect.objectContaining({ imagePath: null, prompt: 'shorter' })
+    );
+    expect(engine.submissions[2].messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(engine.submissions[2].messages.map((message) => message.content).join('\n')).not.toContain(
+      'Conversation so far'
+    );
+  });
+
+  it('resumed sessions reconstruct once, then return to send-only-new-message follow-ups', async () => {
+    const session = makePersistedSession('sess-resume-once', '/photos/resume-once.jpg');
+    historyMock.mockSessions.set(session.id, session);
+    const engine = makeEngineHandle();
+    useInferenceStore.getState().registerEngine(engine);
+    useInferenceStore.getState().hydrateSession(session.id);
+
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: session.imagePath, question: 'explain more' });
+    await useInferenceStore
+      .getState()
+      .submit({ imagePath: session.imagePath, question: 'what should I do next?' });
+
+    expect(engine.submissions[0].messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(engine.submissions[0].prompt).toBe('explain more');
+    expect(engine.submissions[1]).toEqual(
+      expect.objectContaining({
+        imagePath: null,
+        prompt: 'what should I do next?',
+      })
+    );
+  });
+
+  it('keeps short live follow-ups stable for a long conversation window', async () => {
+    const engine = makeEngineHandle();
+    const imagePath = '/photos/long-live.jpg';
+    const followUps = [
+      'shorter',
+      'why?',
+      'explain more',
+      'what should I do next?',
+      'make it simpler',
+      'any risks?',
+      'one sentence',
+      'compare options',
+      'what about the handle?',
+      'give steps',
+      'more detail',
+      'summarize',
+    ];
+    useInferenceStore.getState().registerEngine(engine);
+
+    await useInferenceStore.getState().submit({ imagePath, question: 'What is this?' });
+    for (const question of followUps) {
+      await useInferenceStore.getState().submit({ imagePath, question });
+    }
+
+    const liveFollowUpPrompts = engine.submissions.slice(2).map((submission) => submission.prompt);
+    expect(liveFollowUpPrompts).toEqual(followUps);
+    expect(liveFollowUpPrompts.join('\n')).not.toContain('Conversation so far');
+    expect(liveFollowUpPrompts.join('\n')).not.toContain(PINNED);
   });
 
   it('persists the final first-turn answer without adding hidden perception as a normal turn', async () => {
@@ -200,7 +297,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
     expect(engine.submissions[0].imagePath).toBe('/photos/first-turn.jpg');
     expect(engine.submissions[0].prompt).toMatch(/valid json only/i);
     expect(engine.submissions[1].imagePath).toBeNull();
-    expect(engine.submissions[1].prompt).toContain('Visible facts from the image');
+    expect(engine.submissions[1].prompt).toContain('Image evidence: ceramic mug');
     expect(saved.answer).toBe(FIRST_VISIBLE_ANSWER);
     expect(saved.turns).toEqual([
       { question: 'What is this?', answer: FIRST_VISIBLE_ANSWER },
@@ -217,10 +314,9 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
       .submit({ imagePath: '/photos/hidden.jpg', question: 'What is this?' });
 
     const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
-    expect(saved.pinnedExtraction).toContain('Subject/object: ceramic mug');
-    expect(saved.hiddenEvidence?.subjectObject).toBe('ceramic mug');
-    expect(saved.hiddenEvidence?.sourceQuestion).toBe('What is this?');
-    expect(saved.hiddenEvidence?.visibleFeatures).toContain('chipped handle');
+    expect(useInferenceStore.getState().hiddenEvidence?.subjectObject).toBe('ceramic mug');
+    expect(saved.pinnedExtraction).toBeNull();
+    expect(saved.hiddenEvidence).toBeNull();
     expect(saved.answer).toBe(FIRST_VISIBLE_ANSWER);
   });
 

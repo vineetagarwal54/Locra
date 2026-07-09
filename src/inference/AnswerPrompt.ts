@@ -17,18 +17,15 @@ export function wantsVisibleDetailList(question: string): boolean {
 }
 
 export function buildAnswerPrompt(request: UserFacingAnswerRequest): string {
+  const evidence = request.hiddenEvidence;
   return [
-    buildInstructionSection(request.question),
-    buildVisibleFactsSection(request.hiddenEvidence),
-    buildGeneralKnowledgeSection(request.hiddenEvidence),
-    buildUncertaintySection(request.hiddenEvidence),
-    buildActionableNextStepsSection(request.hiddenEvidence),
-    'User question:',
-    request.question.trim(),
+    buildInstructionText(request.question),
+    `Question: ${request.question.trim()}`,
+    evidence === undefined ? 'Image evidence: unavailable.' : formatCompactEvidence(evidence),
   ].join('\n\n');
 }
 
-function buildInstructionSection(question: string): string {
+function buildInstructionText(question: string): string {
   if (wantsVisibleDetailList(question)) {
     return [
       'Answer as a short list of visible details.',
@@ -38,57 +35,23 @@ function buildInstructionSection(question: string): string {
   }
 
   return [
-    'Start with a direct answer to the user question.',
-    'Keep the answer grounded, concise, and practical.',
-    'Use the sections below to separate visible facts from broader reasoning.',
+    'Answer naturally and directly.',
+    'Use the image evidence only as grounding for visual claims.',
+    'Add brief uncertainty only when the evidence is unclear.',
+    'Give practical next steps when they help.',
   ].join('\n');
 }
 
-function buildVisibleFactsSection(hiddenEvidence: HiddenVisualEvidence | undefined): string {
-  return ['Visible facts from the image', formatVisibleFacts(hiddenEvidence)].join('\n');
-}
-
-function buildGeneralKnowledgeSection(hiddenEvidence: HiddenVisualEvidence | undefined): string {
+function formatCompactEvidence(hiddenEvidence: HiddenVisualEvidence): string {
   return [
-    'General knowledge and reasoning',
-    hiddenEvidence === undefined
-      ? '- Use only general knowledge needed to answer the question.'
-      : `- Use these visible facts about ${hiddenEvidence.subjectObject} as grounding, then add any helpful real-world reasoning.`,
+    `Image evidence: ${hiddenEvidence.subjectObject}.`,
+    `Features: ${formatList(hiddenEvidence.visibleFeatures)}.`,
+    `Readable text: ${formatList(hiddenEvidence.visibleText)}.`,
+    `Condition: ${hiddenEvidence.visibleCondition}.`,
+    hiddenEvidence.uncertainty.length === 0
+      ? 'Unclear details: none noted.'
+      : `Unclear details: ${hiddenEvidence.uncertainty.join('; ')}.`,
   ].join('\n');
-}
-
-function buildUncertaintySection(hiddenEvidence: HiddenVisualEvidence | undefined): string {
-  return ['Uncertainty', formatUncertainty(hiddenEvidence)].join('\n');
-}
-
-function buildActionableNextStepsSection(hiddenEvidence: HiddenVisualEvidence | undefined): string {
-  return [
-    'Actionable next steps',
-    hiddenEvidence === undefined
-      ? '- Offer practical next steps only if they help answer the question.'
-      : `- Give clear next steps that fit the visible condition: ${hiddenEvidence.visibleCondition}.`,
-  ].join('\n');
-}
-
-function formatVisibleFacts(hiddenEvidence: HiddenVisualEvidence | undefined): string {
-  if (hiddenEvidence === undefined) {
-    return '- No extracted image evidence is available for this answer.';
-  }
-
-  return [
-    `- Subject/object: ${hiddenEvidence.subjectObject}`,
-    `- Visible features: ${formatList(hiddenEvidence.visibleFeatures)}`,
-    `- Visible text: ${formatList(hiddenEvidence.visibleText)}`,
-    `- Visible condition: ${hiddenEvidence.visibleCondition}`,
-  ].join('\n');
-}
-
-function formatUncertainty(hiddenEvidence: HiddenVisualEvidence | undefined): string {
-  if (hiddenEvidence === undefined || hiddenEvidence.uncertainty.length === 0) {
-    return '- State uncertainty briefly when the image does not support a stronger claim.';
-  }
-
-  return hiddenEvidence.uncertainty.map(item => `- ${item}`).join('\n');
 }
 
 function formatList(items: string[]): string {

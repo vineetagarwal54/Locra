@@ -33,7 +33,7 @@ Inputs for the answer step shown to the user.
 
 **Validation**:
 - First image turns must include the original question and hidden evidence.
-- Active live follow-ups must not embed the whole prior transcript when managed engine context is valid.
+- Active live follow-ups must not embed the whole prior transcript into a prompt string or rely on managed runtime history.
 - Resume reconstruction may include recent persisted turns once.
 
 ## ConversationContextState
@@ -42,7 +42,7 @@ Tracks whether the current engine/session can rely on managed history.
 
 **States**:
 - `newImageConversation`: no prior hidden evidence or managed history should be reused.
-- `liveManaged`: one long-lived managed engine has valid in-process history.
+- `liveCanonical`: Locra has canonical persisted/in-memory turns for the active chat.
 - `resumeNeedsReconstruction`: persisted session reopened without live engine history.
 - `resumeReconstructed`: required visual evidence and recent turns were injected once.
 - `unavailable`: persisted context is missing/corrupt and must degrade gracefully.
@@ -51,7 +51,7 @@ Tracks whether the current engine/session can rely on managed history.
 - New image submitted -> `newImageConversation`.
 - First answer completed -> `liveManaged`.
 - History session reopened -> `resumeNeedsReconstruction`.
-- First resumed follow-up sent with reconstruction prompt -> `resumeReconstructed`.
+- Resumed follow-up -> bounded context rebuilt from canonical persisted turns.
 - Later resumed follow-ups -> `liveManaged`-style send-only-new-message behavior.
 - Reset/new capture -> `newImageConversation`.
 
