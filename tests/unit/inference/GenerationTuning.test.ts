@@ -58,15 +58,20 @@ describe('generation tuning', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertaint/i);
   });
 
-  it('useInferenceEngine configures chat context without runtime generation overrides', () => {
-    const source = readFileSync(
+  it('uses stateless context assembly without runtime generation overrides', () => {
+    const engineSource = readFileSync(
       join(process.cwd(), 'src/inference/useInferenceEngine.ts'),
       'utf8',
     );
+    const contextSource = readFileSync(
+      join(process.cwd(), 'src/inference/ContextBuilder.ts'),
+      'utf8',
+    );
 
-    expect(source).toContain('LOCRA_SYSTEM_PROMPT');
-    expect(source).not.toContain('LOCRA_GENERATION_CONFIG');
-    expect(source).not.toMatch(/generationConfig\s*:/);
-    expect(source).not.toContain('DEFAULT_SYSTEM_PROMPT');
+    expect(contextSource).toContain('LOCRA_SYSTEM_PROMPT');
+    expect(engineSource).toContain('generate(messages');
+    expect(engineSource).not.toContain('LOCRA_GENERATION_CONFIG');
+    expect(engineSource).not.toMatch(/generationConfig\s*:/);
+    expect(engineSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
   });
 });

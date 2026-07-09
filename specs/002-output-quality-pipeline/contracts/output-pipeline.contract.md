@@ -7,22 +7,22 @@
 3. Run hidden visual evidence gathering for the image.
 4. Generate the visible answer from the original user question plus hidden evidence.
 5. Produce a complete production-owned objective inference result record containing answer text, model id, generation config id, pipeline variant id, perception latency, answer TTFT, answer-generation latency, total end-to-end latency, generated token count, prompt token count when available, looping status, truncation status, timestamp, and device/build metadata.
-6. Persist the visible answer and hidden evidence separately.
+6. Persist only the canonical user question and final visible assistant answer as conversation turns.
 7. Do not show raw structured extraction unless the user explicitly asked for extraction/list-style output.
 
 ## Active Live Follow-Up
 
-1. Confirm the managed engine context is valid for the active conversation.
-2. Send only the new user follow-up message through `sendMessage`.
-3. Do not embed the entire prior transcript into the prompt.
+1. Build an explicit bounded message list from stable system instruction, recent canonical turns, and the new user message.
+2. Send the message list through stateless ExecuTorch `generate(messages)`.
+3. Do not embed the entire prior transcript into a prompt string.
 4. Persist the completed follow-up once.
 
 ## Resumed Conversation Follow-Up
 
-1. Load persisted hidden visual evidence and recent turns.
-2. If live engine history is unavailable, send one reconstruction prompt containing required visual evidence and recent context.
-3. Mark the session as reconstructed for the current engine lifetime.
-4. Later follow-ups must not repeatedly embed the full transcript.
+1. Load persisted canonical user/assistant turns.
+2. Clear stale runtime history.
+3. Build the same bounded message list used by live follow-ups.
+4. Do not replay hidden prompts, extraction results, or inference traces.
 5. Missing/corrupt persisted context must degrade gracefully.
 
 ## Objective Result Consumption
@@ -40,7 +40,7 @@
 
 ## New Image Conversation
 
-1. Clear managed conversation history before the new image thread starts.
-2. Clear pinned visual evidence.
+1. Clear any managed runtime history before the new image thread starts.
+2. Clear active internal trace and hidden visual evidence state.
 3. Clear active session context.
 4. The new image conversation must not inherit evidence from the previous image.

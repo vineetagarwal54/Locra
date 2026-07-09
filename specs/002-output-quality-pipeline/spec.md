@@ -53,7 +53,7 @@ A user asks a practical question about an image and receives advice that combine
 
 ### User Story 3 - Follow-Ups Use the Right Amount of Context (Priority: P1)
 
-A user continues an active conversation and Locra uses the existing live conversation context without repeatedly embedding the full prior transcript into each new prompt. When a user resumes a persisted conversation after the live context is unavailable, Locra reconstructs enough visual and recent conversational context once, then continues normally.
+A user continues an active conversation and Locra rebuilds a bounded model request from its canonical conversation turns. ExecuTorch is used only as the inference runtime and must not maintain a second semantic conversation history. When a user resumes a persisted conversation, Locra loads the canonical persisted turns and uses the same bounded-context policy.
 
 **Why this priority**: Duplicated context can reduce answer quality, waste limited context capacity, and make follow-ups drift or repeat. Resumed chats still need enough memory to stay useful.
 
@@ -61,9 +61,9 @@ A user continues an active conversation and Locra uses the existing live convers
 
 **Acceptance Scenarios**:
 
-1. **Given** an active live image conversation with a completed first turn, **When** the user asks a follow-up such as "What about the handle?", **Then** Locra sends only the new user question as the visible turn content and relies on existing live context for prior turns.
-2. **Given** a persisted conversation reopened from history, **When** the user asks the first follow-up after resume, **Then** Locra has enough visual evidence and recent conversation context to answer coherently.
-3. **Given** a resumed conversation has already been reconstructed once, **When** the user asks another follow-up, **Then** the app does not repeatedly embed the entire prior transcript into every new user message.
+1. **Given** an active live image conversation with a completed first turn, **When** the user asks a follow-up such as "What about the handle?", **Then** Locra sends a deterministic message list containing the stable system instruction, bounded recent canonical turns, and the new user message.
+2. **Given** a persisted conversation reopened from history, **When** the user asks the first follow-up after resume, **Then** Locra rebuilds model context from canonical persisted turns and does not replay hidden prompts or inference traces.
+3. **Given** the user switches sessions or starts a new chat, **When** the next message is sent, **Then** stale runtime history, hidden evidence, and previous conversation context are not inherited.
 
 ---
 
@@ -118,7 +118,7 @@ A developer or tester can use a removable dev-only evaluation recorder that cons
 
 - First-turn questions that explicitly ask for a list of visible details should be allowed to return list-like answers.
 - Images with unreadable or partially cropped text should produce brief uncertainty rather than fabricated text.
-- General knowledge follow-ups should be answered when they are useful, while image-specific claims must remain grounded in visible or remembered visual evidence.
+- General knowledge follow-ups should be answered when they are useful, while image-specific claims in follow-ups must remain grounded in the canonical conversation.
 - Resumed conversations with missing or corrupted history should degrade gracefully and explain that context is unavailable.
 - Cancellation during visual inspection or answer generation must not save partial misleading answers.
 - Evaluation cases should remain fixed unless deliberately versioned, so scores are comparable over time.
@@ -133,18 +133,18 @@ A developer or tester can use a removable dev-only evaluation recorder that cons
 ### Functional Requirements
 
 - **FR-001**: For every first-turn image question, the system MUST separate visual evidence gathering from the user-facing answer.
-- **FR-002**: The system MUST preserve concise grounded visual evidence as hidden conversation memory for the current image conversation.
+- **FR-002**: The system MUST keep concise grounded visual evidence in the internal inference trace for first-turn answer generation and development observability, not as canonical conversation turns.
 - **FR-003**: The first visible answer MUST answer the user's original question directly, unless the user explicitly requested raw extraction, classification, or a visible-detail list.
 - **FR-004**: The first visible answer MUST distinguish visible facts from general knowledge when both are used.
-- **FR-005**: The system MUST avoid unsupported claims about image content that is not visible or not preserved in hidden visual memory.
+- **FR-005**: The system MUST avoid unsupported claims about image content that is not visible or not present in the canonical conversation.
 - **FR-006**: When important visual evidence is unclear, the answer MUST briefly state the uncertainty and still provide the safest useful answer it can.
 - **FR-007**: Practical "what should I do" questions MUST receive actionable steps when sufficient context is available.
 - **FR-008**: The persistent assistant instructions MUST prioritize direct answers, visual grounding, concise default style, useful steps, and reliability over personality or roleplay behavior.
 - **FR-009**: Generation behavior MUST be evaluated against the model's recommended default sampling behavior before adopting more creative custom sampling behavior.
-- **FR-010**: Active live follow-up messages MUST avoid replaying the full prior transcript when the live conversation already contains valid context.
-- **FR-011**: Resumed conversations MUST reconstruct the required visual evidence and recent conversation context when live context is unavailable.
-- **FR-012**: After a resumed conversation has reconstructed context once, later messages in that session MUST continue without repeatedly embedding the full prior transcript.
-- **FR-013**: New image conversations MUST start with clean conversation context and MUST NOT inherit hidden visual memory from prior images.
+- **FR-010**: Follow-up model requests MUST be built from one canonical Locra conversation state and MUST NOT combine app-built transcript replay with ExecuTorch-managed message history.
+- **FR-011**: Resumed conversations MUST rebuild bounded model request context from canonical persisted user/assistant turns only.
+- **FR-012**: Model request context MUST use an explicit bounded policy containing stable system instruction, relevant recent canonical turns, and the current user message.
+- **FR-013**: New image conversations and session switches MUST start with clean runtime context and MUST NOT inherit hidden visual evidence, internal prompts, or prior conversation state from another chat.
 - **FR-014**: The image preparation behavior MUST preserve meaningful content in tall, wide, screenshot-like, receipt-like, document-like, code-like, and chat-like images by default.
 - **FR-015**: The system MUST NOT crop tall or wide images solely because they exceed a preferred aspect ratio unless a clear subject-region reason is available.
 - **FR-016**: The system MUST keep the existing memory-safety ceiling for model input images.
@@ -175,9 +175,11 @@ A developer or tester can use a removable dev-only evaluation recorder that cons
 
 ### Key Entities *(include if feature involves data)*
 
-- **Hidden Visual Evidence**: Concise grounded observations extracted from the image for internal conversation memory; includes visible objects, relevant attributes, readable text when legible, and uncertainty notes.
+- **Hidden Visual Evidence**: Concise grounded observations extracted from the image for internal inference use and development trace inspection; includes visible objects, relevant attributes, readable text when legible, and uncertainty notes.
 - **User-Facing Answer**: The answer shown to the user; directly addresses the user's question and may combine hidden visual evidence with general knowledge.
-- **Conversation Context State**: Whether a conversation is live with valid managed context, newly resumed and requiring reconstruction, or post-reconstruction and ready for normal follow-ups.
+- **Canonical Conversation**: The persisted user/assistant turn list containing only real user messages and final visible assistant answers.
+- **Internal Inference Trace**: Development-only record of model inputs, raw outputs, parsed outputs, processed outputs, hidden evidence, and final displayed response for each inference stage.
+- **Model Request Context**: The explicit bounded message list built from stable system instruction, recent canonical turns, and the current user message before each stateless ExecuTorch generation.
 - **Evaluation Case**: A fixed test item containing a stable case identifier, image source, question, category, expected quality criteria, and scoring fields.
 - **Evaluation Image Source**: The stable image input for an evaluation case; normally a repo-tracked sample image, with documented manual capture instructions only for device-specific cases.
 - **Evaluation Run**: A recorded pass over the fixed evaluation set, including automatically captured answers and timing plus tester-entered quality scores for each case.

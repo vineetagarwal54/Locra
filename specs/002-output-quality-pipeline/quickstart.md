@@ -69,7 +69,7 @@ Expected result: exported artifacts are ready for baseline-versus-candidate comp
 
 1. First image question: ask a practical question about an image. Expected: the visible answer directly answers the question and does not expose raw structured extraction unless requested.
 2. Grounded advice: ask what to do about a visible object/problem. Expected: answer separates visible facts from general guidance and states uncertainty briefly when needed.
-3. Active follow-up: ask a pronoun-based follow-up in the same live chat. Expected: the app sends only the new follow-up to the managed engine when live context is valid.
+3. Active follow-up: ask a pronoun-based follow-up in the same live chat. Expected: the app sends a bounded message list built from canonical Locra turns, not managed runtime history.
 4. Resumed conversation: reopen a persisted conversation and ask one follow-up. Expected: the app reconstructs hidden evidence and recent context once.
 5. Later resumed follow-up: ask another follow-up. Expected: the app does not repeatedly embed the entire transcript.
 6. Tall/document-like image: submit a receipt, screenshot, code screenshot, or chat screenshot. Expected: preprocessing preserves relevant content before applying the final 512x512 ceiling.

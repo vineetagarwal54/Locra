@@ -32,13 +32,13 @@ function makeRequest(question = 'How do I fix this?'): UserFacingAnswerRequest {
 }
 
 describe('AnswerPrompt', () => {
-  it('assembles visible-facts, general-knowledge, uncertainty, and actionable-step sections', () => {
+  it('assembles compact evidence without internal section scaffolding', () => {
     const prompt = buildAnswerPrompt(makeRequest());
 
-    expect(prompt).toContain('Visible facts from the image');
-    expect(prompt).toContain('General knowledge and reasoning');
-    expect(prompt).toContain('Uncertainty');
-    expect(prompt).toContain('Actionable next steps');
+    expect(prompt).toContain('Image evidence: worn cooking pan');
+    expect(prompt).not.toContain('Visible facts from the image');
+    expect(prompt).not.toContain('General knowledge and reasoning');
+    expect(prompt).not.toContain('Actionable next steps');
     expect(prompt).toContain('worn cooking pan');
     expect(prompt).toContain('scratched center');
   });
@@ -46,7 +46,7 @@ describe('AnswerPrompt', () => {
   it('starts normal practical questions with a direct answer instead of a raw list', () => {
     const prompt = buildAnswerPrompt(makeRequest('What should I do about this pan?'));
 
-    expect(prompt).toMatch(/start with a direct answer/i);
+    expect(prompt).toMatch(/answer naturally and directly/i);
     expect(prompt).not.toMatch(/answer as a short list of visible details/i);
   });
 
@@ -61,10 +61,10 @@ describe('AnswerPrompt', () => {
   it('assembles the final first-turn answer prompt from the original question plus hidden evidence', () => {
     const prompt = buildAnswerPrompt(makeRequest('How do I fix this?'));
 
-    expect(prompt).toContain('User question:');
+    expect(prompt).toContain('Question:');
     expect(prompt).toContain('How do I fix this?');
-    expect(prompt).toContain('Subject/object: worn cooking pan');
-    expect(prompt).toContain('Visible condition: surface appears worn in the center');
+    expect(prompt).toContain('Image evidence: worn cooking pan');
+    expect(prompt).toContain('Condition: surface appears worn in the center');
     expect(prompt).toContain('coating material is not legible from the image');
   });
 });

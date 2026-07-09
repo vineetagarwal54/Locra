@@ -114,7 +114,7 @@
 - [X] T040 [P] [US1] Add failing tests that raw extraction is never user-visible after a two-stage first turn in `tests/unit/inference/InferenceQueue.test.ts`
 - [X] T041 [P] [US1] Add failing tests that hidden perception is not represented as a normal conversation turn in `tests/unit/store/inferenceStore.hydration.test.ts`
 - [X] T042 [P] [US1] Add failing tests that managed history represents the original user question and final user-facing answer after a two-stage turn in `tests/unit/store/inferenceStore.hydration.test.ts`
-- [X] T043 [P] [US1] Add failing tests that hidden visual evidence remains separately persisted as pinned context in `tests/unit/store/inferenceStore.hydration.test.ts`
+- [X] T043 [P] [US1] Add failing tests that hidden perception is not persisted as canonical conversation turns in `tests/unit/store/inferenceStore.hydration.test.ts`
 - [X] T044 [P] [US1] Add failing tests for answer prompt assembly from original question plus hidden evidence in `tests/unit/inference/AnswerPrompt.test.ts`
 - [X] T045 [P] [US1] Add failing tests for cancellation, parse failure, and retry/error recovery in `tests/unit/inference/InferenceQueue.test.ts`
 - [X] T046 [P] [US1] Add failing integration coverage for real-answer first turns in `tests/integration/ask-flow.test.ts`
@@ -243,20 +243,22 @@
 
 **Goal**: Active live conversations rely on managed ExecuTorch history; resumed conversations reconstruct needed context once and then continue normally.
 
-**Independent Test**: Active follow-ups send only the new message, resumed first follow-ups include reconstruction context, and later resumed follow-ups do not repeatedly embed the transcript.
+**Independent Test**: Active and resumed follow-ups use one canonical Locra conversation state, build explicit bounded model messages, and never combine app-built transcript replay with ExecuTorch-managed history.
 
 ### Tests for User Story 3
 
-- [ ] T080 [P] [US3] Add failing tests for live managed follow-up send-only-new-message policy in `tests/unit/store/inferenceStore.hydration.test.ts`
-- [ ] T081 [P] [US3] Add failing tests for one-time resume reconstruction prompt assembly in `tests/unit/inference/ContextBuilder.test.ts`
-- [ ] T082 [P] [US3] Add failing tests for conversation context state transitions and clean new-image resets in `tests/unit/inference/ConversationContextPolicy.test.ts`
-- [ ] T083 [P] [US3] Add integration coverage for active and resumed follow-up context in `tests/integration/vision-once-chat-flow.test.ts`
+- [X] T080 [P] [US3] Add failing tests for canonical follow-up routing and canonical-only persistence in `tests/unit/store/inferenceStore.hydration.test.ts`
+- [X] T081 [P] [US3] Add failing tests for deterministic bounded model-message assembly in `tests/unit/inference/ContextBuilder.test.ts`
+- [X] T082 [P] [US3] Add failing tests for stateless ExecuTorch runtime usage in `tests/unit/inference/useInferenceEngine.test.ts`
+- [X] T083 [P] [US3] Add integration coverage for active and resumed follow-up context in `tests/integration/vision-once-chat-flow.test.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T084 [US3] Implement conversation context state policy in `src/inference/ConversationContextPolicy.ts`
-- [ ] T085 [US3] Split live follow-up and resume-reconstruction prompt builders in `src/inference/ContextBuilder.ts`
-- [ ] T086 [US3] Update inference store follow-up routing, hydration, and reset behavior in `src/store/inferenceStore.ts`
+- [X] T084 [US3] Implement bounded canonical model-message assembly in `src/inference/ContextBuilder.ts`
+- [X] T085 [US3] Refactor the ExecuTorch bridge to use stateless `generate(messages)` in `src/inference/useInferenceEngine.ts`
+- [X] T086 [US3] Update inference store follow-up routing, hydration, reset behavior, and canonical-only persistence in `src/store/inferenceStore.ts`
+- [X] T086a [US3] Add development-only per-stage inference tracing in `src/inference/InferenceTrace.ts` and `src/inference/InferenceQueue.ts`
+- [X] T086b [US3] Simplify first-turn final answer prompt scaffolding in `src/inference/AnswerPrompt.ts`
 - [ ] T087 [US3] Run the 6-case smoke subset after context correction and export results to `quality-eval/results/checkpoint-04-context-correction.jsonl`
 
 **Checkpoint**: Multi-turn quality is corrected and can be measured with the smoke subset.
@@ -398,7 +400,7 @@ Task: "T072 [P] [US6] Add source-scan tests that no production module imports ev
 
 ```text
 Task: "T080 [P] [US3] Add failing tests for live managed follow-up send-only-new-message policy in tests/unit/store/inferenceStore.hydration.test.ts"
-Task: "T081 [P] [US3] Add failing tests for one-time resume reconstruction prompt assembly in tests/unit/inference/ContextBuilder.test.ts"
+Task: "T081 [P] [US3] Add failing tests for deterministic bounded model-message assembly in tests/unit/inference/ContextBuilder.test.ts"
 Task: "T088 [P] [US4] Add failing tests that extreme aspect ratio images are preserved without default center crop in tests/unit/inference/ImageEnhancer.test.ts"
 Task: "T090 [P] [US4] Add failing tests that the final 512x512 ceiling remains enforced after preservation in tests/unit/inference/ImagePreprocessor.test.ts"
 ```

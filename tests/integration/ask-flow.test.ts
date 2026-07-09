@@ -117,21 +117,25 @@ describe('offline capture to answer integration flow', () => {
     expect(state.response).toBe(visibleAnswer);
     expect(generatedRequests[0]).toEqual(
       expect.objectContaining({
-        imagePath: '/camera/raw-capture.jpg.preprocessed',
         kind: 'extraction',
         originalQuestion: capturedRequest.question,
       })
     );
-    expect(generatedRequests[0].question).toMatch(/subject\/object/i);
-    expect(generatedRequests[0].question).toContain(capturedRequest.question);
+    expect(generatedRequests[0].messages[1]).toEqual(
+      expect.objectContaining({
+        mediaPath: '/camera/raw-capture.jpg.preprocessed',
+        content: expect.stringMatching(/subject\/object/i),
+      })
+    );
+    expect(generatedRequests[0].messages[1].content).toContain(capturedRequest.question);
     expect(generatedRequests[1]).toEqual(
       expect.objectContaining({
         kind: 'answer',
         originalQuestion: capturedRequest.question,
       })
     );
-    expect(generatedRequests[1].imagePath).toBeUndefined();
-    expect(generatedRequests[1].question).toContain('Visible facts from the image');
+    expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
+    expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: coffee mug');
 
     const session: QASession = {
       id: 'completed-flow',
@@ -140,8 +144,8 @@ describe('offline capture to answer integration flow', () => {
       question: capturedRequest.question,
       answer: state.response,
       turns: [{ question: capturedRequest.question, answer: state.response }],
-      pinnedExtraction: state.pinnedExtraction,
-      hiddenEvidence: state.hiddenEvidence,
+      pinnedExtraction: null,
+      hiddenEvidence: null,
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,
@@ -152,8 +156,9 @@ describe('offline capture to answer integration flow', () => {
 
     expect(history.list()).toEqual([session]);
     expect(session.answer).toBe(visibleAnswer);
-    expect(session.pinnedExtraction).toContain('Subject/object: coffee mug');
-    expect(session.hiddenEvidence?.subjectObject).toBe('coffee mug');
+    expect(state.hiddenEvidence?.subjectObject).toBe('coffee mug');
+    expect(session.pinnedExtraction).toBeNull();
+    expect(session.hiddenEvidence).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrSpy).not.toHaveBeenCalled();
     expect(webSocketSpy).not.toHaveBeenCalled();

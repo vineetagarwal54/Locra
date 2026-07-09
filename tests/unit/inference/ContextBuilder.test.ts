@@ -1,49 +1,76 @@
 import {
   DEFAULT_RECENT_TURN_LIMIT,
-  buildPinnedContextPrompt,
+  buildCanonicalModelMessages,
+  buildPerceptionModelMessages,
+  buildSingleUserModelMessages,
 } from '../../../src/inference/ContextBuilder';
 
-const pinnedExtraction =
-  'Subject/object: black notebook\nVisible features: rectangular, matte cover';
-
-describe('pinned context builder', () => {
-  it('includes pinned extraction and the current follow-up question', () => {
-    const prompt = buildPinnedContextPrompt({
-      pinnedExtraction,
-      turns: [{ question: 'What is visible?', answer: 'Subject/object: black notebook' }],
-      question: 'What color is it?',
+describe('ContextBuilder', () => {
+  it('builds live follow-up context as explicit canonical messages', () => {
+    const messages = buildCanonicalModelMessages({
+      turns: [{ question: 'What is visible?', answer: 'It is a black notebook.' }],
+      currentQuestion: 'shorter',
     });
 
-    expect(prompt).toContain(pinnedExtraction);
-    expect(prompt).toContain('What color is it?');
-    expect(prompt).toContain('Conversation so far');
+    expect(messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(messages.at(-1)?.content).toBe('shorter');
+    expect(messages.map((message) => message.content).join('\n')).not.toContain(
+      'Conversation so far'
+    );
   });
 
-  it('invites general knowledge instead of fencing the answer to the photo', () => {
-    const prompt = buildPinnedContextPrompt({
-      pinnedExtraction,
-      turns: [],
-      question: 'My pan is sticky, how do I fix it?',
+  it('keeps canonical turns as separate messages instead of a transcript prompt', () => {
+    const messages = buildCanonicalModelMessages({
+      turns: [
+        { question: 'What is this?', answer: 'It is a pan.' },
+        { question: 'Is it safe?', answer: 'The coating looks worn.' },
+      ],
+      currentQuestion: 'Then help me',
     });
 
-    expect(prompt).toMatch(/draw freely on everything else you know/i);
-    expect(prompt).not.toMatch(/do not claim/i);
+    expect(messages[1]).toEqual({ role: 'user', content: 'What is this?' });
+    expect(messages[2]).toEqual({ role: 'assistant', content: 'It is a pan.' });
+    expect(messages[3]).toEqual({ role: 'user', content: 'Is it safe?' });
+    expect(messages[4]).toEqual({ role: 'assistant', content: 'The coating looks worn.' });
+    expect(messages[5]).toEqual({ role: 'user', content: 'Then help me' });
   });
 
-  it('keeps pinned extraction when the verbatim turn window is exceeded', () => {
+  it('bounds recent canonical turns deterministically', () => {
     const turns = Array.from({ length: DEFAULT_RECENT_TURN_LIMIT + 3 }, (_, index) => ({
       question: `Question ${index}`,
       answer: `Answer ${index}`,
     }));
 
-    const prompt = buildPinnedContextPrompt({
-      pinnedExtraction,
+    const messages = buildCanonicalModelMessages({
       turns,
-      question: 'Use the visible facts.',
+      currentQuestion: 'Use the visible facts.',
     });
+    const content = messages.map((message) => message.content).join('\n');
 
-    expect(prompt).toContain(pinnedExtraction);
-    expect(prompt).toContain(`Question ${turns.length - 1}`);
-    expect(prompt).not.toContain('Question 0');
+    expect(content).toContain(`Question ${turns.length - 1}`);
+    expect(content).not.toContain('Question 0');
+  });
+
+  it('attaches image media only to isolated perception requests', () => {
+    const messages = buildPerceptionModelMessages('Return JSON only.', '/photo.jpg');
+
+    expect(messages).toEqual([
+      expect.objectContaining({ role: 'system' }),
+      { role: 'user', content: 'Return JSON only.', mediaPath: '/photo.jpg' },
+    ]);
+  });
+
+  it('builds single-user final answer requests without canonical transcript turns', () => {
+    const messages = buildSingleUserModelMessages('Question: what is this?');
+
+    expect(messages).toEqual([
+      expect.objectContaining({ role: 'system' }),
+      { role: 'user', content: 'Question: what is this?' },
+    ]);
   });
 });

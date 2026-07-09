@@ -12,13 +12,13 @@ import { join } from 'path';
 
 import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
+import { InferenceMetricsRecorder } from '../../../src/inference/InferenceMetrics';
 import {
   InferenceQueue,
   type EngineGenerateRequest,
   type InferenceEngineAdapter,
   type InferenceQueueDeps,
 } from '../../../src/inference/InferenceQueue';
-import { InferenceMetricsRecorder } from '../../../src/inference/InferenceMetrics';
 import type { InferenceRequest, InferenceState } from '../../../src/types/models';
 
 // Let all pending microtasks (the awaited preprocess/loadModel steps) settle.
@@ -232,19 +232,41 @@ describe('InferenceQueue two-stage first image turns', () => {
 
     expect(generatedRequests).toHaveLength(2);
     expect(generatedRequests[0]).toMatchObject({
-      imagePath: request.imagePath,
       kind: 'extraction',
       originalQuestion: request.question,
     });
-    expect(generatedRequests[0].question).toMatch(/valid json only/i);
+    expect(generatedRequests[0].messages[1]).toEqual(
+      expect.objectContaining({
+        role: 'user',
+        mediaPath: request.imagePath,
+        content: expect.stringMatching(/valid json only/i),
+      })
+    );
     expect(generatedRequests[1]).toMatchObject({
       kind: 'answer',
       originalQuestion: request.question,
     });
-    expect(generatedRequests[1].imagePath).toBeUndefined();
-    expect(generatedRequests[1].question).toContain('Visible facts from the image');
-    expect(generatedRequests[1].question).toContain('ceramic mug');
-    expect(generatedRequests[1].question).toContain(request.question);
+    expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
+    expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: ceramic mug');
+    expect(generatedRequests[1].messages.at(-1)?.content).toContain(request.question);
+  });
+
+  it('records a dev-only trace without treating internal stages as visible chat', async () => {
+    const queue = makeQueue({ isTraceEnabled: () => true });
+
+    await queue.submit(request);
+
+    const trace = queue.getState().inferenceTrace;
+    expect(trace?.stages.map((stage) => stage.stage)).toEqual(['perception', 'answer']);
+    expect(trace?.stages[0].modelInput[1]).toEqual(
+      expect.objectContaining({ mediaPath: request.imagePath })
+    );
+    expect(trace?.stages[0].rawOutput).toBe(validExtractionJson);
+    expect(trace?.stages[0].parsedOutput).toEqual(
+      expect.objectContaining({ subjectObject: 'ceramic mug' })
+    );
+    expect(trace?.finalResponse).toBe('answer');
+    expect(queue.getState().response).toBe('answer');
   });
 
   it('exposes a completed production-owned objective result record', async () => {

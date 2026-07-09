@@ -1,16 +1,9 @@
 import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
-import { buildPinnedContextPrompt } from '../../src/inference/ContextBuilder';
+import { buildCanonicalModelMessages } from '../../src/inference/ContextBuilder';
 import { buildStructuredExtractionPrompt } from '../../src/inference/ExtractionPrompt';
 import { LOCRA_SYSTEM_PROMPT } from '../../src/inference/SystemPrompt';
 
 const OFF_IMAGE_FOLLOW_UP = 'My pan is sticky, how do I fix it?';
-const PINNED_EXTRACTION = [
-  'Subject/object: cast-iron skillet',
-  'Visible features: black, round, metal handle',
-  'Visible text: None visible',
-  'Visible condition: dull, patchy residue',
-].join('\n');
-
 describe('persistent system prompt', () => {
   it('establishes a concise grounded answer-first identity', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
@@ -27,20 +20,29 @@ describe('persistent system prompt', () => {
   });
 });
 
-describe('benign off-image follow-up assembly', () => {
-  const prompt = buildPinnedContextPrompt({
-    pinnedExtraction: PINNED_EXTRACTION,
-    turns: [{ question: 'What is this?', answer: PINNED_EXTRACTION }],
-    question: OFF_IMAGE_FOLLOW_UP,
+describe('canonical follow-up assembly', () => {
+  const messages = buildCanonicalModelMessages({
+    turns: [
+      {
+        question: 'What is this?',
+        answer: 'It is a cast-iron skillet with dull, patchy residue.',
+      },
+    ],
+    currentQuestion: OFF_IMAGE_FOLLOW_UP,
   });
 
-  it('still invites general knowledge beyond the photo', () => {
-    expect(prompt).toMatch(/draw freely on everything else you know/i);
+  it('keeps prior chat as separate canonical messages', () => {
+    expect(messages.map((message) => message.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
   });
 
-  it('still grounds visual facts in the pinned extraction', () => {
-    expect(prompt).toContain(PINNED_EXTRACTION);
-    expect(prompt).toContain(OFF_IMAGE_FOLLOW_UP);
+  it('does not wrap follow-ups in a transcript prompt string', () => {
+    expect(messages.at(-1)?.content).toBe(OFF_IMAGE_FOLLOW_UP);
+    expect(messages.map((message) => message.content).join('\n')).not.toMatch(/conversation so far/i);
   });
 });
 
@@ -79,9 +81,9 @@ describe('answer prompt assembly', () => {
       pipelineVariantId: 'recommended-sampling-v1',
     });
 
-    expect(prompt).toContain('Visible facts from the image');
-    expect(prompt).toContain('General knowledge and reasoning');
-    expect(prompt).toContain('Uncertainty');
-    expect(prompt).toContain('Actionable next steps');
+    expect(prompt).toContain('Image evidence: worn cooking pan');
+    expect(prompt).not.toContain('Visible facts from the image');
+    expect(prompt).not.toContain('General knowledge and reasoning');
+    expect(prompt).not.toContain('Actionable next steps');
   });
 });

@@ -6,13 +6,13 @@
 
 ## Summary
 
-Refactor Locra's answer generation into a quality-oriented pipeline that separates image perception from the user-facing answer, keeps grounded visual evidence as hidden context, avoids repeated transcript replay when React Native ExecuTorch already owns live managed history, reconstructs persisted context once on resume, and preserves tall/document-like image content before the 512x512 model-input ceiling. After the production pipeline can produce the final user-facing answer and expose a complete production-owned objective inference result DTO, add a lightweight dev-only evaluation recorder that consumes that DTO, accumulates evaluation runs in evaluation-only local storage, and exports contract-valid JSONL artifacts without any production inference dependency on evaluation code.
+Refactor Locra's answer generation into a quality-oriented pipeline that separates image perception from the user-facing answer, keeps canonical conversation state owned by Locra, sends deterministic bounded message lists through stateless ExecuTorch generation, and preserves tall/document-like image content before the 512x512 model-input ceiling. After the production pipeline can produce the final user-facing answer and expose a complete production-owned objective inference result DTO, add a lightweight dev-only evaluation recorder that consumes that DTO, accumulates evaluation runs in evaluation-only local storage, and exports contract-valid JSONL artifacts without any production inference dependency on evaluation code.
 
 ## Technical Context
 
 **Language/Version**: TypeScript strict mode; React Native 0.85.3; Expo SDK 56; React 19.2.3; Android-only.
 
-**Primary Dependencies**: `react-native-executorch` 0.9.2 (`useLLM`, `sendMessage`, managed `messageHistory`, `configure`, `interrupt`); `react-native-executorch-expo-resource-fetcher` 0.9.1; `expo-image-manipulator`; `react-native-nitro-image`; Zustand; MMKV; React Navigation; Jest Expo.
+**Primary Dependencies**: `react-native-executorch` 0.9.2 (`useLLM`, stateless `generate(messages)`, `messageHistory` cleanup, `interrupt`); `react-native-executorch-expo-resource-fetcher` 0.9.1; `expo-image-manipulator`; `react-native-nitro-image`; Zustand; MMKV; React Navigation; Jest Expo.
 
 **Storage**: Existing production state remains in MMKV only. Evaluation recording uses evaluation-only local storage that is separate from normal conversation history, flagging data, and production analytics. Exported evaluation artifacts are versioned local JSONL files under `quality-eval/results/`.
 
@@ -40,7 +40,7 @@ Refactor Locra's answer generation into a quality-oriented pipeline that separat
 - VI. TDD for Core Systems: PASS WITH TASK REQUIREMENT. Any inference or preprocessing behavior changes require failing unit tests before implementation.
 - VII. New Architecture Only: PASS. No new native dependency is planned.
 - VIII. Single Local Store: PASS. Production persistence remains MMKV; evaluation storage is isolated from production history and removable.
-- IX. Verify Before Assuming: PASS. Installed ExecuTorch 0.9.2 APIs were checked locally: `sendMessage`, `messageHistory`, `configure`, `interrupt`, and generation fields `temperature`, `topP`, `minP`, `repetitionPenalty`; no `topK` or native max-token field.
+- IX. Verify Before Assuming: PASS. Installed ExecuTorch 0.9.2 APIs were checked locally: `generate(messages)` is available and documented as not managing conversation context; `sendMessage`, `messageHistory`, `configure`, `interrupt`, and generation fields `temperature`, `topP`, `minP`, `repetitionPenalty` also exist; no `topK` or native max-token field.
 - X. Hard Architecture Boundaries: PASS. Production screens continue to use stores/components. `useInferenceEngine.ts` remains the only sanctioned `useLLM` call site. Evaluation modules must not be imported by production screens/navigation/history.
 - XI. Single Theme Source: PASS. Any dev-only recorder UI must still use `src/constants/theme.ts`, but release UI remains unchanged.
 
