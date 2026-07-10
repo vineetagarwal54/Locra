@@ -13,7 +13,6 @@ import {
   buildCanonicalModelMessages,
   buildPerceptionModelMessages,
   buildPerceptionRetryModelMessages,
-  buildSingleUserModelMessages,
   type ContextTurn,
   type ModelRequestMessage,
 } from './ContextBuilder';
@@ -199,9 +198,10 @@ export class InferenceQueue implements IInferenceQueue {
     try {
       recorder.markRequestStart();
       recorder.markPreprocessingStart();
-      const processed = isFollowUp
+      const requestImagePath = this.resolveRequestImagePath(request, options);
+      const processed = requestImagePath === null
         ? null
-        : await this.deps.preprocess(request.imagePath);
+        : await this.deps.preprocess(requestImagePath);
       lifecycleGates.prepare.resolve(undefined);
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
@@ -239,6 +239,7 @@ export class InferenceQueue implements IInferenceQueue {
           : await this.generateFirstImageAnswer(
               request,
               processed,
+              options.canonicalTurns ?? [],
               active,
               recorder,
               markBudgetStopped,
@@ -330,6 +331,7 @@ export class InferenceQueue implements IInferenceQueue {
   private async generateFirstImageAnswer(
     request: InferenceRequest,
     processed: PreprocessedImage,
+    canonicalTurns: ContextTurn[],
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
     markBudgetStopped: () => void,
@@ -412,7 +414,10 @@ export class InferenceQueue implements IInferenceQueue {
     });
     lifecycleGates.contextAssembly.resolve(undefined);
     const answerResult = await this.generateVisibleAnswer(
-      buildSingleUserModelMessages(answerPrompt),
+      buildCanonicalModelMessages({
+        turns: canonicalTurns,
+        currentQuestion: answerPrompt,
+      }),
       active,
       recorder,
       markBudgetStopped,
@@ -573,7 +578,7 @@ export class InferenceQueue implements IInferenceQueue {
   ): TurnLifecycleRequest {
     const requestWithAttribution = request as InferenceRequest & Partial<TurnLifecycleRequest>;
     const fallbackRequestId = this.createFallbackLifecycleId('request');
-    const imagePath = options.turn === 'followUp' ? null : request.imagePath;
+    const imagePath = this.resolveRequestImagePath(request, options);
 
     return {
       requestId: requestWithAttribution.requestId ?? fallbackRequestId,
@@ -592,6 +597,21 @@ export class InferenceQueue implements IInferenceQueue {
   private createFallbackLifecycleId(prefix: string): string {
     this.lifecycleRequestSequence += 1;
     return `legacy-${prefix}-${this.lifecycleRequestSequence}`;
+  }
+
+  private resolveRequestImagePath(
+    request: InferenceRequest,
+    options: InferenceSubmitOptions,
+  ): string | null {
+    if (request.imagePath === null) {
+      return null;
+    }
+
+    if (options.turn !== 'followUp') {
+      return request.imagePath;
+    }
+
+    return hasStableAttribution(request) ? request.imagePath : null;
   }
 
   private requireLifecycleGates(): LifecycleGates {
@@ -644,6 +664,15 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return 'Inference failed for an unknown reason.';
+}
+
+function hasStableAttribution(request: InferenceRequest): boolean {
+  return (
+    typeof request.requestId === 'string' &&
+    typeof request.conversationId === 'string' &&
+    typeof request.originatingUserMessageId === 'string' &&
+    typeof request.assistantMessageId === 'string'
+  );
 }
 
 function createLifecycleGates(): LifecycleGates {

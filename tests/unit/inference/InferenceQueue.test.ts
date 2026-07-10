@@ -251,6 +251,51 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(generatedRequests[1].messages.at(-1)?.content).toContain(request.question);
   });
 
+  it('runs the image pipeline for an attributed image-bearing follow-up with prior context', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const followUpRequest: InferenceRequest = {
+      requestId: 'request-follow-up-image',
+      conversationId: 'conversation-1',
+      originatingUserMessageId: 'user-message-2',
+      assistantMessageId: 'assistant-message-2',
+      imagePath: '/tmp/follow-up.jpg',
+      question: 'Compare this new image.',
+    };
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken) => {
+        generatedRequests.push(generateRequest);
+        const response = generatedRequests.length === 1
+          ? validExtractionJson
+          : 'The new image is another ceramic item.';
+        onToken(response, 8);
+        return Promise.resolve({ response, tokenCount: 8 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(followUpRequest, {
+      turn: 'followUp',
+      canonicalTurns: [
+        { question: 'What was image A?', answer: 'Image A showed a metal pan.' },
+      ],
+    });
+
+    expect(generatedRequests.map((item) => item.kind)).toEqual(['extraction', 'answer']);
+    expect(generatedRequests[0].messages[1]).toEqual(
+      expect.objectContaining({ mediaPath: '/tmp/follow-up.jpg' }),
+    );
+    expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
+    expect(generatedRequests[1].messages.map((message) => message.content)).toEqual(
+      expect.arrayContaining([
+        'What was image A?',
+        'Image A showed a metal pan.',
+      ]),
+    );
+    expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: ceramic mug');
+    expect(queue.getState().status).toBe('completed');
+  });
+
   it('records a dev-only trace without treating internal stages as visible chat', async () => {
     const queue = makeQueue({ isTraceEnabled: () => true });
 

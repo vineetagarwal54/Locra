@@ -28,6 +28,7 @@ export const theme = {
   // Borders
   border: 'rgba(255, 255, 255, 0.08)',
   borderStrong: 'rgba(255, 255, 255, 0.14)',
+  scrim: 'rgba(0, 0, 0, 0.38)',
 
   // Semantic
   error: '#FF5E57',

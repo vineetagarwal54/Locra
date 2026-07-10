@@ -13,7 +13,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import { HistoryStore, type HistoryStorage } from '../../src/history/HistoryStore';
-import type { MetricsSummary, PerformanceMetrics, QASession } from '../../src/types/models';
+import type { Conversation, MetricsSummary, PerformanceMetrics } from '../../src/types/models';
 
 class MemoryHistoryStorage implements HistoryStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -44,15 +44,33 @@ const metrics: PerformanceMetrics = {
   totalWallTimeMs: 40,
 };
 
-function makeSession(overrides: Partial<QASession> = {}): QASession {
+function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
+  const id = overrides.id ?? 'conversation';
+  const createdAt = overrides.createdAt ?? 100;
   return {
-    id: 'session',
-    createdAt: 100,
-    imagePath: '/photo.jpg',
-    question: 'What is this?',
-    answer: 'A mug.',
-    turns: [{ question: 'What is this?', answer: 'A mug.' }],
-    pinnedExtraction: 'Subject/object: mug',
+    id,
+    createdAt,
+    updatedAt: overrides.updatedAt ?? createdAt,
+    messages: [
+      {
+        id: `${id}:user`,
+        role: 'user',
+        text: 'What is this?',
+        attachments: [{ kind: 'image', path: '/photo.jpg' }],
+        status: 'completed',
+        errorMessage: null,
+        createdAt,
+      },
+      {
+        id: `${id}:assistant`,
+        role: 'assistant',
+        text: 'A mug.',
+        attachments: [],
+        status: 'completed',
+        errorMessage: null,
+        createdAt: createdAt + 1,
+      },
+    ],
     status: 'completed',
     errorMessage: null,
     metrics,
@@ -71,28 +89,39 @@ function readSource(relativePath: string): string {
 }
 
 describe('History store contract', () => {
-  it('saves terminal sessions, returns newest first, and supports get()', () => {
+  it('saves terminal conversations, returns newest first by updatedAt, and supports get()', () => {
     const store = makeStore();
-    const oldest = makeSession({ id: 'oldest', createdAt: 1 });
-    const newest = makeSession({ id: 'newest', createdAt: 3 });
-    const middle = makeSession({ id: 'middle', createdAt: 2 });
+    const oldest = makeConversation({ id: 'oldest', createdAt: 1, updatedAt: 10 });
+    const newest = makeConversation({ id: 'newest', createdAt: 3, updatedAt: 30 });
+    const middle = makeConversation({ id: 'middle', createdAt: 2, updatedAt: 20 });
 
     store.save(oldest);
     store.save(newest);
     store.save(middle);
 
     expect(store.get('newest')).toEqual(newest);
-    expect(store.list().map((session) => session.id)).toEqual(['newest', 'middle', 'oldest']);
+    expect(store.list().map((conversation) => conversation.id)).toEqual([
+      'newest',
+      'middle',
+      'oldest',
+    ]);
+    expect(store.get('newest')?.messages[0]).toEqual(
+      expect.objectContaining({
+        id: 'newest:user',
+        role: 'user',
+        attachments: [{ kind: 'image', path: '/photo.jpg' }],
+      })
+    );
   });
 
   it('delete and clear remove entries so they do not reappear through the app', () => {
     const store = makeStore();
-    store.save(makeSession({ id: 'one' }));
-    store.save(makeSession({ id: 'two' }));
+    store.save(makeConversation({ id: 'one' }));
+    store.save(makeConversation({ id: 'two' }));
 
     store.delete('one');
     expect(store.get('one')).toBeNull();
-    expect(store.list().map((session) => session.id)).toEqual(['two']);
+    expect(store.list().map((conversation) => conversation.id)).toEqual(['two']);
 
     store.clear();
     expect(store.list()).toEqual([]);
@@ -100,14 +129,14 @@ describe('History store contract', () => {
 
   it('setFlag updates existing sessions and no-ops for missing ids', () => {
     const store = makeStore();
-    const session = makeSession({ id: 'flag-me' });
-    store.save(session);
+    const conversation = makeConversation({ id: 'flag-me' });
+    store.save(conversation);
 
     expect(() => store.setFlag('missing', true, 'bad answer')).not.toThrow();
-    store.setFlag(session.id, true, 'bad answer');
+    store.setFlag(conversation.id, true, 'bad answer');
 
-    expect(store.get(session.id)).toEqual({
-      ...session,
+    expect(store.get(conversation.id)).toEqual({
+      ...conversation,
       flagged: true,
       flagNote: 'bad answer',
     });
@@ -115,9 +144,9 @@ describe('History store contract', () => {
 
   it('summarizes metrics only from sessions with completed metrics', () => {
     const store = makeStore();
-    store.save(makeSession({ id: 'one', metrics }));
+    store.save(makeConversation({ id: 'one', metrics }));
     store.save(
-      makeSession({
+      makeConversation({
         id: 'two',
         metrics: {
           modelLoadTimeMs: 30,
@@ -128,7 +157,7 @@ describe('History store contract', () => {
         },
       })
     );
-    store.save(makeSession({ id: 'errored', status: 'errored', metrics: null }));
+    store.save(makeConversation({ id: 'errored', status: 'errored', metrics: null }));
 
     const summary: MetricsSummary = store.getMetricsSummary();
 
@@ -140,6 +169,41 @@ describe('History store contract', () => {
       averageTokensPerSecond: 6,
       averageTotalWallTimeMs: 50,
     });
+  });
+
+  it('list(limit, offset) slices across more than one page and still reaches older conversations', () => {
+    const store = makeStore();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const now = 1_700_000_000_000;
+
+    for (let index = 0; index < 12; index += 1) {
+      store.save(
+        makeConversation({
+          id: `conversation-${index}`,
+          createdAt: now - index * oneDay,
+          updatedAt: now - index * oneDay,
+        })
+      );
+    }
+
+    expect(store.list(5, 0).map((conversation) => conversation.id)).toEqual([
+      'conversation-0',
+      'conversation-1',
+      'conversation-2',
+      'conversation-3',
+      'conversation-4',
+    ]);
+    expect(store.list(5, 5).map((conversation) => conversation.id)).toEqual([
+      'conversation-5',
+      'conversation-6',
+      'conversation-7',
+      'conversation-8',
+      'conversation-9',
+    ]);
+    expect(store.list(undefined, 10).map((conversation) => conversation.id)).toEqual([
+      'conversation-10',
+      'conversation-11',
+    ]);
   });
 
   it('keeps history persistence structurally MMKV-only and boundary-local', () => {

@@ -6,9 +6,9 @@ import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
 import { VoiceTranscriptionHost } from '../components/VoiceTranscriptionHost';
-import { AnswerScreen } from '../screens/AnswerScreen';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
+import { ChatScreen } from '../screens/ChatScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { ModelSetupScreen } from '../screens/ModelSetupScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
@@ -18,13 +18,8 @@ import { useVoiceStore } from '../store/voiceStore';
 
 export type RootStackParamList = {
   Welcome: undefined;
-  Capture: undefined;
-  /**
-   * Two entry modes (FR-046): a fresh ask arrives with `imagePath`+`question`
-   * (the submit was already fired from Capture); a thread reopened from
-   * History arrives with `sessionId` and hydrates its persisted turns.
-   */
-  Answer: { imagePath: string; question: string; sessionId?: undefined } | { sessionId: string };
+  Chat: { conversationId: string };
+  Capture: { conversationId: string };
   History: undefined;
   ModelSetup: undefined;
   Benchmark: undefined;
@@ -35,8 +30,8 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 // Constitution Principle III: every screen is wrapped so a render crash in one
 // degrades to a legible fallback instead of taking down the app.
 const Welcome = withErrorBoundary(WelcomeScreen);
+const Chat = withErrorBoundary(ChatScreen);
 const Capture = withErrorBoundary(CaptureScreen);
-const Answer = withErrorBoundary(AnswerScreen);
 const History = withErrorBoundary(HistoryScreen);
 const ModelSetup = withErrorBoundary(ModelSetupScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
@@ -45,7 +40,7 @@ const Benchmark = withErrorBoundary(BenchmarkScreen);
 //   1. Never onboarded        → Welcome (explains the app + requests camera)
 //   2. Onboarded, model not ready → ModelSetup (download / re-download)
 //   3. Onboarded, model ready → Capture
-// Returning users with a ready model land straight on the camera.
+// Returning users with a ready model land straight on New Chat.
 function resolveInitialRoute(): keyof RootStackParamList {
   if (!hasCompletedWelcome()) {
     return 'Welcome';
@@ -53,7 +48,7 @@ function resolveInitialRoute(): keyof RootStackParamList {
   if (!useModelStore.getState().isReadyForInference()) {
     return 'ModelSetup';
   }
-  return 'Capture';
+  return 'Chat';
 }
 
 export function AppNavigator() {
@@ -112,8 +107,8 @@ export function AppNavigator() {
       {voiceEnabled ? <VoiceTranscriptionHost /> : null}
       <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
+        <Stack.Screen name="Chat" component={Chat} initialParams={{ conversationId: 'new' }} />
         <Stack.Screen name="Capture" component={Capture} />
-        <Stack.Screen name="Answer" component={Answer} />
         <Stack.Screen name="History" component={History} />
         <Stack.Screen name="ModelSetup" component={ModelSetup} />
         <Stack.Screen name="Benchmark" component={Benchmark} />

@@ -50,7 +50,7 @@ export function HistoryScreen({ navigation }: Props) {
     (sessionId: string): void => {
       void haptics.tap();
       // FR-046: reopening a thread hydrates its full turn list and continues it.
-      navigation.navigate('Answer', { sessionId });
+      navigation.navigate('Chat', { conversationId: sessionId });
     },
     [navigation]
   );

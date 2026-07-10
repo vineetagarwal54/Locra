@@ -5,6 +5,14 @@ import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInfer
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 
 export type QASessionStatus = 'streaming' | 'completed' | 'cancelled' | 'errored';
+export type ConversationStatus = 'idle' | QASessionStatus;
+export type AttachmentKind = 'image';
+export type MessageStatus = 'generating' | 'completed' | 'failed' | 'interrupted';
+
+export interface Attachment {
+  kind: AttachmentKind;
+  path: string;
+}
 
 export interface PerformanceMetrics {
   modelLoadTimeMs: number;
@@ -28,6 +36,42 @@ export interface QASession {
   metrics: PerformanceMetrics | null;
   flagged: boolean;
   flagNote: string | null;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  attachments: Attachment[];
+  status: MessageStatus;
+  errorMessage: string | null;
+  createdAt: number;
+}
+
+export interface Conversation {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ConversationMessage[];
+  status: ConversationStatus;
+  errorMessage: string | null;
+  metrics: PerformanceMetrics | null;
+  flagged: boolean;
+  flagNote: string | null;
+}
+
+export interface Draft {
+  conversationId: string | null;
+  text: string;
+  imagePath: string | null;
+}
+
+export interface ConversationRuntimeState {
+  conversationId: string;
+  originatingUserMessageId: string | null;
+  assistantMessageId: string | null;
+  streamingText: string;
+  isOwnerOfActiveInference: boolean;
 }
 
 export type ModelDownloadStatus = 'not_started' | 'downloading' | 'paused' | 'downloaded' | 'failed';
@@ -57,7 +101,11 @@ export type InferenceStatus =
   | 'errored';
 
 export interface InferenceRequest {
-  imagePath: string;
+  requestId?: string;
+  conversationId?: string;
+  originatingUserMessageId?: string;
+  assistantMessageId?: string;
+  imagePath: string | null;
   question: string;
 }
 
