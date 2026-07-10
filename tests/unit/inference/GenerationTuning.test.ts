@@ -49,13 +49,15 @@ describe('generation tuning', () => {
     expect(OUTPUT_TOKEN_BUDGET).toBeGreaterThan(256);
   });
 
-  it('uses a concise grounded persistent system prompt', () => {
+  it('uses a short positive-first persistent system prompt', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/answer the user's actual question/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/visible evidence/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/general knowledge/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/concise/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertaint/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/helpful offline assistant/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/most useful answer/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/conversation context/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/available image evidence/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/practical steps/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/current value cannot be confirmed/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertain/i);
   });
 
   it('uses stateless context assembly without runtime generation overrides', () => {

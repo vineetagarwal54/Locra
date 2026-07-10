@@ -1,4 +1,7 @@
-import { buildContextTurnsBeforeMessage, type ContextTurn } from '../inference/ContextBuilder';
+import {
+  buildCanonicalConversationContextBeforeMessage,
+  type CanonicalConversationContext,
+} from '../inference/ContextBuilder';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -114,9 +117,9 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId,
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
-    // FR-009/FR-011: bounded prior canonical turns from THIS conversation only —
-    // the queue assembles them into the model request via ContextBuilder.
-    const canonicalTurns = buildContextTurnsBeforeMessage(
+    // Snapshot completed turns from THIS conversation only. ContextBuilder
+    // applies the model-input budget when the queue assembles the request.
+    const conversationContext = buildCanonicalConversationContextBeforeMessage(
       updatedConversation.messages,
       originatingUserMessageId
     );
@@ -131,7 +134,7 @@ export class ConversationStore implements IConversationStore {
       isOwnerOfActiveInference: true,
     });
 
-    this.startQueueSubmission(activeGeneration, inferenceRequest, canonicalTurns);
+    this.startQueueSubmission(activeGeneration, inferenceRequest, conversationContext);
     this.clearDraft(conversationId);
     return activeGeneration;
   }
@@ -201,7 +204,7 @@ export class ConversationStore implements IConversationStore {
         },
         requestId
       ),
-      buildContextTurnsBeforeMessage(messages, userMessage.id)
+      buildCanonicalConversationContextBeforeMessage(messages, userMessage.id)
     );
   }
 
@@ -346,13 +349,13 @@ export class ConversationStore implements IConversationStore {
   private startQueueSubmission(
     activeGeneration: ActiveGeneration,
     request: InferenceRequest,
-    canonicalTurns: ContextTurn[]
+    conversationContext: CanonicalConversationContext
   ): void {
     const options = {
       // Mirrors the legacy store's semantics: a turn with prior completed
       // context is a follow-up (model already resident); otherwise first.
-      turn: canonicalTurns.length > 0 ? ('followUp' as const) : ('first' as const),
-      canonicalTurns,
+      turn: conversationContext.turns.length > 0 ? ('followUp' as const) : ('first' as const),
+      conversationContext,
     };
     void this.dependencies.inferenceQueue.submit(request, options).catch((error: unknown) => {
       if (

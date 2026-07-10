@@ -5,7 +5,12 @@
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
 import type { IInferenceQueue } from '../types/interfaces';
-import type { InferenceRequest, InferenceState, InferenceStatus } from '../types/models';
+import type {
+  CanonicalConversationContext,
+  InferenceRequest,
+  InferenceState,
+  InferenceStatus,
+} from '../types/models';
 
 import { postProcessAnswer } from './AnswerPostProcessor';
 import { buildAnswerPrompt } from './AnswerPrompt';
@@ -13,7 +18,7 @@ import {
   buildCanonicalModelMessages,
   buildPerceptionModelMessages,
   buildPerceptionRetryModelMessages,
-  type ContextTurn,
+  createCanonicalConversationContext,
   type ModelRequestMessage,
 } from './ContextBuilder';
 import { parseExtractionWithRetry } from './ExtractionParser';
@@ -75,7 +80,7 @@ export interface InferenceEngineAdapter {
 
 export interface InferenceSubmitOptions {
   turn?: 'first' | 'followUp';
-  canonicalTurns?: ContextTurn[];
+  conversationContext?: CanonicalConversationContext;
 }
 
 export interface InferenceQueueDeps {
@@ -168,6 +173,8 @@ export class InferenceQueue implements IInferenceQueue {
       return Promise.reject(new Error('An inference is already in progress.'));
     }
 
+    const conversationContext = resolveConversationContext(options);
+
     if (!this.activityLock.tryAcquire('vlm')) {
       return Promise.reject(
         new Error('Voice input is in progress. Try again in a moment.'),
@@ -234,7 +241,7 @@ export class InferenceQueue implements IInferenceQueue {
         processed === null
           ? await this.generateFollowUpAnswer(
               request,
-              options.canonicalTurns ?? [],
+              conversationContext,
               active,
               recorder,
               markBudgetStopped,
@@ -243,7 +250,7 @@ export class InferenceQueue implements IInferenceQueue {
           : await this.generateFirstImageAnswer(
               request,
               processed,
-              options.canonicalTurns ?? [],
+              conversationContext,
               active,
               recorder,
               markBudgetStopped,
@@ -335,7 +342,7 @@ export class InferenceQueue implements IInferenceQueue {
   private async generateFirstImageAnswer(
     request: InferenceRequest,
     processed: PreprocessedImage,
-    canonicalTurns: ContextTurn[],
+    conversationContext: CanonicalConversationContext,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
     markBudgetStopped: () => void,
@@ -419,7 +426,7 @@ export class InferenceQueue implements IInferenceQueue {
     lifecycleGates.contextAssembly.resolve(undefined);
     const answerResult = await this.generateVisibleAnswer(
       buildCanonicalModelMessages({
-        turns: canonicalTurns,
+        conversationContext,
         currentQuestion: answerPrompt,
       }),
       active,
@@ -440,7 +447,7 @@ export class InferenceQueue implements IInferenceQueue {
 
   private generateFollowUpAnswer(
     request: InferenceRequest,
-    canonicalTurns: ContextTurn[],
+    conversationContext: CanonicalConversationContext,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
     markBudgetStopped: () => void,
@@ -453,7 +460,7 @@ export class InferenceQueue implements IInferenceQueue {
     lifecycleGates.contextAssembly.resolve(undefined);
     return this.generateVisibleAnswer(
       buildCanonicalModelMessages({
-        turns: canonicalTurns,
+        conversationContext,
         currentQuestion: request.question,
       }),
       active,
@@ -707,6 +714,16 @@ function hasStableAttribution(request: InferenceRequest): boolean {
     typeof request.originatingUserMessageId === 'string' &&
     typeof request.assistantMessageId === 'string'
   );
+}
+
+function resolveConversationContext(
+  options: InferenceSubmitOptions,
+): CanonicalConversationContext {
+  if (options.turn === 'followUp' && options.conversationContext === undefined) {
+    throw new Error('A follow-up inference requires canonical conversation context.');
+  }
+
+  return createCanonicalConversationContext(options.conversationContext?.turns ?? []);
 }
 
 function createLifecycleGates(): LifecycleGates {

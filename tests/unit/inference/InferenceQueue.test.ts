@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
+import { createCanonicalConversationContext } from '../../../src/inference/ContextBuilder';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import { InferenceMetricsRecorder } from '../../../src/inference/InferenceMetrics';
 import {
@@ -138,7 +139,10 @@ describe('InferenceQueue', () => {
     const queue = makeQueue({ engine });
     queue.subscribe((s) => seen.push({ ...s }));
 
-    const inFlight = queue.submit(request, { turn: 'followUp' });
+    const inFlight = queue.submit(request, {
+      turn: 'followUp',
+      conversationContext: createCanonicalConversationContext([]),
+    });
     await flush();
     expect(queue.getState().response).toBe('partial ans');
 
@@ -156,6 +160,20 @@ describe('InferenceQueue', () => {
     gate.resolve({ response: 'partial ans and more', tokenCount: 9 });
     await inFlight;
     expect(queue.getState().response).toBe('');
+    expect(queue.getState().status).toBe('idle');
+  });
+
+  it('rejects a follow-up before inference when canonical context is omitted', async () => {
+    const generate = jest.fn(() => Promise.resolve({ response: 'unused', tokenCount: 1 }));
+    const queue = makeQueue({
+      engine: { loadModel: () => Promise.resolve(), generate },
+    });
+
+    await expect(queue.submit(request, { turn: 'followUp' })).rejects.toThrow(
+      /requires canonical conversation context/i,
+    );
+
+    expect(generate).not.toHaveBeenCalled();
     expect(queue.getState().status).toBe('idle');
   });
 
@@ -251,12 +269,16 @@ describe('InferenceQueue false tool-refusal recovery', () => {
       { question: 'What is multiplication?', answer: 'It is repeated addition.' },
     ];
 
-    await queue.submit(scenarioRequest, { turn: scenario.turn, canonicalTurns });
+    await queue.submit(scenarioRequest, {
+      turn: scenario.turn,
+      conversationContext: createCanonicalConversationContext(canonicalTurns),
+    });
 
     const visibleRequests = generatedRequests.filter((item) => item.kind !== 'extraction');
     expect(visibleRequests).toHaveLength(2);
     expect(visibleRequests[1].messages.slice(1)).toEqual(visibleRequests[0].messages.slice(1));
-    expect(visibleRequests[1].messages[0].content).toMatch(/do not discuss tools/i);
+    expect(visibleRequests[1].messages[0].content).toMatch(/unnecessarily unhelpful/i);
+    expect(visibleRequests[1].messages[0].content).toMatch(/practical guidance directly/i);
     expect(queue.getState().response).toBe('17 times 24 is 408.');
   });
 
@@ -272,6 +294,52 @@ describe('InferenceQueue false tool-refusal recovery', () => {
 
     expect(generate).toHaveBeenCalledTimes(1);
     expect(queue.getState().response).toBe('17 times 24 is 408.');
+  });
+
+  it('preserves the complete canonical follow-up context during a recovery retry', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const generate = jest.fn((generateRequest, onToken) => {
+      generatedRequests.push(generateRequest);
+      const response = generatedRequests.length === 1
+        ? "I don't have a tool that can answer that."
+        : 'It refers to the red bicycle from the image turn.';
+      onToken(response, 8);
+      return Promise.resolve({ response, tokenCount: 8 });
+    });
+    const queue = makeQueue({ engine: { loadModel: () => Promise.resolve(), generate } });
+    const conversationContext = createCanonicalConversationContext([
+      {
+        question: 'What is shown in this image?',
+        answer: 'A red bicycle is leaning beside a garage.',
+      },
+      {
+        question: 'Is it outdoors?',
+        answer: 'Yes, it appears to be outdoors.',
+      },
+    ]);
+
+    await queue.submit(
+      { imagePath: null, question: 'What does it refer to?' },
+      { turn: 'followUp', conversationContext },
+    );
+
+    expect(generatedRequests).toHaveLength(2);
+    expect(generatedRequests[0].messages[0]?.content).toMatch(
+      /final user message is the current request/i,
+    );
+    expect(generatedRequests[1].messages.slice(1)).toEqual(
+      generatedRequests[0].messages.slice(1),
+    );
+    expect(generatedRequests[1].messages[0]?.content).toMatch(
+      /final user message is the current request/i,
+    );
+    expect(generatedRequests[1].messages.map((message) => message.content)).toEqual(
+      expect.arrayContaining([
+        'What is shown in this image?',
+        'A red bicycle is leaning beside a garage.',
+        'What does it refer to?',
+      ]),
+    );
   });
 
   it('limits recovery to one retry when the second response is also a refusal', async () => {
@@ -371,9 +439,9 @@ describe('InferenceQueue two-stage first image turns', () => {
 
     await queue.submit(followUpRequest, {
       turn: 'followUp',
-      canonicalTurns: [
+      conversationContext: createCanonicalConversationContext([
         { question: 'What was image A?', answer: 'Image A showed a metal pan.' },
-      ],
+      ]),
     });
 
     expect(generatedRequests.map((item) => item.kind)).toEqual(['extraction', 'answer']);

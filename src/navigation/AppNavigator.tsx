@@ -1,8 +1,13 @@
 import { createDrawerNavigator } from '@react-navigation/drawer';
-import { getFocusedRouteNameFromRoute, NavigationContainer } from '@react-navigation/native';
+import {
+  getFocusedRouteNameFromRoute,
+  NavigationContainer,
+  useNavigationContainerRef,
+  type NavigatorScreenParams,
+} from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useEffect, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AppState, StyleSheet, type AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
@@ -41,7 +46,7 @@ export type RootStackParamList = {
 };
 
 export type RootDrawerParamList = {
-  Root: undefined;
+  Root: NavigatorScreenParams<RootStackParamList> | undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -82,6 +87,26 @@ function resolveInitialRoute(): keyof RootStackParamList {
     return 'ModelIntro';
   }
   return 'Chat';
+}
+
+// Where a foreground return (e.g. tapping Locra's background-download
+// notification) should land the user while the model is still being set up.
+// Cold launches are already handled by resolveInitialRoute above; this covers a
+// warm resume. It intentionally acts ONLY when a real background download is
+// live (downloading/paused) so it never yanks a ready-model user or a user who
+// chose "Not now" (not_started) out of Chat. A ready model reached in the
+// background is finished by the DownloadProgress → Success effects, and a failed
+// download keeps its in-place recovery card, so neither needs a redirect here.
+function foregroundDownloadRoute(): 'DownloadProgress' | null {
+  if (!hasCompletedWelcome()) {
+    return null;
+  }
+  const modelState = useModelStore.getState();
+  if (modelState.isReadyForInference()) {
+    return null;
+  }
+  const status = modelState.downloadStatus;
+  return status === 'downloading' || status === 'paused' ? 'DownloadProgress' : null;
 }
 
 // The stack owns every screen and the onboarding launch gate; the drawer (T046)
@@ -145,6 +170,30 @@ export function AppNavigator() {
     }
   }, [engineReady]);
 
+  // Route a foreground return (notification tap during an active background
+  // download) to the live download screen. Preserves the background download
+  // and reattach behavior — it only navigates, never touches the download.
+  const navigationRef = useNavigationContainerRef<RootDrawerParamList>();
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next: AppStateStatus) => {
+      const previous = appStateRef.current;
+      appStateRef.current = next;
+      if (next !== 'active' || previous === 'active') {
+        return;
+      }
+      if (!navigationRef.isReady()) {
+        return;
+      }
+      const target = foregroundDownloadRoute();
+      if (target === null || navigationRef.getCurrentRoute()?.name === target) {
+        return;
+      }
+      navigationRef.navigate('Root', { screen: target });
+    });
+    return () => subscription.remove();
+  }, [navigationRef]);
+
   if (!bootstrapped) {
     return (
       <ErrorBoundary>
@@ -155,7 +204,7 @@ export function AppNavigator() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         {engineHostMounted ? <InferenceEngineHost /> : null}
         {voiceEnabled ? <VoiceTranscriptionHost /> : null}
         <Drawer.Navigator

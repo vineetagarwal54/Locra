@@ -1,12 +1,16 @@
 import {
   DEFAULT_RECENT_TURN_LIMIT,
-  buildCanonicalModelMessages,
+  MAX_CANONICAL_CONTEXT_CHARS,
+  buildCanonicalModelMessages as buildCanonicalModelMessagesFromContext,
   buildCanonicalModelMessagesForConversation,
   buildImageAnswerModelMessages,
   buildPerceptionModelMessages,
   buildSingleUserModelMessages,
+  createCanonicalConversationContext,
   getImageAttachmentPath,
   shouldRunPerceptionForMessage,
+  type ContextTurn,
+  type ModelRequestMessage,
 } from '../../../src/inference/ContextBuilder';
 import type { ConversationMessage } from '../../../src/types/models';
 
@@ -23,6 +27,18 @@ function message(
   };
 }
 
+function buildCanonicalModelMessages(input: {
+  turns: ReadonlyArray<ContextTurn>;
+  currentQuestion: string;
+  recentTurnLimit?: number;
+}): ModelRequestMessage[] {
+  return buildCanonicalModelMessagesFromContext({
+    conversationContext: createCanonicalConversationContext(input.turns),
+    currentQuestion: input.currentQuestion,
+    recentTurnLimit: input.recentTurnLimit,
+  });
+}
+
 describe('ContextBuilder', () => {
   it('builds live follow-up context as explicit canonical messages', () => {
     const messages = buildCanonicalModelMessages({
@@ -37,9 +53,26 @@ describe('ContextBuilder', () => {
       'user',
     ]);
     expect(messages.at(-1)?.content).toBe('shorter');
+    expect(messages[0]?.content).toMatch(/final user message is the current request/i);
+    expect(messages[0]?.content).toMatch(/resolve references/i);
+    expect(messages[0]?.content).toMatch(/fixed source material/i);
+    expect(messages[0]?.content).toMatch(/do not repeat or recycle/i);
     expect(messages.map((message) => message.content).join('\n')).not.toContain(
       'Conversation so far'
     );
+  });
+
+  it('does not add follow-up-only instructions to a first-turn request', () => {
+    const messages = buildCanonicalModelMessages({
+      turns: [],
+      currentQuestion: 'Explain dependency injection.',
+    });
+
+    expect(messages[0]?.content).not.toMatch(/final user message is the current request/i);
+    expect(messages.at(-1)).toEqual({
+      role: 'user',
+      content: 'Explain dependency injection.',
+    });
   });
 
   it('keeps canonical turns as separate messages instead of a transcript prompt', () => {
@@ -58,6 +91,101 @@ describe('ContextBuilder', () => {
     expect(messages[5]).toEqual({ role: 'user', content: 'Then help me' });
   });
 
+  it('keeps a previous assistant offer intact for an acknowledgement follow-up', () => {
+    const explanation = 'Background detail. '.repeat(90);
+    const offer = 'I can also turn this into a three-step checklist.';
+    const messages = buildCanonicalModelMessages({
+      turns: [
+        {
+          question: 'How should I organize this project?',
+          answer: `${explanation}${offer}`,
+        },
+      ],
+      currentQuestion: 'Yes',
+    });
+
+    expect(messages).toEqual([
+      expect.objectContaining({ role: 'system' }),
+      { role: 'user', content: 'How should I organize this project?' },
+      { role: 'assistant', content: `${explanation}${offer}` },
+      { role: 'user', content: 'Yes' },
+    ]);
+  });
+
+  it('retains an earlier numbered item while a conversation continues', () => {
+    const turns = [
+      {
+        question: 'Here are the questions I need to resolve.',
+        answer: '1. Choose a database.\n2. Define the offline sync policy.\n3. Plan backups.',
+      },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        question: `Related discussion ${index + 1}`,
+        answer: `Related answer ${index + 1}`,
+      })),
+    ];
+
+    const messages = buildCanonicalModelMessages({
+      turns,
+      currentQuestion: 'Please handle the second item next.',
+    });
+
+    expect(messages.map((item) => item.content)).toEqual(
+      expect.arrayContaining([
+        'Here are the questions I need to resolve.',
+        '1. Choose a database.\n2. Define the offline sync policy.\n3. Plan backups.',
+      ]),
+    );
+  });
+
+  it('preserves pronoun antecedents in chronological role order', () => {
+    const messages = buildCanonicalModelMessages({
+      turns: [
+        {
+          question: 'I am comparing SQLite and MMKV for settings.',
+          answer: 'MMKV is the simpler fit for small key-value settings.',
+        },
+        {
+          question: 'What is its main tradeoff?',
+          answer: 'It is not a relational query engine.',
+        },
+      ],
+      currentQuestion: 'Would it still work offline?',
+    });
+
+    expect(messages.slice(1)).toEqual([
+      { role: 'user', content: 'I am comparing SQLite and MMKV for settings.' },
+      { role: 'assistant', content: 'MMKV is the simpler fit for small key-value settings.' },
+      { role: 'user', content: 'What is its main tradeoff?' },
+      { role: 'assistant', content: 'It is not a relational query engine.' },
+      { role: 'user', content: 'Would it still work offline?' },
+    ]);
+  });
+
+  it('retains the originating topic after several short turns', () => {
+    const turns = [
+      {
+        question: 'Let us plan a balcony herb garden.',
+        answer: 'Start with basil, mint, and thyme.',
+      },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        question: `Planning detail ${index + 1}`,
+        answer: `Decision ${index + 1}`,
+      })),
+    ];
+
+    const messages = buildCanonicalModelMessages({
+      turns,
+      currentQuestion: 'What should we do next?',
+    });
+
+    expect(messages.map((item) => item.content)).toEqual(
+      expect.arrayContaining([
+        'Let us plan a balcony herb garden.',
+        'Start with basil, mint, and thyme.',
+      ]),
+    );
+  });
+
   it('bounds recent canonical turns deterministically', () => {
     const turns = Array.from({ length: DEFAULT_RECENT_TURN_LIMIT + 3 }, (_, index) => ({
       question: `Question ${index}`,
@@ -72,6 +200,35 @@ describe('ContextBuilder', () => {
 
     expect(content).toContain(`Question ${turns.length - 1}`);
     expect(content).not.toContain('Question 0');
+  });
+
+  it('honors an explicit zero-turn context limit', () => {
+    const messages = buildCanonicalModelMessages({
+      turns: [{ question: 'Prior question', answer: 'Prior answer' }],
+      currentQuestion: 'Current question',
+      recentTurnLimit: 0,
+    });
+
+    expect(messages.map((item) => item.content)).toEqual([
+      expect.any(String),
+      'Current question',
+    ]);
+  });
+
+  it('marks unavoidable shortening and preserves both ends of the newest turn', () => {
+    const answer = `Opening context. ${'detail '.repeat(
+      MAX_CANONICAL_CONTEXT_CHARS * 2,
+    )}Final offer: I can create the checklist.`;
+    const messages = buildCanonicalModelMessages({
+      turns: [{ question: 'Plan this project.', answer }],
+      currentQuestion: 'Yes',
+    });
+    const retainedAnswer = messages[2]?.content ?? '';
+
+    expect(retainedAnswer).toContain('Opening context.');
+    expect(retainedAnswer).toContain('[... context shortened ...]');
+    expect(retainedAnswer).toContain('Final offer: I can create the checklist.');
+    expect(retainedAnswer.length).toBeLessThan(MAX_CANONICAL_CONTEXT_CHARS);
   });
 
   it('attaches image media only to isolated perception requests', () => {
@@ -133,6 +290,7 @@ describe('ContextBuilder', () => {
     });
 
     expect(modelMessages.some((item) => item.mediaPath !== undefined)).toBe(false);
+    expect(modelMessages[0]?.content).toMatch(/final user message is the current request/i);
     expect(modelMessages.map((item) => item.content)).toEqual(
       expect.arrayContaining([
         'What is in this photo?',
@@ -199,5 +357,37 @@ describe('ContextBuilder', () => {
 
     expect(joined.match(/Image evidence: red bicycle near a garage\./g)).toHaveLength(1);
     expect(modelMessages.some((item) => item.mediaPath !== undefined)).toBe(false);
+  });
+
+  it('applies the same follow-up focus to an image answer with prior canonical turns', () => {
+    const messages: ConversationMessage[] = [
+      message({ id: 'user-1', role: 'user', text: 'Compare two repair approaches.' }),
+      message({
+        id: 'assistant-1',
+        role: 'assistant',
+        text: 'Approach A replaces the part. Approach B repairs it in place.',
+      }),
+      message({
+        id: 'user-image',
+        role: 'user',
+        text: 'Which approach fits this image?',
+        attachments: [{ kind: 'image', path: '/photos/repair.jpg' }],
+      }),
+    ];
+
+    const modelMessages = buildImageAnswerModelMessages({
+      messages,
+      currentUserMessageId: 'user-image',
+      answerPrompt: 'Question: Which approach fits this image?\nImage evidence: cracked part.',
+    });
+
+    expect(modelMessages[0]?.content).toMatch(/final user message is the current request/i);
+    expect(modelMessages.slice(1, 3)).toEqual([
+      { role: 'user', content: 'Compare two repair approaches.' },
+      {
+        role: 'assistant',
+        content: 'Approach A replaces the part. Approach B repairs it in place.',
+      },
+    ]);
   });
 });

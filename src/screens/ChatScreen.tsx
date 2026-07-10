@@ -1,9 +1,13 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useDrawerStatus } from '@react-navigation/drawer';
 import { DrawerActions, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  BackHandler,
   FlatList,
+  Keyboard,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
@@ -36,6 +40,17 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 // points of the bottom; beyond it we assume they scrolled up to re-read and never
 // force a jump back down.
 const AUTO_FOLLOW_THRESHOLD = 96;
+
+// Id of the most recent user turn, used to detect a freshly sent message
+// (text / image / voice all append a user message) so the list can reveal it.
+function lastUserMessageId(messages: ConversationMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') {
+      return messages[i].id;
+    }
+  }
+  return null;
+}
 
 export function ChatScreen({ navigation, route }: Props) {
   const conversationId = route.params.conversationId;
@@ -74,6 +89,84 @@ export function ChatScreen({ navigation, route }: Props) {
       setRuntimeState(conversationStore.getConversationRuntimeState(conversationId));
       return undefined;
     }, [conversationId])
+  );
+
+  // ── Smart auto-scroll ──────────────────────────────────────────────────────
+  const prevLastUserMessageIdRef = useRef<string | null>(null);
+
+  // Switching/resuming a conversation: baseline the last-user-turn tracker and
+  // jump to the latest message without animation, so a resumed thread opens at
+  // the bottom with no visible jump.
+  useEffect(() => {
+    const messages =
+      conversationId === 'new'
+        ? []
+        : (useHistoryStore.getState().getConversation(conversationId)?.messages ?? []);
+    prevLastUserMessageIdRef.current = lastUserMessageId(messages);
+    isNearBottomRef.current = true;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+  }, [conversationId]);
+
+  // A freshly sent turn (text, image, or voice transcript) appends a new user
+  // message — reveal it and re-arm auto-follow so the assistant reply streams
+  // into view while the user stays near the bottom.
+  useEffect(() => {
+    const id = lastUserMessageId(conversation?.messages ?? []);
+    if (id !== null && id !== prevLastUserMessageIdRef.current) {
+      prevLastUserMessageIdRef.current = id;
+      isNearBottomRef.current = true;
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+    }
+  }, [conversation?.messages]);
+
+  // ── Android back button ────────────────────────────────────────────────────
+  const drawerStatus = useDrawerStatus();
+  const drawerStatusRef = useRef(drawerStatus);
+  useEffect(() => {
+    drawerStatusRef.current = drawerStatus;
+  }, [drawerStatus]);
+
+  const keyboardVisibleRef = useRef(false);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => {
+      keyboardVisibleRef.current = true;
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardVisibleRef.current = false;
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  // Try normal navigation first — close the drawer, dismiss the keyboard, or pop
+  // a nested screen — and only confirm exit at the Chat root where back would
+  // otherwise leave the app. Active ONLY while Chat is focused, so onboarding,
+  // model setup, recovery, and nested screens keep their default back behavior.
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = (): boolean => {
+        if (drawerStatusRef.current === 'open') {
+          navigation.dispatch(DrawerActions.closeDrawer());
+          return true;
+        }
+        if (keyboardVisibleRef.current) {
+          Keyboard.dismiss();
+          return true;
+        }
+        if (navigation.canGoBack()) {
+          return false;
+        }
+        Alert.alert('Exit Locra?', undefined, [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Exit', style: 'destructive', onPress: () => BackHandler.exitApp() },
+        ]);
+        return true;
+      };
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [navigation])
   );
 
   const isMissingConversation = conversationId !== 'new' && conversation === null;
