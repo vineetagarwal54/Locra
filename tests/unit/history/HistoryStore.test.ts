@@ -10,7 +10,11 @@ jest.mock('../../../src/storage/mmkv', () => ({
 }));
 
 import { HistoryStore, type HistoryStorage } from '../../../src/history/HistoryStore';
-import type { Conversation, PerformanceMetrics } from '../../../src/types/models';
+import type {
+  Conversation,
+  ConversationContextMemory,
+  PerformanceMetrics,
+} from '../../../src/types/models';
 
 class TestHistoryStorage implements HistoryStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -81,6 +85,50 @@ function makeStore(): HistoryStore {
   return new HistoryStore(new TestHistoryStorage());
 }
 
+function makeContextMemory(): ConversationContextMemory {
+  return {
+    version: 'conversation-context-memory-v1',
+    sourceMessageCount: 2,
+    rollingSummary: {
+      version: 'rolling-summary-v1',
+      coveredThroughMessageId: 'conversation-1:assistant',
+      sourceMessageIds: ['conversation-1:user', 'conversation-1:assistant'],
+      entries: [
+        {
+          version: 'context-summary-entry-v1',
+          sourceUserMessageId: 'conversation-1:user',
+          sourceAssistantMessageId: 'conversation-1:assistant',
+          text: 'User: What is this?\nLocra: A small object.',
+          createdAt: 1_700_000_000_001,
+        },
+      ],
+    },
+    importantFacts: [
+      {
+        version: 'context-memory-fact-v1',
+        id: 'conversation-1:assistant:fact:0',
+        sourceMessageId: 'conversation-1:assistant',
+        text: 'A small object.',
+        createdAt: 1_700_000_000_001,
+      },
+    ],
+    mediaEvidence: [
+      {
+        version: 'context-media-evidence-v1',
+        id: 'conversation-1:user:image',
+        sourceMessageId: 'conversation-1:user',
+        modality: 'image',
+        sourcePath: '/tmp/photo.jpg',
+        summary: 'small object',
+        facts: ['round'],
+        extractedText: [],
+        uncertainty: [],
+        createdAt: 1_700_000_000_000,
+      },
+    ],
+  };
+}
+
 describe('HistoryStore', () => {
   it('save persists a terminal-state conversation and get returns it', () => {
     const store = makeStore();
@@ -89,6 +137,42 @@ describe('HistoryStore', () => {
     store.save(conversation);
 
     expect(store.get(conversation.id)).toEqual(conversation);
+  });
+
+  it('round-trips versioned derived context memory without changing raw messages', () => {
+    const store = makeStore();
+    const conversation = makeConversation({ contextMemory: makeContextMemory() });
+
+    store.save(conversation);
+
+    expect(store.get(conversation.id)?.contextMemory).toEqual(makeContextMemory());
+    expect(store.get(conversation.id)?.messages).toEqual(conversation.messages);
+  });
+
+  it('keeps conversations without derived memory backward compatible', () => {
+    const store = makeStore();
+    const conversation = makeConversation();
+
+    store.save(conversation);
+
+    expect(store.get(conversation.id)).toEqual(conversation);
+    expect(store.get(conversation.id)?.contextMemory).toBeUndefined();
+  });
+
+  it('drops unknown derived-memory versions so they can be regenerated', () => {
+    const storage = new TestHistoryStorage();
+    const store = new HistoryStore(storage);
+    const conversation = makeConversation();
+    storage.set(
+      'history:session:conversation-1',
+      JSON.stringify({
+        ...conversation,
+        contextMemory: { version: 'conversation-context-memory-v99', unsafe: true },
+      }),
+    );
+
+    expect(store.get(conversation.id)?.contextMemory).toBeUndefined();
+    expect(store.get(conversation.id)?.messages).toEqual(conversation.messages);
   });
 
   it('list returns conversations newest-first by updatedAt', () => {

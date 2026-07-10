@@ -51,6 +51,7 @@ interface IConversationStore {
 6. `clearDraft()` is the only way a draft is removed short of the app process ending; navigation alone MUST NOT clear a draft.
 7. `retryFailedMessage(conversationId, assistantMessageId)` MUST target the exact assistant message identified by `assistantMessageId`, resetting it in place to `'generating'` and reusing its paired `originatingUserMessageId` unchanged — it MUST NOT append a new user or assistant message, and calling it with a stale/already-retried `assistantMessageId` after the message has changed identity is not possible, because retry never changes the assistant message's `id` (FR-029, retry identity).
 8. **Navigation independence**: nothing in this store's state is keyed by, or derived from, "which conversation is currently focused on screen." Every read (`getConversationRuntimeState`, `getDraft`) and every write (`submit`, `retryFailedMessage`, `cancelActiveGeneration`, draft setters) is keyed explicitly by the `conversationId` parameter passed in — never an ambient "current" pointer. This is what makes background generation and cross-conversation isolation structurally guaranteed rather than convention-dependent.
+9. Before queue submission, the store snapshots only the owning conversation, runs `ContextOrchestrator`, persists the returned versioned derived-memory sidecar, and passes the isolated `canonical-conversation-v2` selection to the queue. A successful image turn merges normalized evidence by `originatingUserMessageId`; raw messages remain unchanged.
 
 ## `IInferenceQueue` (extended)
 
@@ -69,6 +70,11 @@ interface InferenceRequest {
   question: string;
   imagePath: string | null;       // CHANGED — was `string` (required); now optional per-message (FR-003/FR-004)
 }
+
+interface InferenceSubmitOptions {
+  turn?: 'first' | 'followUp';
+  conversationContext?: CanonicalConversationContext; // canonical-conversation-v2
+}
 ```
 
 There is deliberately no `turnIndex` field anywhere in this contract. A positional index is ambiguous the moment retry, concurrent conversations, or any future reordering is in play; the three stable identities above (`conversationId`, `originatingUserMessageId`, `assistantMessageId`) are unambiguous by construction and are what every ownership/ownership-adjacent invariant in `contracts/inference-ownership.md` and `contracts/turn-lifecycle-machine.md` keys on.
@@ -78,6 +84,7 @@ There is deliberately no `turnIndex` field anywhere in this contract. A position
 1. `InferenceQueue` itself remains conversation-agnostic and stateless across calls (unchanged from today — "Locra owns conversation state; ExecuTorch is used only as a stateless inference runtime"); `conversationId`/`originatingUserMessageId`/`assistantMessageId` are opaque attribution data the queue passes through to its `onToken`/completion callbacks unchanged, not data it interprets.
 2. `submit()` continues to reject immediately (no queueing) if `isInFlight()` is already true, regardless of `conversationId` (FR-012) — this behavior is unchanged from today, just now the caller (`conversationStore`) is what's conversation-aware, not the queue.
 3. Image preprocessing/perception (research.md R2) runs whenever `imagePath !== null` on the submitted request, independent of any position in the conversation — never gated on an index.
+4. The queue clones `conversationContext` before preprocessing/model awaits. ContextBuilder serializes that selected context for text and image answer stages; refusal recovery may extend the system instruction but MUST preserve the selected recent turns, evidence, facts, and summary.
 
 ## `IHistoryStore` (extended)
 
@@ -89,3 +96,4 @@ Existing interface, same method signatures (`save`, `get`, `list`, `delete`, `cl
 - Structural: never imports AsyncStorage/SQLite; never imports from `../screens|inference|model` (existing `tests/contract/history-store.test.ts` boundary, must keep passing).
 - `save()` is idempotent-by-id: saving with an existing `id` updates that conversation in place; it never creates a duplicate entry.
 - `list()`'s recency sort (`updatedAt` descending) and slicing must together be sufficient to populate all four History groups (`Today`/`Yesterday`/`Previous 7 Days`/`Older`, data-model.md) — no conversation may become unreachable through `list()` at any `limit`/`offset` combination that eventually covers the full stored set.
+- `contextMemory` is optional and backward compatible. Valid `conversation-context-memory-v1` data round-trips in the existing conversation record; missing data remains missing, and unknown versions are omitted so they can be regenerated from raw messages.

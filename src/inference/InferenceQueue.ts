@@ -723,7 +723,19 @@ function resolveConversationContext(
     throw new Error('A follow-up inference requires canonical conversation context.');
   }
 
-  return createCanonicalConversationContext(options.conversationContext?.turns ?? []);
+  const context = options.conversationContext ?? createCanonicalConversationContext([]);
+  return {
+    ...context,
+    recentTurns: context.recentTurns.map((turn) => ({ ...turn })),
+    mediaEvidence: context.mediaEvidence.map((evidence) => ({
+      ...evidence,
+      facts: [...evidence.facts],
+      extractedText: [...evidence.extractedText],
+      uncertainty: [...evidence.uncertainty],
+    })),
+    importantFacts: context.importantFacts.map((fact) => ({ ...fact })),
+    budget: { ...context.budget },
+  };
 }
 
 function createLifecycleGates(): LifecycleGates {

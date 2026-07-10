@@ -245,14 +245,64 @@ describe('conversationStore', () => {
     });
 
     expect(queue.submittedContexts[1]).toEqual({
-      version: 'canonical-conversation-v1',
-      turns: [
+      version: 'canonical-conversation-v2',
+      recentTurns: [
         {
           question: 'Give me two deployment options.',
           answer: '1. Local APK.\n2. Managed EAS build.',
         },
       ],
+      mediaEvidence: [],
+      importantFacts: [],
+      olderSummary: null,
+      budget: {
+        policyId: 'character-budget-v1',
+        maximumUnits: 14_400,
+        usedUnits: 130,
+      },
     });
+  });
+
+  it('persists image evidence and reuses it in a later follow-up context', async () => {
+    const { store, queue, history } = makeStore();
+    const first = await store.submit('new', {
+      question: 'What text is visible?',
+      imagePath: '/capture/receipt.jpg',
+    });
+    queue.emit({
+      ...makeInferenceState('completed', 'The receipt shows order A-184.'),
+      hiddenEvidence: {
+        version: 'hidden-evidence-v1',
+        imagePath: '/capture/receipt.jpg',
+        sourceQuestion: 'What text is visible?',
+        subjectObject: 'printed receipt',
+        visibleFeatures: ['white paper'],
+        visibleText: ['Order A-184'],
+        visibleCondition: 'readable',
+        uncertainty: [],
+        createdAt: '2026-07-10T12:00:00.000Z',
+      },
+    });
+
+    expect(history.get(first.conversationId)?.contextMemory?.mediaEvidence[0]).toEqual(
+      expect.objectContaining({
+        sourceMessageId: first.originatingUserMessageId,
+        summary: 'printed receipt',
+        extractedText: ['Order A-184'],
+      }),
+    );
+
+    await store.submit(first.conversationId, {
+      question: 'Which order identifier was shown?',
+      imagePath: null,
+    });
+
+    expect(queue.submittedContexts[1]?.mediaEvidence[0]).toEqual(
+      expect.objectContaining({
+        sourceMessageId: first.originatingUserMessageId,
+        extractedText: ['Order A-184'],
+      }),
+    );
   });
 
   it('rejects a submit elsewhere while preserving that conversation draft and messages', async () => {

@@ -1,9 +1,16 @@
 import type {
   CanonicalContextTurn,
   CanonicalConversationContext,
+  Conversation,
   ConversationMessage,
 } from '../types/models';
 
+import {
+  ContextOrchestrator,
+  createCanonicalConversationSnapshot,
+  formatMediaEvidence,
+  formatMemoryFact,
+} from './ContextOrchestrator';
 import { LOCRA_FOLLOW_UP_INSTRUCTION, LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
 export type ContextTurn = CanonicalContextTurn;
@@ -20,38 +27,27 @@ export interface ModelRequestMessage {
 export interface BuildCanonicalContextInput {
   conversationContext: CanonicalConversationContext;
   currentQuestion: string;
-  recentTurnLimit?: number;
 }
 
 export interface BuildConversationContextInput {
   messages: ConversationMessage[];
   currentUserMessageId: string;
-  recentTurnLimit?: number;
 }
 
 export interface BuildImageAnswerContextInput extends BuildConversationContextInput {
   answerPrompt: string;
 }
 
-export const DEFAULT_RECENT_TURN_LIMIT = 12;
-export const MAX_CANONICAL_CONTEXT_CHARS = 14_400;
-
-const CONTEXT_TURN_OVERHEAD_CHARS = 32;
-const CONTEXT_SHORTENED_MARKER = '\n[... context shortened ...]\n';
-
 const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
   'You are Locra internal visual evidence extraction. Return only the requested structured evidence.';
+const defaultContextOrchestrator = new ContextOrchestrator();
 
 export function buildCanonicalModelMessages(
   input: BuildCanonicalContextInput
 ): ModelRequestMessage[] {
-  const contextTurns = boundedTurns(
-    input.conversationContext.turns,
-    input.recentTurnLimit,
-  );
   return [
-    answerSystemMessage(contextTurns.length > 0),
-    ...contextTurns.flatMap(turnToMessages),
+    answerSystemMessage(input.conversationContext),
+    ...input.conversationContext.recentTurns.flatMap(turnToMessages),
     userMessage(input.currentQuestion),
   ];
 }
@@ -59,51 +55,56 @@ export function buildCanonicalModelMessages(
 export function createCanonicalConversationContext(
   turns: ReadonlyArray<ContextTurn>,
 ): CanonicalConversationContext {
-  return {
-    version: 'canonical-conversation-v1',
-    turns: turns.map((turn) => ({
-      question: turn.question,
-      answer: turn.answer,
-    })),
-  };
-}
-
-export function buildCanonicalConversationContextBeforeMessage(
-  messages: ConversationMessage[],
-  currentUserMessageId: string,
-): CanonicalConversationContext {
-  return createCanonicalConversationContext(
-    buildContextTurnsBeforeMessage(messages, currentUserMessageId),
+  const recentTurns = turns.map((turn) => ({
+    question: turn.question,
+    answer: turn.answer,
+  }));
+  const usedUnits = recentTurns.reduce(
+    (total, turn) => total + turn.question.length + turn.answer.length,
+    0,
   );
+  return {
+    version: 'canonical-conversation-v2',
+    recentTurns,
+    mediaEvidence: [],
+    importantFacts: [],
+    olderSummary: null,
+    budget: {
+      policyId: 'preselected-context-v1',
+      maximumUnits: usedUnits,
+      usedUnits,
+    },
+  };
 }
 
 export function buildCanonicalModelMessagesForConversation(
   input: BuildConversationContextInput
 ): ModelRequestMessage[] {
   const currentMessage = findUserMessage(input.messages, input.currentUserMessageId);
-  return buildCanonicalModelMessages({
-    conversationContext: buildCanonicalConversationContextBeforeMessage(
-      input.messages,
+  const conversationContext = defaultContextOrchestrator.orchestrate(
+    createCanonicalConversationSnapshot(
+      conversationForContextBuilder(input.messages),
       input.currentUserMessageId,
     ),
+  ).context;
+  return buildCanonicalModelMessages({
+    conversationContext,
     currentQuestion: currentMessage.text,
-    recentTurnLimit: input.recentTurnLimit,
   });
 }
 
 export function buildImageAnswerModelMessages(
   input: BuildImageAnswerContextInput
 ): ModelRequestMessage[] {
-  const contextTurns = boundedTurns(
-    buildCanonicalConversationContextBeforeMessage(
-      input.messages,
+  const conversationContext = defaultContextOrchestrator.orchestrate(
+    createCanonicalConversationSnapshot(
+      conversationForContextBuilder(input.messages),
       input.currentUserMessageId,
-    ).turns,
-    input.recentTurnLimit,
-  );
+    ),
+  ).context;
   return [
-    answerSystemMessage(contextTurns.length > 0),
-    ...contextTurns.flatMap(turnToMessages),
+    answerSystemMessage(conversationContext),
+    ...conversationContext.recentTurns.flatMap(turnToMessages),
     userMessage(input.answerPrompt),
   ];
 }
@@ -135,37 +136,6 @@ export function getImageAttachmentPath(message: ConversationMessage): string | n
   return attachment?.path ?? null;
 }
 
-export function buildContextTurnsBeforeMessage(
-  messages: ConversationMessage[],
-  currentUserMessageId: string,
-): ContextTurn[] {
-  const currentIndex = messages.findIndex((message) => message.id === currentUserMessageId);
-  if (currentIndex < 0) {
-    throw new Error(`Conversation message not found: ${currentUserMessageId}`);
-  }
-
-  return messages
-    .slice(0, currentIndex)
-    .reduce<ContextTurn[]>((turns, message, index, priorMessages) => {
-      if (message.role !== 'user') {
-        return turns;
-      }
-
-      const assistant = priorMessages[index + 1];
-      // Only completed pairs carry answer text worth feeding back as context —
-      // failed/interrupted/still-generating assistants have empty or partial text.
-      if (assistant?.role !== 'assistant' || assistant.status !== 'completed') {
-        return turns;
-      }
-
-      turns.push({
-        question: message.text,
-        answer: assistant.text,
-      });
-      return turns;
-    }, []);
-}
-
 function findUserMessage(
   messages: ConversationMessage[],
   currentUserMessageId: string,
@@ -178,42 +148,20 @@ function findUserMessage(
   return message;
 }
 
-function boundedTurns(
-  turns: ReadonlyArray<ContextTurn>,
-  recentTurnLimit: number | undefined,
-): ContextTurn[] {
-  const turnLimit = resolveRecentTurnLimit(recentTurnLimit);
-  if (turnLimit === 0) {
-    return [];
-  }
-
-  const candidates = turns.slice(-turnLimit);
-  const selected: ContextTurn[] = [];
-  let remainingChars = MAX_CANONICAL_CONTEXT_CHARS;
-
-  for (let index = candidates.length - 1; index >= 0; index -= 1) {
-    const turn = normalizedTurn(candidates[index]);
-    const turnChars = contextTurnChars(turn);
-    if (turnChars <= remainingChars) {
-      selected.unshift(turn);
-      remainingChars -= turnChars;
-      continue;
-    }
-
-    if (selected.length === 0 && remainingChars > CONTEXT_TURN_OVERHEAD_CHARS) {
-      selected.unshift(shortenTurnToBudget(turn, remainingChars));
-    }
-    break;
-  }
-
-  return selected;
-}
-
-function resolveRecentTurnLimit(limit: number | undefined): number {
-  if (limit === undefined) {
-    return DEFAULT_RECENT_TURN_LIMIT;
-  }
-  return Math.max(0, Math.floor(limit));
+function conversationForContextBuilder(messages: ConversationMessage[]): Conversation {
+  const createdAt = messages[0]?.createdAt ?? 0;
+  return {
+    id: 'context-builder-conversation',
+    createdAt,
+    updatedAt: messages.at(-1)?.createdAt ?? createdAt,
+    messages,
+    status: 'completed',
+    errorMessage: null,
+    metrics: null,
+    flagged: false,
+    flagNote: null,
+    contextMemory: null,
+  };
 }
 
 function turnToMessages(turn: ContextTurn): ModelRequestMessage[] {
@@ -227,12 +175,18 @@ function systemMessage(content: string): ModelRequestMessage {
   return { role: 'system', content };
 }
 
-function answerSystemMessage(hasPriorContext: boolean): ModelRequestMessage {
-  if (!hasPriorContext) {
+function answerSystemMessage(context: CanonicalConversationContext): ModelRequestMessage {
+  if (!hasConversationContext(context)) {
     return systemMessage(LOCRA_SYSTEM_PROMPT);
   }
 
-  return systemMessage(`${LOCRA_SYSTEM_PROMPT}\n\n${LOCRA_FOLLOW_UP_INSTRUCTION}`);
+  const derivedMemory = formatDerivedMemory(context);
+  const memorySuffix = derivedMemory === ''
+    ? ''
+    : `\n\nDerived conversation memory for reference only:\n${derivedMemory}`;
+  return systemMessage(
+    `${LOCRA_SYSTEM_PROMPT}\n\n${LOCRA_FOLLOW_UP_INSTRUCTION}${memorySuffix}`,
+  );
 }
 
 function userMessage(content: string): ModelRequestMessage {
@@ -243,51 +197,33 @@ function assistantMessage(content: string): ModelRequestMessage {
   return { role: 'assistant', content: content.trim() };
 }
 
-function normalizedTurn(turn: ContextTurn): ContextTurn {
-  return {
-    question: turn.question.trim(),
-    answer: turn.answer.trim(),
-  };
+function hasConversationContext(context: CanonicalConversationContext): boolean {
+  return (
+    context.recentTurns.length > 0 ||
+    context.mediaEvidence.length > 0 ||
+    context.importantFacts.length > 0 ||
+    context.olderSummary !== null
+  );
 }
 
-function contextTurnChars(turn: ContextTurn): number {
-  return turn.question.length + turn.answer.length + CONTEXT_TURN_OVERHEAD_CHARS;
-}
-
-function shortenTurnToBudget(turn: ContextTurn, budget: number): ContextTurn {
-  const contentBudget = Math.max(0, budget - CONTEXT_TURN_OVERHEAD_CHARS);
-  const totalChars = turn.question.length + turn.answer.length;
-  if (totalChars <= contentBudget) {
-    return turn;
+function formatDerivedMemory(context: CanonicalConversationContext): string {
+  const sections: string[] = [];
+  if (context.mediaEvidence.length > 0) {
+    sections.push(
+      `Relevant prior media evidence:\n${context.mediaEvidence
+        .map(formatMediaEvidence)
+        .join('\n\n')}`,
+    );
   }
-
-  const questionShare = totalChars === 0
-    ? 0
-    : Math.round(contentBudget * (turn.question.length / totalChars));
-  return {
-    question: shortenContextText(turn.question, questionShare),
-    answer: shortenContextText(turn.answer, contentBudget - questionShare),
-  };
-}
-
-function shortenContextText(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
+  if (context.importantFacts.length > 0) {
+    sections.push(
+      `Important prior facts and decisions:\n${context.importantFacts
+        .map((fact) => `- ${formatMemoryFact(fact)}`)
+        .join('\n')}`,
+    );
   }
-  if (maxChars <= 0) {
-    return '';
+  if (context.olderSummary !== null) {
+    sections.push(`Older conversation summary:\n${context.olderSummary}`);
   }
-  if (maxChars <= 3) {
-    return value.slice(-maxChars);
-  }
-  if (maxChars <= CONTEXT_SHORTENED_MARKER.length + 2) {
-    return `...${value.slice(-(maxChars - 3))}`;
-  }
-
-  const remainingChars = maxChars - CONTEXT_SHORTENED_MARKER.length;
-  const headChars = Math.ceil(remainingChars / 2);
-  const tailChars = remainingChars - headChars;
-  return `${value.slice(0, headChars).trimEnd()}${CONTEXT_SHORTENED_MARKER}${value
-    .slice(-tailChars)
-    .trimStart()}`;
+  return sections.join('\n\n');
 }

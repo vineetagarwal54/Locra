@@ -20,6 +20,8 @@ Per the spec's second revision pass, three points are load-bearing for this plan
 
 **Architecture addition (this planning pass): XState v5 as a narrow orchestration layer.** `InferenceQueue.ts` (`src/inference/InferenceQueue.ts`) already implements a hand-rolled state machine — a mutable `status` union plus imperative `setState` calls — and two phases the redesigned UI needs to show distinctly (image perception/extraction, and prompt/context assembly) are currently invisible, buried inside the existing `'streaming'` status. `xstate` (core package only, zero dependencies, no native module — verified React-Native-compatible; see research.md R10, sources cited) replaces that internal control flow with a declarative state chart (`idle → preparing → perception → contextAssembly → generating → streaming → completed | failed | interrupted`, with `RETRY` looping back). This is internal to `InferenceQueue.ts` only: `IInferenceQueue`'s public contract, `ContextBuilder.ts`, every prompt/parsing module (R9's frozen list), Zustand as the sole UI-facing reactive layer, and app-wide single-flight are all unchanged. Migration is sequenced per research.md R11: protect the existing regression suite → swap in XState with behavior verified unchanged → *then* generalize per-turn image branching (R2) and conversation-attributed ownership (R1) → connect the redesigned UI → validate.
 
+**Post-implementation architecture addition: lightweight context orchestration.** `ContextOrchestrator.ts` is inserted between a deep-cloned per-conversation snapshot and `ContextBuilder`. It deterministically retains recent exact turns, derives compact entries/fact candidates only from older completed turns, reuses conversation-scoped structured media evidence, and applies a replaceable budget policy. The derived `contextMemory` sidecar shares the existing MMKV conversation record but is versioned/regenerable; `Conversation.messages` remains canonical. This does not change XState ownership, the single-flight queue, two-stage image processing, refusal recovery, or stateless `generate(messages)`.
+
 ## Technical Context
 
 **Language/Version**: TypeScript ~6.0.3, React Native 0.85.3 (New Architecture enabled), Expo ~56.0.15 managed workflow
@@ -161,11 +163,12 @@ src/
 │   │                               #   per-message image branching below (step 4).
 │   ├── ContextBuilder.ts          # extended: per-message image branching — any ConversationMessage with
 │   │                               #   a non-empty attachments runs the two-stage perception→answer path
-│   │                               #   (not only the first message); text-only messages keep the existing
-│   │                               #   canonical-messages path unchanged (research.md R2). Called from
-│   │                               #   turnLifecycleMachine's contextAssembly-state actor, unmodified
-│   │                               #   itself (research.md R9); double-context-injection prevention is
-│   │                               #   unchanged and preserved.
+│   │                               #   (not only the first message); serializes ContextOrchestrator's
+│   │                               #   pre-budgeted recent turns + derived memory and owns no independent
+│   │                               #   truncation policy; double-context-injection prevention is preserved.
+│   ├── ContextOrchestrator.ts     # additive: isolated snapshot → recent exact turns + deterministically
+│   │                               #   selected media evidence/facts/older summary under replaceable budget;
+│   │                               #   no model/storage/network calls (contracts/context-orchestrator.md)
 │   ├── InferenceQueue.ts          # extended: internals reimplemented atop turnLifecycleMachine (research.md
 │   │                               #   R10) — IInferenceQueue's public submit/cancel/subscribe/getState
 │   │                               #   contract is UNCHANGED; `isFollowUp`/"first turn" framing generalizes
