@@ -103,6 +103,57 @@ Templates requiring updates:
     compatible as-is. Screen/component tasks must reference `theme.*` per XI.
 
 Follow-up TODOs: none new.
+
+------------------------------------------------------------------------------
+
+Version change: 1.2.0 → 2.0.0
+
+Modified principles:
+  - XI. Single Theme Source → XI. Design Source of Truth (principle
+    redefined, not merely extended: hardcoded design-token enforcement
+    against `src/constants/theme.ts` is replaced by a pointer-based rule
+    directing all UI work to `design/design.md`, `design/motion.md`,
+    `design/screen_map.md`, and `design/references/`).
+
+Added sections: none new (principle XI replaced in place; principle count
+remains eleven).
+
+Removed sections:
+  - Prior wording of Principle XI (hardcoded accent `#7C5CFC`, canvas
+    `#0f0f0f`, spacing/radius scale requirements) is superseded by the
+    design folder; those concrete values now live in `design/design.md`
+    and are no longer duplicated in the constitution.
+
+Rationale for MAJOR bump (not MINOR): Principle XI is redefined, not
+additively extended — the compliance bar for "what UI code must reference"
+changes from `theme.ts` to the `design/` folder, and code-review criteria
+tied to the old wording (no hardcoded colors/magic numbers in
+`StyleSheet.create()`, `theme.*`-only references) no longer apply as
+stated. This is a backward-incompatible principle redefinition per the
+versioning policy in Governance.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — Constitution Check gate is
+    generic and defers to this file; no structural edit required, but
+    future /speckit-plan runs must enumerate all eleven principles under
+    their current definitions, including the new Design Source of Truth
+    wording.
+  - ✅ .specify/templates/spec-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ .specify/templates/tasks-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ AGENTS.md — "Design system" section (previously listing hardcoded
+    hex values and a spacing/radius scale) rewritten to point at
+    `design/design.md`, `design/motion.md`, `design/screen_map.md`, and
+    `design/references/` instead of restating token values.
+  - ⚠ CLAUDE.md — still does not exist in the repository; AGENTS.md states
+    "CLAUDE.md points here," so there is no separate file to update, but
+    this gap is carried forward from the 1.0.0 report and remains
+    unresolved.
+
+Follow-up TODOs:
+  - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md still does not exist; carried
+    forward unresolved from the 1.0.0 report.
 -->
 
 # Locra Constitution
@@ -222,20 +273,40 @@ independently testable and the UI safely replaceable; violating them under
 time pressure compounds technical debt in the most safety-critical part of
 the app.
 
-### XI. Single Theme Source
+### XI. Design Source of Truth
 
-All color, spacing, radius, and typography-scale values MUST be imported from
-`src/constants/theme.ts`. Hardcoded hex values are not permitted anywhere in the
-UI, and magic numbers MUST NOT appear inside `StyleSheet.create()` calls for any
-value the theme defines (colors, spacing, radii, font sizes). Every screen and
-component MUST reference `theme.*` only, so that changing a value in
-`theme.ts` — for example the current accent `#7C5CFC` (electric violet) —
-propagates everywhere automatically with no per-file edits.
+The authoritative product design sources are `design/design.md`,
+`design/motion.md`, `design/screen_map.md`, and the approved visual
+references under `design/references/`. UI implementation MUST follow these
+sources instead of inventing a parallel design system; the constitution
+does not restate their tokens, layouts, or timings, and the design folder
+is the only place those values are allowed to be authored.
 
-**Rationale**: A single source of design tokens makes retheming a one-line
-change, keeps the app visually consistent by construction, and makes drift
-(a stray hex, an off-scale margin) mechanically detectable in review rather
-than a matter of taste.
+Existing screens MUST NOT be redesigned during unrelated feature work. New
+screens and components MUST extend the established tokens, reusable
+components, interaction patterns, navigation model, and motion language
+already defined in the design sources, not introduce competing ones.
+Accessibility, responsive behavior, keyboard-safe layouts, reduced-motion
+support, and minimum touch targets defined by the design system are
+product requirements, not optional polish.
+
+Motion MUST remain lightweight and MUST NOT compete with local model
+loading, image processing, inference, streaming, or local speech
+processing for device resources. Product UI MUST NOT expose hidden
+inference stages, internal prompts, intermediate perception output, raw
+model identifiers, or developer diagnostics, unless a future
+specification explicitly requires them.
+
+When design documents conflict with older styling guidance in earlier
+specifications, the current `design/` folder is authoritative for visual
+presentation. Functional requirements from existing specifications remain
+authoritative unless explicitly superseded by a new feature specification.
+
+**Rationale**: A single, versioned design source keeps the UI coherent as
+the app grows past Phase 1, prevents each feature from drifting into its
+own visual language, and keeps design changes auditable — without
+hardcoding specific colors or tokens into the constitution itself, which
+would go stale the moment the design system evolves.
 
 ## Technology Constraints
 
@@ -272,9 +343,10 @@ than a matter of taste.
 - Code review MUST confirm: no network calls were added to the inference
   path, the single-flight lock is respected end-to-end, tests precede
   implementation for inference/model-lifecycle code, the architecture
-  boundaries in Principle X are intact, and no hardcoded colors or magic
-  numbers were introduced in `StyleSheet.create()` calls — every screen and
-  component references `theme.*` only (Principle XI).
+  boundaries in Principle X are intact, and any UI change follows the
+  design sources in `design/` rather than inventing new tokens, components,
+  or visual patterns ad hoc, and does not redesign an existing screen as a
+  side effect of unrelated feature work (Principle XI).
 - Before installing any new native dependency (any package whose `android/`
   directory contains a `CMakeLists.txt` or its own native `build.gradle`),
   verify it does not hard-require NDK 27+ by inspecting those files for an
@@ -304,4 +376,4 @@ constitution via the Constitution Check gate. Use `CLAUDE.md` and
 `AGENTS.md` for day-to-day runtime development guidance derived from these
 principles.
 
-**Version**: 1.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-04
+**Version**: 2.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-09
