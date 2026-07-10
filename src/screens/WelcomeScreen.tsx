@@ -28,7 +28,7 @@ export function WelcomeScreen({ navigation }: Props) {
   const proceed = useCallback((): void => {
     completeWelcome();
     if (isReadyForInference()) {
-      navigation.replace('Capture');
+      navigation.replace('Chat', { conversationId: 'new' });
     } else {
       navigation.replace('ModelSetup');
     }

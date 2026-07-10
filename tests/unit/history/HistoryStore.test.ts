@@ -10,7 +10,7 @@ jest.mock('../../../src/storage/mmkv', () => ({
 }));
 
 import { HistoryStore, type HistoryStorage } from '../../../src/history/HistoryStore';
-import type { PerformanceMetrics, QASession } from '../../../src/types/models';
+import type { Conversation, PerformanceMetrics } from '../../../src/types/models';
 
 class TestHistoryStorage implements HistoryStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -41,15 +41,33 @@ const METRICS: PerformanceMetrics = {
   totalWallTimeMs: 40,
 };
 
-function makeSession(overrides: Partial<QASession> = {}): QASession {
+function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
+  const id = overrides.id ?? 'conversation-1';
+  const createdAt = overrides.createdAt ?? 1_700_000_000_000;
   return {
-    id: 'session-1',
-    createdAt: 1_700_000_000_000,
-    imagePath: '/tmp/photo.jpg',
-    question: 'What is this?',
-    answer: 'A small object.',
-    turns: [{ question: 'What is this?', answer: 'A small object.' }],
-    pinnedExtraction: 'Subject/object: small object',
+    id,
+    createdAt,
+    updatedAt: overrides.updatedAt ?? createdAt,
+    messages: [
+      {
+        id: `${id}:user`,
+        role: 'user',
+        text: 'What is this?',
+        attachments: [{ kind: 'image', path: '/tmp/photo.jpg' }],
+        status: 'completed',
+        errorMessage: null,
+        createdAt,
+      },
+      {
+        id: `${id}:assistant`,
+        role: 'assistant',
+        text: 'A small object.',
+        attachments: [],
+        status: 'completed',
+        errorMessage: null,
+        createdAt: createdAt + 1,
+      },
+    ],
     status: 'completed',
     errorMessage: null,
     metrics: METRICS,
@@ -64,43 +82,47 @@ function makeStore(): HistoryStore {
 }
 
 describe('HistoryStore', () => {
-  it('save persists a terminal-state session and get returns it', () => {
+  it('save persists a terminal-state conversation and get returns it', () => {
     const store = makeStore();
-    const session = makeSession();
+    const conversation = makeConversation();
 
-    store.save(session);
+    store.save(conversation);
 
-    expect(store.get(session.id)).toEqual(session);
+    expect(store.get(conversation.id)).toEqual(conversation);
   });
 
-  it('list returns sessions newest-first', () => {
+  it('list returns conversations newest-first by updatedAt', () => {
     const store = makeStore();
-    const oldest = makeSession({ id: 'oldest', createdAt: 100 });
-    const newest = makeSession({ id: 'newest', createdAt: 300 });
-    const middle = makeSession({ id: 'middle', createdAt: 200 });
+    const oldest = makeConversation({ id: 'oldest', createdAt: 100, updatedAt: 30 });
+    const newest = makeConversation({ id: 'newest', createdAt: 300, updatedAt: 50 });
+    const middle = makeConversation({ id: 'middle', createdAt: 200, updatedAt: 40 });
 
     store.save(oldest);
     store.save(newest);
     store.save(middle);
 
-    expect(store.list().map((session) => session.id)).toEqual(['newest', 'middle', 'oldest']);
+    expect(store.list().map((conversation) => conversation.id)).toEqual([
+      'newest',
+      'middle',
+      'oldest',
+    ]);
   });
 
   it('delete removes an entry such that a later get returns null', () => {
     const store = makeStore();
-    const session = makeSession();
-    store.save(session);
+    const conversation = makeConversation();
+    store.save(conversation);
 
-    store.delete(session.id);
+    store.delete(conversation.id);
 
-    expect(store.get(session.id)).toBeNull();
+    expect(store.get(conversation.id)).toBeNull();
     expect(store.list()).toEqual([]);
   });
 
   it('clear empties the list', () => {
     const store = makeStore();
-    store.save(makeSession({ id: 'one' }));
-    store.save(makeSession({ id: 'two' }));
+    store.save(makeConversation({ id: 'one' }));
+    store.save(makeConversation({ id: 'two' }));
 
     store.clear();
 
@@ -116,13 +138,13 @@ describe('HistoryStore', () => {
 
   it('setFlag updates an existing session locally', () => {
     const store = makeStore();
-    const session = makeSession();
-    store.save(session);
+    const conversation = makeConversation();
+    store.save(conversation);
 
-    store.setFlag(session.id, true, 'not helpful');
+    store.setFlag(conversation.id, true, 'not helpful');
 
-    expect(store.get(session.id)).toEqual({
-      ...session,
+    expect(store.get(conversation.id)).toEqual({
+      ...conversation,
       flagged: true,
       flagNote: 'not helpful',
     });

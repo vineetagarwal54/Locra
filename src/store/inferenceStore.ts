@@ -218,9 +218,8 @@ queue.subscribe((state: InferenceState) => {
 });
 
 export const inferenceQueue: IInferenceQueue = {
-  submit: (request: InferenceRequest): Promise<void> =>
-    useInferenceStore.getState().submit(request),
-  cancel: (): void => useInferenceStore.getState().cancel(),
+  submit: (request: InferenceRequest): Promise<void> => queue.submit(request),
+  cancel: (): void => queue.cancel(),
   subscribe: (listener: (state: InferenceState) => void): (() => void) => queue.subscribe(listener),
   getState: (): InferenceState => queue.getState(),
 };
@@ -260,7 +259,7 @@ function saveFirstTurnSession(request: InferenceRequest, state: InferenceState):
   saveToHistoryStore({
     id: generateSessionId(),
     createdAt: Date.now(),
-    imagePath: request.imagePath,
+    imagePath: request.imagePath ?? '',
     question: request.question,
     answer: state.response,
     turns: [{ question: request.question, answer: state.response }],

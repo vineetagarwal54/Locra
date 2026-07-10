@@ -90,7 +90,7 @@ export function ModelSetupScreen({ navigation }: Props) {
 
   useEffect(() => {
     if (isReady) {
-      navigation.replace('Capture');
+      navigation.replace('Chat', { conversationId: 'new' });
     }
   }, [isReady, navigation]);
 

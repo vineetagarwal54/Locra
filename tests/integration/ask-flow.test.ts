@@ -17,7 +17,7 @@ import {
   type EngineGenerateRequest,
   type InferenceEngineAdapter,
 } from '../../src/inference/InferenceQueue';
-import type { InferenceRequest, QASession } from '../../src/types/models';
+import type { Conversation, InferenceRequest } from '../../src/types/models';
 
 class MemoryHistoryStorage implements HistoryStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -137,28 +137,45 @@ describe('offline capture to answer integration flow', () => {
     expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
     expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: coffee mug');
 
-    const session: QASession = {
+    const conversation: Conversation = {
       id: 'completed-flow',
       createdAt: 1_700_000_000_000,
-      imagePath: capturedRequest.imagePath,
-      question: capturedRequest.question,
-      answer: state.response,
-      turns: [{ question: capturedRequest.question, answer: state.response }],
-      pinnedExtraction: null,
-      hiddenEvidence: null,
+      updatedAt: 1_700_000_000_001,
+      messages: [
+        {
+          id: 'completed-flow:user',
+          role: 'user',
+          text: capturedRequest.question,
+          attachments:
+            capturedRequest.imagePath === null
+              ? []
+              : [{ kind: 'image', path: capturedRequest.imagePath }],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1_700_000_000_000,
+        },
+        {
+          id: 'completed-flow:assistant',
+          role: 'assistant',
+          text: state.response,
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1_700_000_000_001,
+        },
+      ],
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,
       flagged: false,
       flagNote: null,
     };
-    history.save(session);
+    history.save(conversation);
 
-    expect(history.list()).toEqual([session]);
-    expect(session.answer).toBe(visibleAnswer);
+    expect(history.list()).toEqual([conversation]);
+    expect(conversation.messages[1]?.text).toBe(visibleAnswer);
     expect(state.hiddenEvidence?.subjectObject).toBe('coffee mug');
-    expect(session.pinnedExtraction).toBeNull();
-    expect(session.hiddenEvidence).toBeNull();
+    expect('hiddenEvidence' in conversation).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrSpy).not.toHaveBeenCalled();
     expect(webSocketSpy).not.toHaveBeenCalled();

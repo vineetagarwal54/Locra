@@ -386,20 +386,21 @@ describe('screen wiring for resumable threads (FR-046, FR-047, FR-048)', () => {
 
   it('HistoryScreen cards navigate to the chat screen keyed by session id', () => {
     const source = read('src/screens/HistoryScreen.tsx');
-    expect(source).toMatch(/navigate\('Answer',\s*\{\s*sessionId/);
+    expect(source).toMatch(/navigate\('Chat',\s*\{\s*conversationId:\s*sessionId/);
   });
 
-  it('AnswerScreen hydrates from a sessionId param and interrupts on unmount', () => {
-    const source = read('src/screens/AnswerScreen.tsx');
-    expect(source).toContain('hydrateSession');
-    expect(source).toContain('sessionId');
-    // FR-048: unmount cleanup cancels any in-flight generation.
-    expect(source).toMatch(/return \(\) => \{[\s\S]*cancel/);
+  it('ChatScreen subscribes to conversation runtime without cancelling on unmount', () => {
+    const source = read('src/screens/ChatScreen.tsx');
+    expect(source).toContain('subscribeToConversation');
+    expect(source).toContain('assistantMessageId');
+    expect(source).not.toContain('cancelActiveGeneration');
   });
 
-  it('CaptureScreen resets the active chat when it gains focus (clean slate per capture)', () => {
+  it('CaptureScreen writes a captured image into the route-scoped draft owner', () => {
     const source = read('src/screens/CaptureScreen.tsx');
-    expect(source).toContain('resetActiveChat');
-    expect(source).toMatch(/addListener\('focus'/);
+    expect(source).toContain('route.params.conversationId');
+    expect(source).toContain('conversationStore.setDraftImage');
+    expect(source).not.toContain('useInferenceStore');
+    expect(source).not.toContain('.submit(');
   });
 });
