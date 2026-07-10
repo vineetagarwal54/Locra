@@ -30,7 +30,7 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 **Purpose**: Add the two new dependencies this feature requires, with the NDK/native-module verification the constitution's Development Workflow gate mandates before either is installed.
 
 - [X] T001 [P] Add `xstate` ^5.x (core package only — no `@xstate/react`) to `package.json`; confirm it resolves as zero-dependency pure JS/TS with no native module (research.md R10)
-- [ ] T002 Verify `@react-navigation/drawer` and its required peer `react-native-gesture-handler` against the pinned NDK 26.3.11579264 and RN New Architecture compatibility (`findstr /r /s "ndkVersion" node_modules\react-native-gesture-handler\android\*.gradle` after a scratch install, per research.md R3 and AGENTS.md's NDK rule) before adding both to `package.json`
+- [X] T002 Verify `@react-navigation/drawer` and its required peer `react-native-gesture-handler` against the pinned NDK 26.3.11579264 and RN New Architecture compatibility (`findstr /r /s "ndkVersion" node_modules\react-native-gesture-handler\android\*.gradle` after a scratch install, per research.md R3 and AGENTS.md's NDK rule) before adding both to `package.json`
 - [ ] T003 [P] Run `npx tsc --noEmit`, `npx eslint src tests --ext .ts,.tsx`, and `npm test` on the current branch to capture a clean pre-feature baseline (quickstart.md §1; this is what T004 compares against)
 
 **Checkpoint**: Dependencies installed and verified; clean baseline captured. No Feature 003 code has been written yet.
