@@ -14,7 +14,13 @@ import type {
 } from './models';
 
 export interface IInferenceQueue {
-  submit(request: InferenceRequest): Promise<void>;
+  submit(
+    request: InferenceRequest,
+    options?: {
+      turn?: 'first' | 'followUp';
+      canonicalTurns?: Array<{ question: string; answer: string }>;
+    }
+  ): Promise<void>;
   cancel(): void;
   subscribe(listener: (state: InferenceState) => void): () => void;
   getState(): InferenceState;

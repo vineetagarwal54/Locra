@@ -218,7 +218,8 @@ queue.subscribe((state: InferenceState) => {
 });
 
 export const inferenceQueue: IInferenceQueue = {
-  submit: (request: InferenceRequest): Promise<void> => queue.submit(request),
+  submit: (request: InferenceRequest, options?: InferenceSubmitOptions): Promise<void> =>
+    queue.submit(request, options),
   cancel: (): void => queue.cancel(),
   subscribe: (listener: (state: InferenceState) => void): (() => void) => queue.subscribe(listener),
   getState: (): InferenceState => queue.getState(),
