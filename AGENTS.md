@@ -54,7 +54,20 @@ The authoritative design sources are `design/design.md`, `design/motion.md`,
 system — do not restate their tokens, colors, or timings here or anywhere
 else in code comments.
 
+- The centralized runtime theme module (`src/constants/theme.ts`)
+  implements the approved tokens — it does not originate them. It MUST be
+  derived from and stay consistent with `design/design.md`.
+- Screens/components MUST consume the centralized theme tokens and shared
+  components, not hardcode competing colors, spacing, typography, radius,
+  or visual patterns.
+- If the runtime theme or existing implementation conflicts with
+  `design/`, `design/` wins — update the theme module/components to
+  match. Old styling (including prior dark/purple styling) already
+  present in `theme.ts` or existing screens has no authority just because
+  it predates the current design sources.
 - Do not redesign an existing screen as a side effect of unrelated work.
+  A feature explicitly scoped to implement the approved design system may
+  update existing screens and shared theme tokens.
 - New screens/components extend the tokens, components, interaction
   patterns, navigation model, and motion language already defined in
   `design/`, not competing ones.
