@@ -156,6 +156,26 @@ describe('ConversationSearch', () => {
         tokensPerSecond: 4,
         totalWallTimeMs: 5,
       },
+      contextMemory: {
+        version: 'conversation-context-memory-v1',
+        sourceMessageCount: 1,
+        rollingSummary: null,
+        importantFacts: [],
+        mediaEvidence: [
+          {
+            version: 'context-media-evidence-v1',
+            id: 'private:user:image',
+            sourceMessageId: 'private:user',
+            modality: 'image',
+            sourcePath: '/private/photo.jpg',
+            summary: 'needle hidden summary',
+            facts: [],
+            extractedText: ['needle extracted text'],
+            uncertainty: [],
+            createdAt: BASE_TIME,
+          },
+        ],
+      },
       messages: [
         {
           id: 'private:user',

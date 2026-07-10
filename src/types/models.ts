@@ -58,6 +58,7 @@ export interface Conversation {
   metrics: PerformanceMetrics | null;
   flagged: boolean;
   flagNote: string | null;
+  contextMemory?: ConversationContextMemory | null;
 }
 
 export interface CanonicalContextTurn {
@@ -65,9 +66,73 @@ export interface CanonicalContextTurn {
   readonly answer: string;
 }
 
+export type ContextEvidenceModality = 'image' | 'screenshot' | 'document';
+
+export interface ContextMediaEvidence {
+  readonly version: 'context-media-evidence-v1';
+  readonly id: string;
+  readonly sourceMessageId: string;
+  readonly modality: ContextEvidenceModality;
+  readonly sourcePath: string;
+  readonly summary: string;
+  readonly facts: ReadonlyArray<string>;
+  readonly extractedText: ReadonlyArray<string>;
+  readonly uncertainty: ReadonlyArray<string>;
+  readonly createdAt: number;
+}
+
+export interface ContextMemoryFact {
+  readonly version: 'context-memory-fact-v1';
+  readonly id: string;
+  readonly sourceMessageId: string;
+  readonly text: string;
+  readonly createdAt: number;
+}
+
+export interface ContextSummaryEntry {
+  readonly version: 'context-summary-entry-v1';
+  readonly sourceUserMessageId: string;
+  readonly sourceAssistantMessageId: string;
+  readonly text: string;
+  readonly createdAt: number;
+}
+
+export interface ContextRollingSummary {
+  readonly version: 'rolling-summary-v1';
+  readonly coveredThroughMessageId: string;
+  readonly sourceMessageIds: ReadonlyArray<string>;
+  readonly entries: ReadonlyArray<ContextSummaryEntry>;
+}
+
+export interface ConversationContextMemory {
+  readonly version: 'conversation-context-memory-v1';
+  readonly sourceMessageCount: number;
+  readonly rollingSummary: ContextRollingSummary | null;
+  readonly importantFacts: ReadonlyArray<ContextMemoryFact>;
+  readonly mediaEvidence: ReadonlyArray<ContextMediaEvidence>;
+}
+
+export interface CanonicalConversationSnapshot {
+  readonly version: 'canonical-conversation-snapshot-v1';
+  readonly conversationId: string;
+  readonly priorMessages: ReadonlyArray<ConversationMessage>;
+  readonly currentMessage: ConversationMessage;
+  readonly contextMemory: ConversationContextMemory | null;
+}
+
+export interface ContextBudgetMetadata {
+  readonly policyId: string;
+  readonly maximumUnits: number;
+  readonly usedUnits: number;
+}
+
 export interface CanonicalConversationContext {
-  readonly version: 'canonical-conversation-v1';
-  readonly turns: ReadonlyArray<CanonicalContextTurn>;
+  readonly version: 'canonical-conversation-v2';
+  readonly recentTurns: ReadonlyArray<CanonicalContextTurn>;
+  readonly mediaEvidence: ReadonlyArray<ContextMediaEvidence>;
+  readonly importantFacts: ReadonlyArray<ContextMemoryFact>;
+  readonly olderSummary: string | null;
+  readonly budget: ContextBudgetMetadata;
 }
 
 export interface Draft {

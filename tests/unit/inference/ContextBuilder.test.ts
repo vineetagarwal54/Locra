@@ -1,6 +1,4 @@
 import {
-  DEFAULT_RECENT_TURN_LIMIT,
-  MAX_CANONICAL_CONTEXT_CHARS,
   buildCanonicalModelMessages as buildCanonicalModelMessagesFromContext,
   buildCanonicalModelMessagesForConversation,
   buildImageAnswerModelMessages,
@@ -13,6 +11,7 @@ import {
   type ModelRequestMessage,
 } from '../../../src/inference/ContextBuilder';
 import type { ConversationMessage } from '../../../src/types/models';
+import type { CanonicalConversationContext } from '../../../src/types/models';
 
 function message(
   overrides: Partial<ConversationMessage> & Pick<ConversationMessage, 'id' | 'role'>
@@ -30,12 +29,10 @@ function message(
 function buildCanonicalModelMessages(input: {
   turns: ReadonlyArray<ContextTurn>;
   currentQuestion: string;
-  recentTurnLimit?: number;
 }): ModelRequestMessage[] {
   return buildCanonicalModelMessagesFromContext({
     conversationContext: createCanonicalConversationContext(input.turns),
     currentQuestion: input.currentQuestion,
-    recentTurnLimit: input.recentTurnLimit,
   });
 }
 
@@ -89,6 +86,61 @@ describe('ContextBuilder', () => {
     expect(messages[3]).toEqual({ role: 'user', content: 'Is it safe?' });
     expect(messages[4]).toEqual({ role: 'assistant', content: 'The coating looks worn.' });
     expect(messages[5]).toEqual({ role: 'user', content: 'Then help me' });
+  });
+
+  it('serializes selected evidence, facts, and summary without changing exact turns', () => {
+    const conversationContext: CanonicalConversationContext = {
+      version: 'canonical-conversation-v2',
+      recentTurns: [{ question: 'Recent question', answer: 'Recent answer' }],
+      mediaEvidence: [
+        {
+          version: 'context-media-evidence-v1',
+          id: 'user-image:image',
+          sourceMessageId: 'user-image',
+          modality: 'image',
+          sourcePath: '/images/board.jpg',
+          summary: 'planning whiteboard',
+          facts: ['three project milestones'],
+          extractedText: ['Launch Friday'],
+          uncertainty: [],
+          createdAt: 10,
+        },
+      ],
+      importantFacts: [
+        {
+          version: 'context-memory-fact-v1',
+          id: 'assistant-old:fact:0',
+          sourceMessageId: 'assistant-old',
+          text: 'The release decision was Friday.',
+          createdAt: 5,
+        },
+      ],
+      olderSummary: 'User: Plan the release.\nLocra: The first draft was approved.',
+      budget: {
+        policyId: 'character-budget-v1',
+        maximumUnits: 14_400,
+        usedUnits: 500,
+      },
+    };
+
+    const messages = buildCanonicalModelMessagesFromContext({
+      conversationContext,
+      currentQuestion: 'What should happen next?',
+    });
+    const systemContent = messages[0]?.content ?? '';
+
+    expect(systemContent.indexOf('Relevant prior media evidence')).toBeLessThan(
+      systemContent.indexOf('Important prior facts and decisions'),
+    );
+    expect(systemContent.indexOf('Important prior facts and decisions')).toBeLessThan(
+      systemContent.indexOf('Older conversation summary'),
+    );
+    expect(systemContent).toContain('Launch Friday');
+    expect(messages.slice(1)).toEqual([
+      { role: 'user', content: 'Recent question' },
+      { role: 'assistant', content: 'Recent answer' },
+      { role: 'user', content: 'What should happen next?' },
+    ]);
   });
 
   it('keeps a previous assistant offer intact for an acknowledgement follow-up', () => {
@@ -184,51 +236,6 @@ describe('ContextBuilder', () => {
         'Start with basil, mint, and thyme.',
       ]),
     );
-  });
-
-  it('bounds recent canonical turns deterministically', () => {
-    const turns = Array.from({ length: DEFAULT_RECENT_TURN_LIMIT + 3 }, (_, index) => ({
-      question: `Question ${index}`,
-      answer: `Answer ${index}`,
-    }));
-
-    const messages = buildCanonicalModelMessages({
-      turns,
-      currentQuestion: 'Use the visible facts.',
-    });
-    const content = messages.map((message) => message.content).join('\n');
-
-    expect(content).toContain(`Question ${turns.length - 1}`);
-    expect(content).not.toContain('Question 0');
-  });
-
-  it('honors an explicit zero-turn context limit', () => {
-    const messages = buildCanonicalModelMessages({
-      turns: [{ question: 'Prior question', answer: 'Prior answer' }],
-      currentQuestion: 'Current question',
-      recentTurnLimit: 0,
-    });
-
-    expect(messages.map((item) => item.content)).toEqual([
-      expect.any(String),
-      'Current question',
-    ]);
-  });
-
-  it('marks unavoidable shortening and preserves both ends of the newest turn', () => {
-    const answer = `Opening context. ${'detail '.repeat(
-      MAX_CANONICAL_CONTEXT_CHARS * 2,
-    )}Final offer: I can create the checklist.`;
-    const messages = buildCanonicalModelMessages({
-      turns: [{ question: 'Plan this project.', answer }],
-      currentQuestion: 'Yes',
-    });
-    const retainedAnswer = messages[2]?.content ?? '';
-
-    expect(retainedAnswer).toContain('Opening context.');
-    expect(retainedAnswer).toContain('[... context shortened ...]');
-    expect(retainedAnswer).toContain('Final offer: I can create the checklist.');
-    expect(retainedAnswer.length).toBeLessThan(MAX_CANONICAL_CONTEXT_CHARS);
   });
 
   it('attaches image media only to isolated perception requests', () => {

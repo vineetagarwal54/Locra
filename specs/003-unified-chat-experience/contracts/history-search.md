@@ -12,7 +12,7 @@ function searchConversations(conversations: Conversation[], query: string): Conv
 
 ## Invariants (test-verifiable, structural — not just behavioral)
 
-1. **Input-shape enforcement**: all three functions accept only the persisted `Conversation`/`ConversationMessage` shape from `data-model.md` (`id`, `createdAt`, `updatedAt`, `messages[].{id, role, text, attachments, status, errorMessage, createdAt}`, `status`, `errorMessage`, `metrics`, `flagged`, `flagNote`). None of `hiddenEvidence`, `InferenceTrace`, or any internal-only field is part of that type — so it is structurally impossible for these functions to read internal-only state, not merely a runtime check (FR-022's guarantee is enforced by the type, and re-verified by a test that these functions' parameter types contain no internal-only fields).
+1. **Visible-field enforcement**: all three functions derive their output exclusively from `Conversation.messages[].text` and attachment presence as specified below. The optional internal `contextMemory` sidecar is deliberately ignored; titles, previews, and History search never expose or match summary entries, extracted media text, uncertainty, hidden evidence, or inference traces.
 2. `deriveConversationTitle`:
    - Returns `messages[0].text` (trimmed) if it is non-empty.
    - Returns a fixed fallback string (e.g., `"Image conversation"`) if `messages[0].text` is empty and `messages[0].attachments` is non-empty (image-only first message).

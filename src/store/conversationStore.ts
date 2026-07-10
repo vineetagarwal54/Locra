@@ -1,7 +1,11 @@
 import {
-  buildCanonicalConversationContextBeforeMessage,
   type CanonicalConversationContext,
 } from '../inference/ContextBuilder';
+import {
+  ContextOrchestrator,
+  createCanonicalConversationSnapshot,
+  mergeVisualEvidenceIntoMemory,
+} from '../inference/ContextOrchestrator';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -19,6 +23,7 @@ import { inferenceQueue } from './inferenceStore';
 export interface ConversationStoreDependencies {
   inferenceQueue: IInferenceQueue;
   historyStore: IHistoryStore;
+  contextOrchestrator?: ContextOrchestrator;
   now?: () => number;
   createId?: (prefix: string) => string;
 }
@@ -117,14 +122,15 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId,
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
-    // Snapshot completed turns from THIS conversation only. ContextBuilder
-    // applies the model-input budget when the queue assembles the request.
-    const conversationContext = buildCanonicalConversationContextBeforeMessage(
-      updatedConversation.messages,
-      originatingUserMessageId
+    const orchestration = this.dependencies.contextOrchestrator.orchestrate(
+      createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
     );
+    const conversationWithMemory: Conversation = {
+      ...updatedConversation,
+      contextMemory: orchestration.memory,
+    };
 
-    this.dependencies.historyStore.save(updatedConversation);
+    this.dependencies.historyStore.save(conversationWithMemory);
     this.activeGeneration = activeGeneration;
     this.setRuntimeState({
       conversationId: resolvedConversationId,
@@ -134,7 +140,7 @@ export class ConversationStore implements IConversationStore {
       isOwnerOfActiveInference: true,
     });
 
-    this.startQueueSubmission(activeGeneration, inferenceRequest, conversationContext);
+    this.startQueueSubmission(activeGeneration, inferenceRequest, orchestration.context);
     this.clearDraft(conversationId);
     return activeGeneration;
   }
@@ -176,12 +182,19 @@ export class ConversationStore implements IConversationStore {
           }
         : message
     );
-    const updatedConversation: Conversation = {
+    const updatedConversationWithoutMemory: Conversation = {
       ...conversation,
       updatedAt: this.dependencies.now(),
       status: 'streaming',
       errorMessage: null,
       messages,
+    };
+    const orchestration = this.dependencies.contextOrchestrator.orchestrate(
+      createCanonicalConversationSnapshot(updatedConversationWithoutMemory, userMessage.id),
+    );
+    const updatedConversation: Conversation = {
+      ...updatedConversationWithoutMemory,
+      contextMemory: orchestration.memory,
     };
 
     this.dependencies.historyStore.save(updatedConversation);
@@ -204,7 +217,7 @@ export class ConversationStore implements IConversationStore {
         },
         requestId
       ),
-      buildCanonicalConversationContextBeforeMessage(messages, userMessage.id)
+      orchestration.context
     );
   }
 
@@ -290,6 +303,14 @@ export class ConversationStore implements IConversationStore {
         status: conversationStatusForMessageStatus(messageStatus),
         errorMessage,
         metrics: state.status === 'completed' ? state.metrics : conversation.metrics,
+        contextMemory:
+          state.status === 'completed' && state.hiddenEvidence != null
+            ? mergeVisualEvidenceIntoMemory(
+                conversation.contextMemory,
+                state.hiddenEvidence,
+                activeGeneration.originatingUserMessageId,
+              )
+            : conversation.contextMemory ?? null,
         messages: conversation.messages.map((message) =>
           message.id === activeGeneration.assistantMessageId
             ? {
@@ -328,6 +349,7 @@ export class ConversationStore implements IConversationStore {
       metrics: null,
       flagged: false,
       flagNote: null,
+      contextMemory: null,
     };
   }
 
@@ -354,7 +376,9 @@ export class ConversationStore implements IConversationStore {
     const options = {
       // Mirrors the legacy store's semantics: a turn with prior completed
       // context is a follow-up (model already resident); otherwise first.
-      turn: conversationContext.turns.length > 0 ? ('followUp' as const) : ('first' as const),
+      turn: hasSelectedConversationContext(conversationContext)
+        ? ('followUp' as const)
+        : ('first' as const),
       conversationContext,
     };
     void this.dependencies.inferenceQueue.submit(request, options).catch((error: unknown) => {
@@ -427,6 +451,7 @@ export function createConversationStore(
   return new ConversationStore({
     now: Date.now,
     createId: createStableId,
+    contextOrchestrator: new ContextOrchestrator(),
     ...dependencies,
   });
 }
@@ -482,4 +507,13 @@ function conversationStatusForMessageStatus(
 
 function createStableId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function hasSelectedConversationContext(context: CanonicalConversationContext): boolean {
+  return (
+    context.recentTurns.length > 0 ||
+    context.mediaEvidence.length > 0 ||
+    context.importantFacts.length > 0 ||
+    context.olderSummary !== null
+  );
 }

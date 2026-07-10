@@ -20,7 +20,11 @@ import {
   type InferenceEngineAdapter,
   type InferenceQueueDeps,
 } from '../../../src/inference/InferenceQueue';
-import type { InferenceRequest, InferenceState } from '../../../src/types/models';
+import type {
+  CanonicalConversationContext,
+  InferenceRequest,
+  InferenceState,
+} from '../../../src/types/models';
 
 // Let all pending microtasks (the awaited preprocess/loadModel steps) settle.
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -307,7 +311,7 @@ describe('InferenceQueue false tool-refusal recovery', () => {
       return Promise.resolve({ response, tokenCount: 8 });
     });
     const queue = makeQueue({ engine: { loadModel: () => Promise.resolve(), generate } });
-    const conversationContext = createCanonicalConversationContext([
+    const baseContext = createCanonicalConversationContext([
       {
         question: 'What is shown in this image?',
         answer: 'A red bicycle is leaning beside a garage.',
@@ -317,6 +321,23 @@ describe('InferenceQueue false tool-refusal recovery', () => {
         answer: 'Yes, it appears to be outdoors.',
       },
     ]);
+    const conversationContext: CanonicalConversationContext = {
+      ...baseContext,
+      mediaEvidence: [
+        {
+          version: 'context-media-evidence-v1',
+          id: 'user-image:image',
+          sourceMessageId: 'user-image',
+          modality: 'image',
+          sourcePath: '/images/bicycle.jpg',
+          summary: 'red bicycle',
+          facts: ['leaning beside a garage'],
+          extractedText: [],
+          uncertainty: [],
+          createdAt: 1,
+        },
+      ],
+    };
 
     await queue.submit(
       { imagePath: null, question: 'What does it refer to?' },
@@ -327,12 +348,14 @@ describe('InferenceQueue false tool-refusal recovery', () => {
     expect(generatedRequests[0].messages[0]?.content).toMatch(
       /final user message is the current request/i,
     );
+    expect(generatedRequests[0].messages[0]?.content).toContain('red bicycle');
     expect(generatedRequests[1].messages.slice(1)).toEqual(
       generatedRequests[0].messages.slice(1),
     );
     expect(generatedRequests[1].messages[0]?.content).toMatch(
       /final user message is the current request/i,
     );
+    expect(generatedRequests[1].messages[0]?.content).toContain('red bicycle');
     expect(generatedRequests[1].messages.map((message) => message.content)).toEqual(
       expect.arrayContaining([
         'What is shown in this image?',

@@ -2,8 +2,13 @@ import { storage } from '../storage/mmkv';
 import type { IHistoryStore } from '../types/interfaces';
 import type {
   Conversation,
+  ConversationContextMemory,
   ConversationMessage,
   ConversationStatus,
+  ContextMediaEvidence,
+  ContextMemoryFact,
+  ContextRollingSummary,
+  ContextSummaryEntry,
   MetricsSummary,
   QASession,
 } from '../types/models';
@@ -178,20 +183,163 @@ function normalizeConversation(value: unknown): Conversation | null {
 
 function normalizeConversationInput(conversation: Conversation | QASession): Conversation {
   if ('messages' in conversation) {
-    return {
-      ...conversation,
+    const normalized: Conversation = {
+      id: conversation.id,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
       messages: conversation.messages.map((message) => ({
         ...message,
         attachments: message.attachments ?? [],
         errorMessage: message.errorMessage ?? null,
       })),
+      status: conversation.status,
       errorMessage: conversation.errorMessage ?? null,
       metrics: conversation.metrics ?? null,
+      flagged: conversation.flagged,
       flagNote: conversation.flagNote ?? null,
     };
+    const contextMemory = normalizeContextMemory(conversation.contextMemory);
+    return contextMemory === undefined
+      ? normalized
+      : { ...normalized, contextMemory };
   }
 
   return sessionToConversation(conversation);
+}
+
+function normalizeContextMemory(
+  value: unknown,
+): ConversationContextMemory | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value) || value.version !== 'conversation-context-memory-v1') {
+    return undefined;
+  }
+
+  return {
+    version: 'conversation-context-memory-v1',
+    sourceMessageCount: readNonNegativeNumber(value.sourceMessageCount),
+    rollingSummary: normalizeRollingSummary(value.rollingSummary),
+    importantFacts: readArray(value.importantFacts)
+      .map(normalizeMemoryFact)
+      .filter((item): item is ContextMemoryFact => item !== null),
+    mediaEvidence: readArray(value.mediaEvidence)
+      .map(normalizeMediaEvidence)
+      .filter((item): item is ContextMediaEvidence => item !== null),
+  };
+}
+
+function normalizeRollingSummary(value: unknown): ContextRollingSummary | null {
+  if (
+    !isRecord(value) ||
+    value.version !== 'rolling-summary-v1' ||
+    typeof value.coveredThroughMessageId !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    version: 'rolling-summary-v1',
+    coveredThroughMessageId: value.coveredThroughMessageId,
+    sourceMessageIds: readArray(value.sourceMessageIds).filter(
+      (item): item is string => typeof item === 'string',
+    ),
+    entries: readArray(value.entries)
+      .map(normalizeSummaryEntry)
+      .filter((item): item is ContextSummaryEntry => item !== null),
+  };
+}
+
+function normalizeSummaryEntry(value: unknown): ContextSummaryEntry | null {
+  if (
+    !isRecord(value) ||
+    value.version !== 'context-summary-entry-v1' ||
+    typeof value.sourceUserMessageId !== 'string' ||
+    typeof value.sourceAssistantMessageId !== 'string' ||
+    typeof value.text !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    version: 'context-summary-entry-v1',
+    sourceUserMessageId: value.sourceUserMessageId,
+    sourceAssistantMessageId: value.sourceAssistantMessageId,
+    text: value.text,
+    createdAt: readNonNegativeNumber(value.createdAt),
+  };
+}
+
+function normalizeMemoryFact(value: unknown): ContextMemoryFact | null {
+  if (
+    !isRecord(value) ||
+    value.version !== 'context-memory-fact-v1' ||
+    typeof value.id !== 'string' ||
+    typeof value.sourceMessageId !== 'string' ||
+    typeof value.text !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    version: 'context-memory-fact-v1',
+    id: value.id,
+    sourceMessageId: value.sourceMessageId,
+    text: value.text,
+    createdAt: readNonNegativeNumber(value.createdAt),
+  };
+}
+
+function normalizeMediaEvidence(value: unknown): ContextMediaEvidence | null {
+  if (
+    !isRecord(value) ||
+    value.version !== 'context-media-evidence-v1' ||
+    typeof value.id !== 'string' ||
+    typeof value.sourceMessageId !== 'string' ||
+    !isEvidenceModality(value.modality) ||
+    typeof value.sourcePath !== 'string' ||
+    typeof value.summary !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    version: 'context-media-evidence-v1',
+    id: value.id,
+    sourceMessageId: value.sourceMessageId,
+    modality: value.modality,
+    sourcePath: value.sourcePath,
+    summary: value.summary,
+    facts: readStringArray(value.facts),
+    extractedText: readStringArray(value.extractedText),
+    uncertainty: readStringArray(value.uncertainty),
+    createdAt: readNonNegativeNumber(value.createdAt),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return readArray(value).filter((item): item is string => typeof item === 'string');
+}
+
+function readNonNegativeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function isEvidenceModality(
+  value: unknown,
+): value is ContextMediaEvidence['modality'] {
+  return value === 'image' || value === 'screenshot' || value === 'document';
 }
 
 export function sessionToConversation(session: QASession): Conversation {

@@ -25,9 +25,10 @@ Generalizes today's `QASession`. Persisted via the existing `history:ids` / `his
 | `errorMessage` | `string \| null` | Unchanged — set when the *latest assistant message's* status is `'failed'`. |
 | `metrics` | `PerformanceMetrics \| null` | Unchanged — latest-message metrics, same semantics as today. |
 | `flagged` / `flagNote` | `boolean` / `string \| null` | Unchanged. |
+| `contextMemory` | `ConversationContextMemory \| null` *(optional for backward compatibility)* | Versioned, internal, derived cache containing rolling-summary entries, fact/decision candidates, and media evidence. Persisted beside raw messages for reuse, but always regenerable from `messages` plus future media extraction. Unknown versions are ignored. |
 | `pinnedExtraction` | *(removed from the top-level shape)* | Was already always persisted as `null` today (deliberately). Never persisted at all — see `ConversationMessage`'s "not part of the persisted message" note below, which formalizes what was already true in practice. |
 
-**Derived, not persisted** (research.md R8): `title`, `preview` — computed on read by `deriveConversationTitle(conversation)` / `deriveConversationPreview(conversation)`, both pure functions over only the fields above (structurally cannot see internal-only state, since none is ever persisted onto `Conversation`).
+**Derived presentation fields, not persisted** (research.md R8): `title`, `preview` — computed on read by `deriveConversationTitle(conversation)` / `deriveConversationPreview(conversation)`. These functions read only `messages`; `contextMemory` is excluded from title, preview, and History search.
 
 **Message Creation Invariant**: `Conversation.messages` strictly alternates `role: 'user'` then `role: 'assistant'`, starting with a user message. Both messages of a turn are appended **atomically at submit time** — the user message with its final content, and its paired assistant message immediately in `status: 'generating'` with empty `text` — so a concrete, stable `assistantMessageId` exists the instant submission begins, before the first token arrives. This is what makes message-identity-based ownership/streaming/retry attribution (see `ConversationRuntimeState` below) well-defined without needing a positional index. Retry (FR-029) does **not** append a new pair; it resets that same trailing assistant message back to `status: 'generating'` in place, clearing `text`/`errorMessage`.
 
@@ -61,8 +62,28 @@ The persisted, domain-level message entity (see Terminology above). Generalizes 
 **Forward-compatibility note** (spec Key Entities, "Message"): this shape is deliberately still "one message, an `attachments` array capped at one entry by validation" rather than a fully generic multi-part content model, because Feature 003's functional limit is exactly one image per user message (FR-004) — there is no present requirement to build for more. Keep this practical: do not build a generic content-part/attachment framework beyond the `Attachment` shape above; only `image` is implemented. The array (rather than a single nullable field) is what keeps this shape from needing to be re-architected later to add a second attachment kind or multiple images — nothing here builds that now.
 
 **Not part of the persisted message** (kept transient, in `conversationStore`'s in-memory runtime map only, per the existing `InferenceTrace`/hidden-evidence separation precedent — research.md R1, R2):
-- `hiddenEvidence` (structured extraction result) — used to build the answer-stage prompt for this message while it's being generated, then discarded; never written to `HistoryStore`.
+- `hiddenEvidence` (the current turn's raw structured extraction result) — used to build that turn's answer-stage prompt. On successful completion, `conversationStore` maps the reusable fields into versioned `ContextMediaEvidence` in `contextMemory`; the raw extraction object itself is never written onto the message.
 - `InferenceTrace` — dev-only diagnostic, unchanged from today, never touches `HistoryStore`.
+
+## ConversationContextMemory (derived, versioned sidecar)
+
+`ConversationContextMemory` is persisted inside the same MMKV conversation record, but it is not canonical history. `Conversation.messages` remains complete and append-only; deleting or invalidating the sidecar loses no user-visible content. `HistoryStore` accepts `conversation-context-memory-v1`, ignores unknown versions, and leaves legacy records with no sidecar unchanged.
+
+| Field | Type | Notes |
+|---|---|---|
+| `version` | `'conversation-context-memory-v1'` | Unknown versions are discarded and regenerated. |
+| `sourceMessageCount` | `number` | Number of prior raw messages used for the latest derivation; diagnostic/invalidation metadata, not an ownership key. |
+| `rollingSummary` | `ContextRollingSummary \| null` | Extractive, deterministic entries covering only completed turns not retained in the recent exact-turn selection. The covered boundary advances as turns age out. |
+| `importantFacts` | `ContextMemoryFact[]` | Sentence/line candidates derived from older completed assistant answers. Selection uses lexical relevance, then recency and stable id; no semantic classifier or extra model call. |
+| `mediaEvidence` | `ContextMediaEvidence[]` | Internal evidence keyed by source user-message id. Current producer is the image extraction pipeline; the modality union also admits future screenshot/document producers. |
+
+`ContextMediaEvidence` carries `{version, id, sourceMessageId, modality, sourcePath, summary, facts, extractedText, uncertainty, createdAt}`. Evidence whose `sourceMessageId` is absent from the owning conversation snapshot is rejected, preventing stale or cross-conversation admission.
+
+## CanonicalConversationSnapshot and selected context
+
+At submit/retry, `conversationStore` deep-clones only the owning conversation's prior messages, current user message, and valid sidecar into `canonical-conversation-snapshot-v1`. `ContextOrchestrator` deterministically emits `canonical-conversation-v2`: recent exact turns, selected media evidence, selected facts/decisions, selected older-summary text, and budget metadata. `ContextBuilder` serializes that selection; it owns no independent size limit.
+
+The default `character-budget-v1` policy retains up to eight recent completed turns verbatim when they fit and uses a 14,400-unit dynamic-context ceiling. Priority is current request → recent exact turns → relevant media evidence → important facts/decisions → older summary. The policy interface owns measurement and category caps so a future model-aware/token-aware policy can replace character measurement without changing stores or `ContextBuilder`.
 
 ## Draft
 
@@ -105,7 +126,7 @@ This is **not a data entity** in the usual sense: it is the shape of the single,
 | `state` | `'idle' \| 'preparing' \| 'perception' \| 'contextAssembly' \| 'generating' \| 'streaming' \| 'completed' \| 'failed' \| 'interrupted'` | The machine's current state name (research.md R10's state table). `IInferenceQueue.subscribe()` continues to expose this collapsed into the existing `InferenceState.status` shape at the `InferenceQueue` boundary — the finer states (`perception`, `contextAssembly`) are additive granularity for future UI use (`motion.md` §11.3's real phases), not a breaking change to `InferenceQueue`'s existing consumers. |
 | `context.request` | `{ requestId: string; conversationId: string; originatingUserMessageId: string; assistantMessageId: string; question: string; imagePath: string \| null }` | The single request currently being processed. `requestId` is minted fresh per `submit()`/`RETRY` call (useful for correlating `InferenceTrace` entries across multiple attempts at the same assistant message; never persisted). `conversationId`, `originatingUserMessageId`, and `assistantMessageId` are the three stable identities every active inference remains associated with — retained unchanged across a `RETRY` so the same assistant message is regenerated, never a new one (FR-029). This replaces the earlier `turnIndex`-based request shape entirely — no field in this contract is a positional index into `messages[]`. |
 | `context.streamedResponse` | `string` | Accumulates during `streaming`; mirrors what `ConversationRuntimeState.streamingText` is projected from. |
-| `context.hiddenEvidence` / `context.pinnedExtraction` | transient, unchanged shapes from `OutputPipelineTypes.ts` | Exist only while the current message is being processed; discarded on the next `SUBMIT`; **never persisted** — `HistoryStore` continues to always write `null` for these fields on the saved `Conversation`, exactly as today. |
+| `context.hiddenEvidence` / `context.pinnedExtraction` | transient, unchanged shapes from `OutputPipelineTypes.ts` | Exist only while the current message is being processed. On successful completion, reusable visual findings are normalized into the conversation's derived `ContextMediaEvidence`; the machine still never owns or persists conversation memory. |
 | `context.errorMessage` | `string \| null` | Set on `failed`, surfaced to `ConversationMessage.errorMessage` on persistence. |
 
 **Explicitly not present**: any conversation's `messages[]` array, any `Conversation` record, any MMKV read/write, any `Draft`, any list of conversations. The machine has no knowledge that more than one conversation exists — that is `conversationStore`'s job (R1), entirely outside the machine. This is what "XState is not conversation storage, context memory, or persistence" means structurally: the machine's `context` type simply has no field capable of holding any of those things.

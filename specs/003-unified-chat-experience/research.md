@@ -171,3 +171,21 @@ This covers, by construction rather than by convention: first-turn attachment (`
 **Rationale**: Directly satisfies the requirement that Camera/Gallery results return to "the initiating draft owner rather than being attached using whichever conversation happens to be active when the result returns." Passing `conversationId` as an explicit route param (Camera) or capturing it in the calling closure (Gallery, no navigation) are the two mechanisms this codebase's existing React Navigation + Zustand architecture already provides; neither requires a new cross-cutting "current conversation" concept, which is exactly the ambient-pointer anti-pattern R1 already rejects for inference ownership.
 
 **Alternatives considered**: A single app-wide "currently active conversation for attachment purposes" pointer, updated on navigation focus — rejected: this reintroduces the same ambient-pointer anti-pattern R1 replaces for inference ownership, and would recreate exactly the race this decision exists to prevent (the picker/camera returning after the user has already switched conversations).
+
+## R14. Additive deterministic context orchestration
+
+**Supersession note**: R9's frozen-file constraint governed the original any-turn-image generalization through T054. This later, explicitly requested post-implementation addition supersedes that constraint only for `ContextBuilder`'s context-selection boundary; the two-stage extraction/answer behavior and its prompt/parser modules remain unchanged.
+
+**Codebase finding this responds to**: the post-Feature-003 canonical payload correctly sends recent user/assistant messages, but `ContextBuilder` owned a fixed character limit and raw visual extraction was discarded after the current answer. Long threads therefore had no rolling older-history representation, and later follow-ups could use only whatever visual detail happened to appear in the visible assistant answer.
+
+**Decision**: insert a pure `ContextOrchestrator` between a deep-cloned per-conversation snapshot and `ContextBuilder`. It retains recent completed turns verbatim; rebuilds versioned extractive summary entries and fact/decision candidates only for older completed turns; selects generic media evidence, facts, and summary entries by lexical overlap, recency, and stable id; and owns the replaceable budget policy. The initial `CharacterContextBudgetPolicy` preserves the existing 14,400-character dynamic-context ceiling and an eight-turn exact cap. `ContextBuilder` only serializes the selected result.
+
+Successful image extraction is normalized at conversation completion into generic `ContextMediaEvidence` keyed by `originatingUserMessageId`. The generic contract supports `image`, `screenshot`, and `document`; only the current image producer is wired. The optional sidecar is stored in the existing MMKV conversation record, but raw `Conversation.messages` remains the permanent source of truth. Missing memory is valid, and unknown versions are ignored for deterministic regeneration.
+
+**Rationale**: this fixes older-history and prior-media loss without another model call, embeddings, RAG infrastructure, a second store, or ownership changes. Snapshot cloning plus source-message validation preserves async and cross-conversation isolation. The existing refusal-recovery retry keeps the same selected model messages and only extends the system instruction.
+
+**Alternatives considered**:
+- Increase `ContextBuilder`'s character limit — rejected because it does not define priority, summary lifecycle, evidence reuse, or a model-aware replacement boundary.
+- Summarize with the local model on every turn — rejected for latency, energy use, and single-flight complexity.
+- Persist only summaries and discard raw history — rejected because summaries are lossy derived data and must remain regenerable.
+- Add embeddings/vector search or an orchestration framework — rejected as unnecessary for the current scale and offline constraints.

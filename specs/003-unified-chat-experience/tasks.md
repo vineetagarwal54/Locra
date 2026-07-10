@@ -228,6 +228,21 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 
 ---
 
+## Phase 10: Additive Context Orchestration
+
+**Purpose**: Improve long-thread and multimodal continuity without replacing the canonical conversation, queue, XState lifecycle, or image pipeline.
+
+- [X] T055 Add focused failing tests for recent exact turns, rolling older-summary lifecycle, deterministic relevance/recency selection, generic media evidence, replaceable budgeting, mutation isolation, and cross-conversation rejection.
+- [X] T056 Implement `ContextOrchestrator.ts` and versioned snapshot/context-memory types; move dynamic context budgeting out of `ContextBuilder` while keeping the existing 14,400-unit default ceiling.
+- [X] T057 Wire `conversationStore` to snapshot/orchestrate on submit and retry, persist derived memory beside unchanged raw messages, and normalize successful visual extraction into source-message-keyed media evidence.
+- [X] T058 Extend `HistoryStore` normalization for optional `conversation-context-memory-v1`: valid memory round-trips, missing legacy memory remains valid, unknown versions are discarded for regeneration.
+- [X] T059 Verify ContextBuilder serialization, refusal-recovery preservation, queue cloning, and the real ConversationStore → ContextOrchestrator → ContextBuilder → InferenceQueue/XState integration path.
+- [X] T060 Update `spec.md`, `plan.md`, `data-model.md`, and contracts to describe the final implemented boundaries and lifecycle.
+
+**Checkpoint**: Raw `Conversation.messages` remains the permanent source of truth; derived memory is optional/versioned/regenerable; current request → recent exact turns → relevant media evidence → facts/decisions → older summary is enforced under a replaceable deterministic budget; no new model call, dependency, store, or network path exists.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -238,6 +253,7 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 - **Conversation Ownership, Drafts, History & Isolation (Phase 4)**: Depends on Phase 3's checkpoint. BLOCKS Phases 5–8.
 - **User Stories (Phases 5–8)**: All depend on Phase 4's checkpoint. Once Phase 4 is green, US1 (Phase 5, Unified Chat UI) should be completed first as the MVP; US2 (Phase 6, Attachment Behavior)/US3 (Phase 7, Mixed Multimodal Follow-Ups) build on US1's `ChatScreen`/`ChatComposer` scaffolding (same files, sequential edits) so are listed next in priority order; US4 (Phase 8, Drawer/History/Switching/Resume) is independently addable last.
 - **Final Cleanup & Validation (Phase 9)**: Depends on all four user stories being complete.
+- **Additive Context Orchestration (Phase 10)**: Post-implementation extension depending on the canonical ConversationStore/ContextBuilder/InferenceQueue boundaries from Phases 3–4; does not reopen UI phases or the XState migration.
 
 **This ordering is intentional and non-negotiable per the plan**: regression protection + XState migration → conversation/message generalization → conversation ownership and isolation → unified chat UI → attachment behavior → mixed multimodal follow-ups → drawer/History/switching/resume → final validation. Each foundational phase is gated by a green regression run before the next starts. Do not begin Phase 3 while Phase 2 is in flight, and do not begin any UI task (Phase 5+) until Phase 4's checkpoint is green.
 
@@ -323,7 +339,7 @@ Every automated test that survives in this plan protects logic that is genuinely
 - [P] tasks = different files, no ordering dependency.
 - [Story] label maps a task to its user story for traceability; Setup/Foundational/Polish tasks have none by design.
 - Foundational Phases 2–4 must each reach a green regression-gate checkpoint before the next phase's tasks begin — this is the feature's core sequencing constraint, not a suggestion.
-- `ExtractionPrompt.ts`, `AnswerPrompt.ts`, `SystemPrompt.ts`, `ExtractionParser.ts`, `AnswerPostProcessor.ts`, `GenerationLimits.ts`, `GenerationTuning.ts` are frozen for this entire feature (research.md R9) — no task in this file modifies them.
+- R9's frozen prompt/parser list governed T001–T054. Phase 10's later additive work changes `ContextBuilder`'s selection boundary and adds `ContextOrchestrator`; it does not alter `ExtractionPrompt`, `AnswerPrompt`, `ExtractionParser`, `AnswerPostProcessor`, `GenerationLimits`, or `GenerationTuning`.
 - There is no `turnIndex` field and no `Answer` route anywhere in this feature past Phase 5 — ownership/retry use stable message identity (`originatingUserMessageId`/`assistantMessageId`), and every navigation call site targets `Chat`.
 - No onboarding or model-download UI work is in scope for this feature — `ModelSetupScreen.tsx`, `WelcomeScreen.tsx`'s onboarding content, and `onboardingStore.ts` are untouched except for `WelcomeScreen.tsx`'s single routing-target change in T031.
 - Commit after each task or logical group.
