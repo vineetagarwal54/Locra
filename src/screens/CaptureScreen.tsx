@@ -17,7 +17,7 @@ import {
   usePhotoOutput,
 } from 'react-native-vision-camera';
 
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
 
@@ -26,7 +26,6 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Capture'>;
 const CAPTURE_BUTTON_SIZE = 72;
 const CAPTURE_INNER_SIZE = 54;
 const CAPTURE_PRESS_SCALE = 0.92;
-const READABLE_LINE_HEIGHT_RATIO = 1.45;
 
 export function CaptureScreen({ navigation, route }: Props) {
   const conversationId = route.params.conversationId;
@@ -92,7 +91,11 @@ export function CaptureScreen({ navigation, route }: Props) {
           style={styles.headerButton}
           onPress={goBackToChat}
         >
-          <MaterialCommunityIcons name="chevron-left" size={28} color={theme.textSecondary} />
+          <MaterialCommunityIcons
+            name="chevron-left"
+            size={28}
+            color={designTokens.color.textSecondary}
+          />
         </Pressable>
         <Text style={styles.title}>Camera</Text>
         <View style={styles.headerButton} />
@@ -111,8 +114,8 @@ export function CaptureScreen({ navigation, route }: Props) {
             <View style={styles.cameraFallback}>
               <MaterialCommunityIcons
                 name="camera-off-outline"
-                size={theme.space6 * 2}
-                color={theme.textMuted}
+                size={designTokens.spacing.space24 * 2}
+                color={designTokens.color.textSecondary}
               />
               <Text style={styles.fallbackTitle}>Camera is not ready</Text>
               <Text style={styles.fallbackText}>
@@ -137,7 +140,11 @@ export function CaptureScreen({ navigation, route }: Props) {
           ]}
           onPress={onFlipCamera}
         >
-          <MaterialCommunityIcons name="camera-flip-outline" size={22} color={theme.textSecondary} />
+          <MaterialCommunityIcons
+            name="camera-flip-outline"
+            size={22}
+            color={designTokens.color.textSecondary}
+          />
         </Pressable>
 
         <Pressable
@@ -173,40 +180,40 @@ function toInferencePath(path: string): string {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.canvas,
   },
   header: {
-    minHeight: theme.space6 * 2,
+    minHeight: designTokens.spacing.space24 * 2,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderBottomWidth: designTokens.borderWidth,
+    borderBottomColor: designTokens.color.divider,
   },
   headerButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   title: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
   },
   body: {
     flex: 1,
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space4,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space16,
   },
   viewfinder: {
     flex: 1,
     overflow: 'hidden',
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   camera: {
     flex: 1,
@@ -215,47 +222,47 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: theme.space5,
-    backgroundColor: theme.surface,
+    paddingHorizontal: designTokens.spacing.space20,
+    backgroundColor: designTokens.color.surface,
   },
   fallbackTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    marginTop: theme.space3,
-    marginBottom: theme.space2,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginTop: designTokens.spacing.space12,
+    marginBottom: designTokens.spacing.space8,
   },
   fallbackText: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
     textAlign: 'center',
-    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+    lineHeight: designTokens.type.supporting.lineHeight,
   },
   errorText: {
-    color: theme.error,
-    fontSize: theme.fontSizeSm,
+    color: designTokens.color.error,
+    fontSize: designTokens.type.supporting.fontSize,
     textAlign: 'center',
-    marginTop: theme.space3,
+    marginTop: designTokens.spacing.space12,
   },
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space6,
-    paddingVertical: theme.space4,
+    paddingHorizontal: designTokens.spacing.space24,
+    paddingVertical: designTokens.spacing.space16,
   },
   sideButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    backgroundColor: theme.surface,
+    borderRadius: designTokens.radius.pill,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    backgroundColor: designTokens.color.surfaceStrong,
   },
   sideButtonPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.surface,
   },
   capturePressable: {
     width: CAPTURE_BUTTON_SIZE,
@@ -268,19 +275,19 @@ const styles = StyleSheet.create({
     height: CAPTURE_BUTTON_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.textPrimary,
-    borderWidth: theme.space1,
-    borderColor: theme.accent,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.spacing.space4,
+    borderColor: designTokens.color.primary,
   },
   captureInner: {
     width: CAPTURE_INNER_SIZE,
     height: CAPTURE_INNER_SIZE,
-    borderRadius: theme.radiusPill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.borderStrong,
+    borderRadius: designTokens.radius.pill,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   disabled: {
-    opacity: 0.42,
+    opacity: 0.45,
   },
 });

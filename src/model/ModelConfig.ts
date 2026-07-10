@@ -20,6 +20,12 @@ const FALLBACK_MODEL_CONFIG: ModelConfig = {
   expectedSize: 2_427_656_704,
 };
 
+// The pinned expected download size (bytes) for the on-device model. Exposed for
+// presentation only (the setup UI shows the download/storage figures before the
+// remote config is fetched). This does not affect download or verification
+// behavior, which always uses the fetched/fallback config above.
+export const PINNED_MODEL_SIZE_BYTES = FALLBACK_MODEL_CONFIG.expectedSize;
+
 export async function fetchModelConfig(
   endpoint: string,
   fetcher: ModelConfigFetch = defaultFetch

@@ -39,6 +39,10 @@ import {
 } from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
 import {
+  buildToolRefusalRecoveryMessages,
+  shouldRetryToolRefusal,
+} from './ToolRefusalRecovery';
+import {
   turnLifecycleMachine,
   type PerceptionOutput,
   type StreamOutput,
@@ -462,7 +466,7 @@ export class InferenceQueue implements IInferenceQueue {
     );
   }
 
-  private generateVisibleAnswer(
+  private async generateVisibleAnswer(
     messages: ModelRequestMessage[],
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
@@ -474,34 +478,64 @@ export class InferenceQueue implements IInferenceQueue {
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 
-    return this.deps.engine.generate(
-      generateRequest,
-      (cumulative, generatedTokenCount) => {
-        if (active.cancelled) return;
-        recorder.markFirstToken();
-        recorder.markAnswerFirstToken();
-        this.lifecycleActor.send({
-          type: 'TOKEN',
-          response: cumulative,
-          count: generatedTokenCount ?? 0,
-        });
-        this.setState({ response: cumulative });
-        if (
-          generatedTokenCount !== undefined &&
-          generatedTokenCount >= OUTPUT_TOKEN_BUDGET &&
-          !active.controller.signal.aborted
-        ) {
-          markBudgetStopped();
-          active.controller.abort();
-        }
-      },
-      active.controller.signal,
-    ).then((result) => {
-      const processed = postProcessAnswer(result.response);
-      this.recordTraceStage(active, stage, generateRequest, result, {
-        processedOutput: processed.text,
+    const onToken = (cumulative: string, generatedTokenCount?: number): void => {
+      if (active.cancelled) return;
+      recorder.markFirstToken();
+      recorder.markAnswerFirstToken();
+      this.lifecycleActor.send({
+        type: 'TOKEN',
+        response: cumulative,
+        count: generatedTokenCount ?? 0,
       });
+      this.setState({ response: cumulative });
+      if (
+        generatedTokenCount !== undefined &&
+        generatedTokenCount >= OUTPUT_TOKEN_BUDGET &&
+        !active.controller.signal.aborted
+      ) {
+        markBudgetStopped();
+        active.controller.abort();
+      }
+    };
+
+    const result = await this.deps.engine.generate(
+      generateRequest,
+      onToken,
+      active.controller.signal,
+    );
+    this.recordVisibleTraceStage(active, stage, generateRequest, result);
+
+    const originalQuestion = generateRequest.originalQuestion ?? '';
+    if (
+      active.cancelled ||
+      active.controller.signal.aborted ||
+      !shouldRetryToolRefusal(result.response, originalQuestion)
+    ) {
       return result;
+    }
+
+    const retryRequest: EngineGenerateRequest = {
+      ...generateRequest,
+      messages: buildToolRefusalRecoveryMessages(messages),
+    };
+    const retryResult = await this.deps.engine.generate(
+      retryRequest,
+      onToken,
+      active.controller.signal,
+    );
+    this.recordVisibleTraceStage(active, stage, retryRequest, retryResult);
+    return retryResult;
+  }
+
+  private recordVisibleTraceStage(
+    active: ActiveRequest,
+    stage: InferenceTraceStageKind,
+    request: EngineGenerateRequest,
+    result: EngineGenerateResult,
+  ): void {
+    const processed = postProcessAnswer(result.response);
+    this.recordTraceStage(active, stage, request, result, {
+      processedOutput: processed.text,
     });
   }
 

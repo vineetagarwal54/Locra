@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConversationListItem } from '../components/ConversationListItem';
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics } from '../constants/theme';
 import {
   type RecencyBucket,
   groupConversationsByRecency,
@@ -23,8 +23,6 @@ import { useHistoryStore } from '../store/historyStore';
 import type { Conversation } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'History'>;
-
-const READABLE_LINE_HEIGHT_RATIO = 1.45;
 
 // design.md §7.14 — every stored conversation stays reachable, including the
 // "Older" bucket (FR-019); nothing older than seven days ever disappears.
@@ -90,7 +88,11 @@ export function HistoryScreen({ navigation }: Props) {
           style={styles.headerButton}
           onPress={onBack}
         >
-          <MaterialCommunityIcons name="chevron-left" size={26} color={theme.textSecondary} />
+          <MaterialCommunityIcons
+            name="chevron-left"
+            size={26}
+            color={designTokens.color.textSecondary}
+          />
         </Pressable>
         <Text style={styles.title}>History</Text>
         <Pressable
@@ -99,18 +101,22 @@ export function HistoryScreen({ navigation }: Props) {
           style={styles.headerButton}
           onPress={onOpenBenchmarks}
         >
-          <MaterialCommunityIcons name="speedometer" size={20} color={theme.textSecondary} />
+          <MaterialCommunityIcons
+            name="speedometer"
+            size={20}
+            color={designTokens.color.textSecondary}
+          />
         </Pressable>
       </View>
 
       <View style={styles.searchRow}>
-        <MaterialCommunityIcons name="magnify" size={18} color={theme.textMuted} />
+        <MaterialCommunityIcons name="magnify" size={18} color={designTokens.color.textSecondary} />
         <TextInput
           style={styles.searchInput}
           value={query}
           onChangeText={setQuery}
           placeholder="Search conversations"
-          placeholderTextColor={theme.textMuted}
+          placeholderTextColor={designTokens.color.textSecondary}
           autoCorrect={false}
           returnKeyType="search"
         />
@@ -118,12 +124,16 @@ export function HistoryScreen({ navigation }: Props) {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Clear search"
-            hitSlop={theme.space2}
+            hitSlop={designTokens.spacing.space8}
             onPress={() => {
               setQuery('');
             }}
           >
-            <MaterialCommunityIcons name="close-circle" size={18} color={theme.textMuted} />
+            <MaterialCommunityIcons
+              name="close-circle"
+              size={18}
+              color={designTokens.color.textSecondary}
+            />
           </Pressable>
         ) : null}
       </View>
@@ -155,7 +165,7 @@ function HistoryEmptyState({ searching }: { searching: boolean }) {
         <MaterialCommunityIcons
           name={searching ? 'magnify' : 'chat-outline'}
           size={28}
-          color={theme.accent}
+          color={designTokens.color.primary}
         />
       </View>
       <Text style={styles.emptyTitle}>
@@ -173,88 +183,88 @@ function HistoryEmptyState({ searching }: { searching: boolean }) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.canvas,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space3,
-    paddingVertical: theme.space3,
+    paddingHorizontal: designTokens.spacing.space12,
+    paddingVertical: designTokens.spacing.space12,
   },
   headerButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   title: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
   },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: theme.space4,
-    marginBottom: theme.space3,
-    paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusMd,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    marginHorizontal: designTokens.spacing.space16,
+    marginBottom: designTokens.spacing.space12,
+    paddingHorizontal: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   searchInput: {
     flex: 1,
-    height: theme.space6 * 2,
-    marginLeft: theme.space2,
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
+    height: designTokens.spacing.space24 * 2,
+    marginLeft: designTokens.spacing.space8,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.body.fontSize,
   },
   listContent: {
-    paddingHorizontal: theme.space4,
-    paddingBottom: theme.space6,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingBottom: designTokens.spacing.space24,
   },
   emptyContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: theme.space5,
-    paddingBottom: theme.space6,
+    paddingHorizontal: designTokens.spacing.space20,
+    paddingBottom: designTokens.spacing.space24,
   },
   sectionHeader: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    fontWeight: '700',
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    fontWeight: designTokens.type.caption.fontWeight,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginTop: theme.space3,
-    marginBottom: theme.space2,
+    marginTop: designTokens.spacing.space12,
+    marginBottom: designTokens.spacing.space8,
   },
   emptyState: {
     alignItems: 'center',
   },
   emptyLens: {
-    width: theme.space6 * 3,
-    height: theme.space6 * 3,
+    width: designTokens.spacing.space24 * 3,
+    height: designTokens.spacing.space24 * 3,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginBottom: theme.space4,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space16,
   },
   emptyTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
     textAlign: 'center',
-    marginBottom: theme.space2,
+    marginBottom: designTokens.spacing.space8,
   },
   emptyBody: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
     textAlign: 'center',
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    lineHeight: designTokens.type.body.lineHeight,
   },
 });

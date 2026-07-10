@@ -160,9 +160,12 @@ describe('InferenceQueue', () => {
   });
 
   it('resolves an injected OOM error during streaming to status errored, never an unhandled throw (FR-023)', async () => {
+    const generate = jest.fn(() =>
+      Promise.reject(new Error('Cannot allocate tensor: out of memory'))
+    );
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
-      generate: () => Promise.reject(new Error('Cannot allocate tensor: out of memory')),
+      generate,
     };
     const queue = makeQueue({ engine });
 
@@ -171,6 +174,7 @@ describe('InferenceQueue', () => {
     const state = queue.getState();
     expect(state.status).toBe('errored');
     expect(state.error).toMatch(/out of memory/i);
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
   it('releases the lock on the completed exit path', async () => {
@@ -209,6 +213,97 @@ describe('InferenceQueue', () => {
     await queue.submit(request);
     expect(queue.getState().status).toBe('errored');
     await expect(queue.submit(request)).resolves.toBeUndefined();
+  });
+});
+
+describe('InferenceQueue false tool-refusal recovery', () => {
+  const textRequest: InferenceRequest = {
+    imagePath: null,
+    question: 'What is 17 times 24?',
+  };
+
+  it.each([
+    { label: 'a first text-only question', imagePath: null, turn: 'first' as const },
+    { label: 'a text-only follow-up', imagePath: null, turn: 'followUp' as const },
+    { label: 'an image final answer', imagePath: '/tmp/math.jpg', turn: 'first' as const },
+  ])('retries one false refusal for $label using the original context', async (scenario) => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    let visibleAttempts = 0;
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken) => {
+        generatedRequests.push(generateRequest);
+        if (generateRequest.kind === 'extraction') {
+          return Promise.resolve({ response: validExtractionJson, tokenCount: 4 });
+        }
+
+        visibleAttempts += 1;
+        const response = visibleAttempts === 1
+          ? "I don't have the tool needed to calculate that."
+          : '17 times 24 is 408.';
+        onToken(response, 6);
+        return Promise.resolve({ response, tokenCount: 6 });
+      },
+    };
+    const queue = makeQueue({ engine });
+    const scenarioRequest = { ...textRequest, imagePath: scenario.imagePath };
+    const canonicalTurns = [
+      { question: 'What is multiplication?', answer: 'It is repeated addition.' },
+    ];
+
+    await queue.submit(scenarioRequest, { turn: scenario.turn, canonicalTurns });
+
+    const visibleRequests = generatedRequests.filter((item) => item.kind !== 'extraction');
+    expect(visibleRequests).toHaveLength(2);
+    expect(visibleRequests[1].messages.slice(1)).toEqual(visibleRequests[0].messages.slice(1));
+    expect(visibleRequests[1].messages[0].content).toMatch(/do not discuss tools/i);
+    expect(queue.getState().response).toBe('17 times 24 is 408.');
+  });
+
+  it('does not retry a successful first response', async () => {
+    const generate = jest.fn((_generateRequest, onToken) => {
+      const response = '17 times 24 is 408.';
+      onToken(response, 6);
+      return Promise.resolve({ response, tokenCount: 6 });
+    });
+    const queue = makeQueue({ engine: { loadModel: () => Promise.resolve(), generate } });
+
+    await queue.submit(textRequest);
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(queue.getState().response).toBe('17 times 24 is 408.');
+  });
+
+  it('limits recovery to one retry when the second response is also a refusal', async () => {
+    const generate = jest.fn((_generateRequest, onToken) => {
+      const response = 'I need a tool to answer this.';
+      onToken(response, 6);
+      return Promise.resolve({ response, tokenCount: 6 });
+    });
+    const queue = makeQueue({ engine: { loadModel: () => Promise.resolve(), generate } });
+
+    await queue.submit(textRequest);
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(queue.getState().response).toBe('I need a tool to answer this.');
+  });
+
+  it('does not retry a genuine request for unavailable live information', async () => {
+    const liveRequest: InferenceRequest = {
+      imagePath: null,
+      question: 'What is the live weather in Boston right now?',
+    };
+    const generate = jest.fn((_generateRequest, onToken) => {
+      const response = 'I cannot access the required live weather tool.';
+      onToken(response, 6);
+      return Promise.resolve({ response, tokenCount: 6 });
+    });
+    const queue = makeQueue({ engine: { loadModel: () => Promise.resolve(), generate } });
+
+    await queue.submit(liveRequest);
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(queue.getState().response).toMatch(/cannot access/i);
   });
 });
 

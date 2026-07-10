@@ -13,7 +13,6 @@ jest.mock('react-native-nitro-image', () => ({
 
 import {
   ENHANCE_MAX_DIMENSION,
-  MAX_ASPECT_RATIO,
   enhanceImage,
   prepareImageForInference,
   resolveCropRegion,
@@ -102,21 +101,22 @@ describe('ImageEnhancer (FR-049)', () => {
     expect(result.height).toBe(ENHANCE_MAX_DIMENSION);
   });
 
-  it('center-crops extreme aspect ratios to the aspect ceiling before downscaling', async () => {
-    // 4000x1000 is 4:1 — far beyond the 16:9 ceiling.
+  it('preserves the full width of an extreme wide image while downscaling', async () => {
     const { manipulate, calls } = makeManipulator(4000, 1000);
 
-    await enhanceImage('/camera/pano.jpg', { manipulate });
+    const result = await enhanceImage('/camera/pano.jpg', { manipulate });
 
-    const expectedCropWidth = Math.round(1000 * MAX_ASPECT_RATIO);
-    expect(calls[1].actions[0]).toEqual({
-      crop: {
-        originX: Math.round((4000 - expectedCropWidth) / 2),
-        originY: 0,
-        width: expectedCropWidth,
-        height: 1000,
-      },
-    });
+    expect(calls[1].actions).toEqual([{ resize: { width: ENHANCE_MAX_DIMENSION } }]);
+    expect(result).toMatchObject({ width: 1024, height: 256 });
+  });
+
+  it('preserves the full height of an extreme tall image while downscaling', async () => {
+    const { manipulate, calls } = makeManipulator(1000, 8000);
+
+    const result = await enhanceImage('/gallery/receipt.jpg', { manipulate });
+
+    expect(calls[1].actions).toEqual([{ resize: { height: ENHANCE_MAX_DIMENSION } }]);
+    expect(result).toMatchObject({ width: 128, height: 1024 });
   });
 
   it('crops to a provided subject region, clamped to the image bounds', async () => {
@@ -133,9 +133,11 @@ describe('ImageEnhancer (FR-049)', () => {
     expect(crop.originY + crop.height).toBeLessThanOrEqual(1500);
   });
 
-  it('keeps a normal-aspect image uncropped (the sensible centered default is the full frame)', () => {
+  it('does not infer a crop region from image aspect ratio', () => {
     expect(resolveCropRegion(1600, 1200)).toBeNull();
     expect(resolveCropRegion(1200, 1600)).toBeNull();
+    expect(resolveCropRegion(8000, 1000)).toBeNull();
+    expect(resolveCropRegion(1000, 8000)).toBeNull();
   });
 
   it('prepareImageForInference chains enhance → preprocess, feeding the enhanced path onward', async () => {

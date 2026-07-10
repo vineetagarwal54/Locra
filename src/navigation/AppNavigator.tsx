@@ -12,8 +12,13 @@ import { VoiceTranscriptionHost } from '../components/VoiceTranscriptionHost';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
-import { ModelSetupScreen } from '../screens/ModelSetupScreen';
+import { InsufficientStorageScreen } from '../screens/InsufficientStorageScreen';
+import { ModelIntroScreen } from '../screens/ModelIntroScreen';
+import { NotificationRationaleScreen } from '../screens/NotificationRationaleScreen';
+import { PrivacyScreen } from '../screens/PrivacyScreen';
+import { SuccessScreen } from '../screens/SuccessScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
@@ -23,10 +28,15 @@ import { ConversationDrawer } from './ConversationDrawer';
 
 export type RootStackParamList = {
   Welcome: undefined;
+  Privacy: undefined;
+  ModelIntro: undefined;
+  NotificationRationale: undefined;
+  DownloadProgress: { autoStart?: boolean } | undefined;
+  InsufficientStorage: undefined;
+  Success: undefined;
   Chat: { conversationId: string };
   Capture: { conversationId: string };
   History: undefined;
-  ModelSetup: undefined;
   Benchmark: undefined;
 };
 
@@ -40,23 +50,36 @@ const Drawer = createDrawerNavigator<RootDrawerParamList>();
 // Constitution Principle III: every screen is wrapped so a render crash in one
 // degrades to a legible fallback instead of taking down the app.
 const Welcome = withErrorBoundary(WelcomeScreen);
+const Privacy = withErrorBoundary(PrivacyScreen);
+const ModelIntro = withErrorBoundary(ModelIntroScreen);
+const NotificationRationale = withErrorBoundary(NotificationRationaleScreen);
+const DownloadProgress = withErrorBoundary(DownloadProgressScreen);
+const InsufficientStorage = withErrorBoundary(InsufficientStorageScreen);
+const Success = withErrorBoundary(SuccessScreen);
 const Chat = withErrorBoundary(ChatScreen);
 const Capture = withErrorBoundary(CaptureScreen);
 const History = withErrorBoundary(HistoryScreen);
-const ModelSetup = withErrorBoundary(ModelSetupScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
 
-// Launch gate, checked in order (per the onboarding flow):
-//   1. Never onboarded        → Welcome (explains the app + requests camera)
-//   2. Onboarded, model not ready → ModelSetup (download / re-download)
-//   3. Onboarded, model ready → Capture
+// Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
+// screen_map.md Welcome → Privacy → Model Setup → …):
+//   1. Never onboarded            → Welcome (starts the setup progression)
+//   2. Onboarded, download live   → DownloadProgress (a reattached background
+//                                    download resumes from persisted state)
+//   3. Onboarded, model not ready → ModelIntro (download / re-download)
+//   4. Onboarded, model ready     → Chat (new conversation)
 // Returning users with a ready model land straight on New Chat.
 function resolveInitialRoute(): keyof RootStackParamList {
   if (!hasCompletedWelcome()) {
     return 'Welcome';
   }
-  if (!useModelStore.getState().isReadyForInference()) {
-    return 'ModelSetup';
+  const modelState = useModelStore.getState();
+  if (!modelState.isReadyForInference()) {
+    const status = modelState.downloadStatus;
+    if (status === 'downloading' || status === 'paused') {
+      return 'DownloadProgress';
+    }
+    return 'ModelIntro';
   }
   return 'Chat';
 }
@@ -68,10 +91,15 @@ function RootStack() {
   return (
     <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Welcome" component={Welcome} />
+      <Stack.Screen name="Privacy" component={Privacy} />
+      <Stack.Screen name="ModelIntro" component={ModelIntro} />
+      <Stack.Screen name="NotificationRationale" component={NotificationRationale} />
+      <Stack.Screen name="DownloadProgress" component={DownloadProgress} />
+      <Stack.Screen name="InsufficientStorage" component={InsufficientStorage} />
+      <Stack.Screen name="Success" component={Success} />
       <Stack.Screen name="Chat" component={Chat} initialParams={{ conversationId: 'new' }} />
       <Stack.Screen name="Capture" component={Capture} />
       <Stack.Screen name="History" component={History} />
-      <Stack.Screen name="ModelSetup" component={ModelSetup} />
       <Stack.Screen name="Benchmark" component={Benchmark} />
     </Stack.Navigator>
   );

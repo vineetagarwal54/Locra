@@ -2,9 +2,9 @@ import { SaveFormat, manipulateAsync } from 'expo-image-manipulator';
 
 import { preprocessImage, type PreprocessedImage } from './ImagePreprocessor';
 
-// FR-049: enhance the captured image BEFORE the 512x512 ceiling resize in
-// ImagePreprocessor — auto-orient (EXIF bake), crop to a subject region or a
-// sensible centered default, and downscale to an intermediate ceiling so the
+// FR-049: enhance the input image BEFORE the 512x512 ceiling resize in
+// ImagePreprocessor — auto-orient (EXIF bake), optionally crop to an explicit
+// subject region, and downscale to an intermediate ceiling so the
 // final resize starts from a clean, upright frame. Contrast normalization is
 // NOT implemented: expo-image-manipulator exposes only resize/rotate/flip/crop
 // (verified in research.md's Phase 3 API Verification addendum) — there is no
@@ -12,13 +12,6 @@ import { preprocessImage, type PreprocessedImage } from './ImagePreprocessor';
 
 /** Longest-edge ceiling for the enhancement stage (2x the model's 512 ceiling). */
 export const ENHANCE_MAX_DIMENSION = 1024;
-
-/**
- * Aspect-ratio ceiling. Wider/taller than this (panoramas, screenshots of
- * chats) gets a centered crop of the long axis, since the final 512 resize
- * would otherwise waste most of its pixels on empty margins.
- */
-export const MAX_ASPECT_RATIO = 16 / 9;
 
 const SAVE_QUALITY = 0.9;
 const MIN_CROP_EDGE = 64;
@@ -102,11 +95,8 @@ export async function enhanceImage(
 }
 
 /**
- * Picks the crop rectangle: a provided subject region wins (clamped to the
- * frame); otherwise extreme aspect ratios get a centered crop of the long
- * axis; otherwise no crop — for a normal frame the sensible centered default
- * is the full frame, since guessing a tighter crop risks cutting off exactly
- * what the user is asking about.
+ * Clamps an explicit subject region to the frame. Without a subject region,
+ * the full frame is preserved regardless of aspect ratio.
  */
 export function resolveCropRegion(
   width: number,
@@ -116,18 +106,7 @@ export function resolveCropRegion(
   if (subjectRegion !== undefined) {
     return clampRegion(width, height, subjectRegion);
   }
-
-  const longEdge = Math.max(width, height);
-  const shortEdge = Math.min(width, height);
-  if (longEdge / shortEdge <= MAX_ASPECT_RATIO) {
-    return null;
-  }
-
-  const croppedLongEdge = Math.round(shortEdge * MAX_ASPECT_RATIO);
-  const offset = Math.round((longEdge - croppedLongEdge) / 2);
-  return width >= height
-    ? { originX: offset, originY: 0, width: croppedLongEdge, height }
-    : { originX: 0, originY: offset, width, height: croppedLongEdge };
+  return null;
 }
 
 export interface PrepareImageDeps {

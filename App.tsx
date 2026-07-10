@@ -9,7 +9,12 @@ export default function App() {
     <KeyboardProvider>
       <SafeAreaProvider>
         <AppNavigator />
-        <StatusBar style="auto" />
+        {/*
+          design.md §4.1 / §7 — the app now uses the warm/light visual system,
+          so status-bar icons default to dark for contrast on light screens.
+          The one dark surface (Welcome hero) flips them to light while focused.
+        */}
+        <StatusBar style="dark" />
       </SafeAreaProvider>
     </KeyboardProvider>
   );
