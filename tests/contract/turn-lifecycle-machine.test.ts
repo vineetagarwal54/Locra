@@ -5,6 +5,8 @@ import { createActor, fromPromise } from 'xstate';
 
 import {
   turnLifecycleMachine,
+  type PerceptionOutput,
+  type StreamOutput,
   type TurnLifecycleContext,
   type TurnLifecycleRequest,
 } from '../../src/inference/turnLifecycleMachine';
@@ -24,14 +26,14 @@ function makeRequest(overrides: Partial<TurnLifecycleRequest> = {}): TurnLifecyc
 function machineWithActors(overrides: Parameters<typeof turnLifecycleMachine.provide>[0] = {}) {
   return turnLifecycleMachine.provide({
     actors: {
-      prepareTurn: fromPromise(async () => undefined),
-      runPerception: fromPromise(async () => ({
+      prepareTurn: fromPromise(async (): Promise<undefined> => undefined),
+      runPerception: fromPromise(async (): Promise<PerceptionOutput> => ({
         hiddenEvidence: null,
         pinnedExtraction: null,
       })),
-      assembleContext: fromPromise(async () => undefined),
-      loadModel: fromPromise(async () => undefined),
-      streamAnswer: fromPromise(async () => ({
+      assembleContext: fromPromise(async (): Promise<undefined> => undefined),
+      loadModel: fromPromise(async (): Promise<undefined> => undefined),
+      streamAnswer: fromPromise(async (): Promise<StreamOutput> => ({
         response: 'A concise answer.',
         tokenCount: 4,
       })),
@@ -93,8 +95,8 @@ describe('turnLifecycleMachine contract', () => {
     const actor = createActor(machineWithActors({
       actors: {
         prepareTurn: fromPromise(
-          () => new Promise<void>((resolve) => {
-            releasePrepare = resolve;
+          () => new Promise<undefined>((resolve) => {
+            releasePrepare = () => resolve(undefined);
           }),
         ),
       },
@@ -122,7 +124,7 @@ describe('turnLifecycleMachine contract', () => {
   it('retries a failed request with the same conversation and message identities', async () => {
     const actor = createActor(machineWithActors({
       actors: {
-        streamAnswer: fromPromise(async () => {
+        streamAnswer: fromPromise(async (): Promise<StreamOutput> => {
           throw new Error('model failed');
         }),
       },
@@ -152,7 +154,7 @@ describe('turnLifecycleMachine contract', () => {
   it('can reach failed and interrupted terminal states without exposing another terminal state', async () => {
     const failedActor = createActor(machineWithActors({
       actors: {
-        streamAnswer: fromPromise(async () => {
+        streamAnswer: fromPromise(async (): Promise<StreamOutput> => {
           throw new Error('model failed');
         }),
       },
@@ -167,8 +169,8 @@ describe('turnLifecycleMachine contract', () => {
     const interruptedActor = createActor(machineWithActors({
       actors: {
         prepareTurn: fromPromise(
-          () => new Promise<void>((resolve) => {
-            releasePrepare = resolve;
+          () => new Promise<undefined>((resolve) => {
+            releasePrepare = () => resolve(undefined);
           }),
         ),
       },
