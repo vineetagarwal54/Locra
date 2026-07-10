@@ -8,7 +8,7 @@ import { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationListItem } from '../components/ConversationListItem';
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics } from '../constants/theme';
 import {
   type ConversationRecencyGroup,
   groupConversationsByRecency,
@@ -85,7 +85,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
             navigation.closeDrawer();
           }}
         >
-          <MaterialCommunityIcons name="close" size={22} color={theme.textSecondary} />
+          <MaterialCommunityIcons name="close" size={22} color={designTokens.color.textSecondary} />
         </Pressable>
       </View>
 
@@ -95,7 +95,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
         style={({ pressed }) => [styles.newChat, pressed && styles.newChatPressed]}
         onPress={onNewChat}
       >
-        <MaterialCommunityIcons name="plus" size={20} color={theme.textPrimary} />
+        <MaterialCommunityIcons name="plus" size={20} color={designTokens.color.onPrimary} />
         <Text style={styles.newChatLabel}>New chat</Text>
       </Pressable>
 
@@ -144,7 +144,7 @@ function FooterButton({ icon, label, onPress }: FooterButtonProps) {
       style={({ pressed }) => [styles.footerButton, pressed && styles.footerButtonPressed]}
       onPress={onPress}
     >
-      <MaterialCommunityIcons name={icon} size={20} color={theme.textSecondary} />
+      <MaterialCommunityIcons name={icon} size={20} color={designTokens.color.textSecondary} />
       <Text style={styles.footerButtonLabel}>{label}</Text>
     </Pressable>
   );
@@ -196,86 +196,87 @@ function findActiveConversationId(state: AnyNavState): string | null {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.canvas,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space6,
-    paddingBottom: theme.space3,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space24,
+    paddingBottom: designTokens.spacing.space12,
   },
   brand: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
   },
   headerButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   newChat: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: theme.space4,
-    marginBottom: theme.space2,
-    paddingVertical: theme.space3,
-    paddingHorizontal: theme.space4,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
+    justifyContent: 'center',
+    marginHorizontal: designTokens.spacing.space16,
+    marginBottom: designTokens.spacing.space8,
+    paddingVertical: designTokens.spacing.space12,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
   },
   newChatPressed: {
-    backgroundColor: theme.accentDim,
+    backgroundColor: designTokens.color.primarySoft,
   },
   newChatLabel: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    marginLeft: theme.space2,
+    color: designTokens.color.onPrimary,
+    fontSize: designTokens.type.button.fontSize,
+    fontWeight: designTokens.type.button.fontWeight,
+    marginLeft: designTokens.spacing.space8,
   },
   scrollContent: {
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space2,
-    paddingBottom: theme.space4,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space8,
+    paddingBottom: designTokens.spacing.space16,
   },
   group: {
-    marginBottom: theme.space4,
+    marginBottom: designTokens.spacing.space16,
   },
   groupLabel: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    fontWeight: '700',
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    fontWeight: designTokens.type.caption.fontWeight,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: theme.space2,
+    marginBottom: designTokens.spacing.space8,
   },
   emptyText: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
-    paddingVertical: theme.space4,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
+    paddingVertical: designTokens.spacing.space16,
   },
   footer: {
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space3,
-    paddingBottom: theme.space5,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space12,
+    paddingBottom: designTokens.spacing.space20,
+    borderTopWidth: designTokens.borderWidth,
+    borderTopColor: designTokens.color.divider,
   },
   footerButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: theme.space3,
+    paddingVertical: designTokens.spacing.space12,
   },
   footerButtonPressed: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
   footerButtonLabel: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '600',
-    marginLeft: theme.space3,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.cardTitle.fontSize,
+    fontWeight: designTokens.type.cardTitle.fontWeight,
+    marginLeft: designTokens.spacing.space12,
   },
 });

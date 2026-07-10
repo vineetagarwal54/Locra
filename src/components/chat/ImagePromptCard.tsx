@@ -2,10 +2,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { haptics, theme } from '../../constants/theme';
+import { designTokens, haptics, theme } from '../../constants/theme';
 
 const IMAGE_HEIGHT = 190;
-const READABLE_LINE_HEIGHT_RATIO = 1.45;
 
 interface ImagePromptCardProps {
   imagePath: string;
@@ -39,7 +38,7 @@ export function ImagePromptCard({
               onRemove();
             }}
           >
-            <MaterialCommunityIcons name="close" size={18} color={theme.textPrimary} />
+            <MaterialCommunityIcons name="close" size={18} color={designTokens.color.onPrimary} />
           </Pressable>
         ) : null}
       </View>
@@ -63,43 +62,43 @@ const styles = StyleSheet.create({
     maxWidth: 330,
     alignSelf: 'flex-end',
     overflow: 'hidden',
-    borderRadius: theme.radiusMd,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    backgroundColor: theme.surface,
+    borderRadius: designTokens.radius.card,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    backgroundColor: designTokens.color.surfaceStrong,
   },
   image: {
     width: '100%',
     height: IMAGE_HEIGHT,
-    backgroundColor: theme.surface2,
+    backgroundColor: designTokens.color.surface,
   },
   removeButton: {
     position: 'absolute',
-    top: theme.space2,
-    right: theme.space2,
-    width: theme.space6,
-    height: theme.space6,
+    top: designTokens.spacing.space8,
+    right: designTokens.spacing.space8,
+    width: designTokens.spacing.space24,
+    height: designTokens.spacing.space24,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.scrim,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.error,
   },
   removeButtonPressed: {
-    backgroundColor: theme.surface3,
+    opacity: 0.85,
   },
   question: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '600',
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space3,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    lineHeight: designTokens.type.bodyStrong.lineHeight,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space12,
   },
   metadata: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space1,
-    paddingBottom: theme.space3,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space4,
+    paddingBottom: designTokens.spacing.space12,
   },
 });

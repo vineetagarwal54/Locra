@@ -11,12 +11,10 @@ import {
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { VoiceButton } from '../../components/VoiceButton';
-import { haptics, theme } from '../../constants/theme';
+import { designTokens, haptics } from '../../constants/theme';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
-
-const READABLE_LINE_HEIGHT_RATIO = 1.45;
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -137,10 +135,17 @@ export function ChatComposer({
   ]);
 
   return (
-    <KeyboardStickyView offset={{ closed: 0, opened: theme.space2 }} style={styles.dock}>
+    <KeyboardStickyView
+      offset={{ closed: 0, opened: designTokens.spacing.space8 }}
+      style={styles.dock}
+    >
       {draft.imagePath !== null ? (
         <View style={styles.attachmentPill}>
-          <MaterialCommunityIcons name="image-outline" size={16} color={theme.accent} />
+          <MaterialCommunityIcons
+            name="image-outline"
+            size={16}
+            color={designTokens.color.primary}
+          />
           <Text style={styles.attachmentText} numberOfLines={1}>
             Image attached
           </Text>
@@ -148,7 +153,7 @@ export function ChatComposer({
             accessibilityRole="button"
             accessibilityLabel="Remove attached image"
             disabled={controlsDisabled}
-            hitSlop={theme.space2}
+            hitSlop={designTokens.spacing.space8}
             style={({ pressed }) => [
               styles.attachmentRemove,
               pressed && !controlsDisabled && styles.attachmentRemovePressed,
@@ -159,7 +164,7 @@ export function ChatComposer({
               setDraftImage(null);
             }}
           >
-            <MaterialCommunityIcons name="close" size={16} color={theme.accent} />
+            <MaterialCommunityIcons name="close" size={16} color={designTokens.color.primary} />
           </Pressable>
         </View>
       ) : null}
@@ -175,7 +180,9 @@ export function ChatComposer({
           <MaterialCommunityIcons
             name={lockVariant === 'elsewhere' ? 'lock-outline' : 'loading'}
             size={14}
-            color={lockVariant === 'elsewhere' ? theme.textSecondary : theme.accent}
+            color={
+              lockVariant === 'elsewhere' ? designTokens.color.textSecondary : designTokens.color.primary
+            }
           />
           <Text style={styles.lockText}>{lockLabel}</Text>
         </View>
@@ -195,7 +202,7 @@ export function ChatComposer({
             setSourceModalVisible(true);
           }}
         >
-          <MaterialCommunityIcons name="image-plus" size={22} color={theme.accent} />
+          <MaterialCommunityIcons name="image-plus" size={22} color={designTokens.color.primary} />
         </Pressable>
 
         <TextInput
@@ -203,7 +210,7 @@ export function ChatComposer({
           value={draft.text}
           onChangeText={onChangeText}
           placeholder={locked ? 'Generation in progress...' : placeholder}
-          placeholderTextColor={theme.textSecondary}
+          placeholderTextColor={designTokens.color.textSecondary}
           editable={!controlsDisabled}
           multiline
         />
@@ -220,7 +227,7 @@ export function ChatComposer({
               onCancel();
             }}
           >
-            <MaterialCommunityIcons name="stop" size={22} color={theme.textPrimary} />
+            <MaterialCommunityIcons name="stop" size={22} color={designTokens.color.onPrimary} />
           </Pressable>
         ) : (
           <Pressable
@@ -235,7 +242,7 @@ export function ChatComposer({
             ]}
             onPress={onSubmit}
           >
-            <MaterialCommunityIcons name="arrow-up" size={22} color={theme.textPrimary} />
+            <MaterialCommunityIcons name="arrow-up" size={22} color={designTokens.color.onPrimary} />
           </Pressable>
         )}
       </View>
@@ -298,7 +305,7 @@ function SourceButton({ icon, label, onPress, quiet = false }: SourceButtonProps
       <MaterialCommunityIcons
         name={icon}
         size={22}
-        color={quiet ? theme.textSecondary : theme.accent}
+        color={quiet ? designTokens.color.textSecondary : designTokens.color.primary}
       />
       <Text style={[styles.sourceButtonLabel, quiet && styles.sourceButtonLabelQuiet]}>
         {label}
@@ -309,171 +316,171 @@ function SourceButton({ icon, label, onPress, quiet = false }: SourceButtonProps
 
 const styles = StyleSheet.create({
   dock: {
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space3,
-    paddingBottom: theme.space3,
-    backgroundColor: theme.canvas,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space12,
+    paddingBottom: designTokens.spacing.space12,
+    backgroundColor: designTokens.color.canvas,
+    borderTopWidth: designTokens.borderWidth,
+    borderTopColor: designTokens.color.divider,
   },
   attachmentPill: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     maxWidth: '100%',
-    paddingVertical: theme.space2,
-    paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginBottom: theme.space2,
+    paddingVertical: designTokens.spacing.space8,
+    paddingHorizontal: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space8,
   },
   attachmentText: {
-    color: theme.accent,
-    fontSize: theme.fontSizeSm,
-    fontWeight: '700',
-    marginLeft: theme.space2,
+    color: designTokens.color.primary,
+    fontSize: designTokens.type.supporting.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginLeft: designTokens.spacing.space8,
   },
   attachmentRemove: {
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: theme.space2,
+    marginLeft: designTokens.spacing.space8,
   },
   attachmentRemovePressed: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
   errorText: {
-    color: theme.error,
-    fontSize: theme.fontSizeSm,
-    marginBottom: theme.space2,
+    color: designTokens.color.error,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginBottom: designTokens.spacing.space8,
   },
   lockRow: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    paddingVertical: theme.space1,
-    paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginBottom: theme.space2,
+    paddingVertical: designTokens.spacing.space4,
+    paddingHorizontal: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space8,
   },
   lockRowElsewhere: {
-    backgroundColor: theme.surface,
-    borderColor: theme.border,
+    backgroundColor: designTokens.color.surface,
+    borderColor: designTokens.color.border,
   },
   lockText: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    marginLeft: theme.space2,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginLeft: designTokens.spacing.space8,
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: theme.space2,
+    gap: designTokens.spacing.space8,
   },
   iconButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   iconButtonPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.divider,
   },
   input: {
     flex: 1,
-    minHeight: theme.space6 * 2,
-    maxHeight: theme.space6 * 5,
-    paddingHorizontal: theme.space4,
-    paddingVertical: theme.space3,
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    minHeight: designTokens.spacing.space24 * 2,
+    maxHeight: designTokens.spacing.space24 * 5,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingVertical: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.composer,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
   },
   inputDisabled: {
-    color: theme.textSecondary,
+    color: designTokens.color.textSecondary,
   },
   sendButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
   },
   sendButtonPressed: {
-    backgroundColor: theme.accentDim,
+    backgroundColor: designTokens.color.primarySoft,
   },
   stopButton: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.error,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
   },
   stopButtonPressed: {
-    opacity: 0.8,
+    backgroundColor: designTokens.color.primarySoft,
   },
   disabled: {
-    opacity: 0.42,
+    opacity: 0.45,
   },
   modalScrim: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: theme.scrim,
+    backgroundColor: designTokens.color.scrim,
   },
   sourceSheet: {
-    paddingHorizontal: theme.space5,
-    paddingTop: theme.space4,
-    paddingBottom: theme.space6,
-    backgroundColor: theme.canvas,
-    borderTopLeftRadius: theme.radiusLg,
-    borderTopRightRadius: theme.radiusLg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space20,
+    paddingTop: designTokens.spacing.space16,
+    paddingBottom: designTokens.spacing.space24,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderTopLeftRadius: designTokens.radius.card,
+    borderTopRightRadius: designTokens.radius.card,
+    borderTopWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   sourceTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    marginBottom: theme.space3,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginBottom: designTokens.spacing.space12,
   },
   sourceButton: {
-    minHeight: theme.space6 * 2,
+    minHeight: designTokens.spacing.space24 * 2,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.space4,
-    borderRadius: theme.radiusMd,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    marginBottom: theme.space2,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space8,
   },
   sourceButtonQuiet: {
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.surfaceStrong,
   },
   sourceButtonPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.divider,
   },
   sourceButtonLabel: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '600',
-    marginLeft: theme.space3,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.cardTitle.fontSize,
+    fontWeight: designTokens.type.cardTitle.fontWeight,
+    marginLeft: designTokens.spacing.space12,
   },
   sourceButtonLabelQuiet: {
-    color: theme.textSecondary,
+    color: designTokens.color.textSecondary,
   },
 });

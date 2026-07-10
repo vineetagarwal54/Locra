@@ -9,7 +9,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics, theme } from '../constants/theme';
 import { useVoiceStore } from '../store/voiceStore';
 
 // Hold-to-record mic button (FR-033). Press-and-hold to dictate; release to
@@ -97,7 +97,11 @@ export function VoiceButton({ disabled, onTranscript }: VoiceButtonProps) {
       });
   };
 
-  const iconColor = disabled ? theme.textMuted : isRecording ? theme.error : theme.accent;
+  const iconColor = disabled
+    ? designTokens.color.textSecondary
+    : isRecording
+      ? designTokens.color.error
+      : designTokens.color.primary;
 
   return (
     <Pressable
@@ -107,7 +111,7 @@ export function VoiceButton({ disabled, onTranscript }: VoiceButtonProps) {
       disabled={disabled}
       onPressIn={onPressIn}
       onPressOut={onPressOut}
-      hitSlop={theme.space2}
+      hitSlop={designTokens.spacing.space8}
       style={({ pressed }) => [
         styles.button,
         isRecording && styles.buttonRecording,
@@ -117,11 +121,11 @@ export function VoiceButton({ disabled, onTranscript }: VoiceButtonProps) {
     >
       <Animated.View style={pulseStyle}>
         {isBusy ? (
-          <ActivityIndicator size="small" color={theme.accent} />
+          <ActivityIndicator size="small" color={designTokens.color.primary} />
         ) : (
           <MaterialCommunityIcons
             name={isRecording ? 'microphone' : 'microphone-outline'}
-            size={theme.fontSizeLg}
+            size={designTokens.type.sectionTitle.fontSize}
             color={iconColor}
           />
         )}
@@ -132,23 +136,23 @@ export function VoiceButton({ disabled, onTranscript }: VoiceButtonProps) {
 
 const styles = StyleSheet.create({
   button: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.surface2,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.borderStrong,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   buttonRecording: {
-    backgroundColor: theme.errorGlow,
-    borderColor: theme.error,
+    backgroundColor: designTokens.color.errorSurface,
+    borderColor: designTokens.color.error,
   },
   buttonPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.divider,
   },
   buttonDisabled: {
-    opacity: 0.4,
+    opacity: 0.45,
   },
 });

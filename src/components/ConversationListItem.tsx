@@ -1,14 +1,12 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics } from '../constants/theme';
 import {
   deriveConversationPreview,
   deriveConversationTitle,
 } from '../history/ConversationSearch';
 import type { Conversation } from '../types/models';
-
-const READABLE_LINE_HEIGHT_RATIO = 1.4;
 
 interface ConversationListItemProps {
   conversation: Conversation;
@@ -47,7 +45,7 @@ export function ConversationListItem({
         <MaterialCommunityIcons
           name={hasImage ? 'image-outline' : 'chat-outline'}
           size={18}
-          color={selected ? theme.textPrimary : theme.accent}
+          color={selected ? designTokens.color.onPrimary : designTokens.color.primary}
         />
       </View>
       <View style={styles.body}>
@@ -84,35 +82,35 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: theme.space3,
-    paddingHorizontal: theme.space3,
-    borderRadius: theme.radiusMd,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    backgroundColor: theme.surface,
-    marginBottom: theme.space2,
+    paddingVertical: designTokens.spacing.space12,
+    paddingHorizontal: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.card,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    backgroundColor: designTokens.color.surfaceStrong,
+    marginBottom: designTokens.spacing.space8,
   },
   rowPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.surface,
   },
   rowSelected: {
-    backgroundColor: theme.accent,
-    borderColor: theme.accent,
+    backgroundColor: designTokens.color.primary,
+    borderColor: designTokens.color.primary,
   },
   iconWrap: {
-    width: theme.space6 + theme.space2,
-    height: theme.space6 + theme.space2,
+    width: designTokens.spacing.space24 + designTokens.spacing.space8,
+    height: designTokens.spacing.space24 + designTokens.spacing.space8,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginRight: theme.space3,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginRight: designTokens.spacing.space12,
   },
   iconWrapSelected: {
-    backgroundColor: theme.accentDim,
-    borderColor: theme.accentDim,
+    backgroundColor: designTokens.color.primarySoft,
+    borderColor: designTokens.color.primarySoft,
   },
   body: {
     flex: 1,
@@ -124,29 +122,29 @@ const styles = StyleSheet.create({
   },
   title: {
     flex: 1,
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    marginRight: theme.space2,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginRight: designTokens.spacing.space8,
   },
   titleSelected: {
-    color: theme.textPrimary,
+    color: designTokens.color.onPrimary,
   },
   time: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    fontWeight: '600',
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    fontWeight: designTokens.type.caption.fontWeight,
   },
   timeSelected: {
-    color: theme.textPrimary,
+    color: designTokens.color.onPrimary,
   },
   preview: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
-    marginTop: theme.space1,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    lineHeight: designTokens.type.supporting.lineHeight,
+    marginTop: designTokens.spacing.space4,
   },
   previewSelected: {
-    color: theme.textPrimary,
+    color: designTokens.color.onPrimary,
   },
 });

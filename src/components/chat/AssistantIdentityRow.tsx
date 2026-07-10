@@ -1,7 +1,7 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { theme } from '../../constants/theme';
+import { designTokens } from '../../constants/theme';
 
 interface AssistantIdentityRowProps {
   label?: string;
@@ -13,7 +13,11 @@ export function AssistantIdentityRow({
   return (
     <View style={styles.row}>
       <View style={styles.iconWrap}>
-        <MaterialCommunityIcons name="shield-check-outline" size={16} color={theme.accent} />
+        <MaterialCommunityIcons
+          name="shield-check-outline"
+          size={16}
+          color={designTokens.color.primary}
+        />
       </View>
       <Text style={styles.label}>{label}</Text>
     </View>
@@ -24,22 +28,23 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.space2,
+    marginBottom: designTokens.spacing.space8,
   },
   iconWrap: {
-    width: theme.space6,
-    height: theme.space6,
+    width: designTokens.spacing.space24,
+    height: designTokens.spacing.space24,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginRight: theme.space2,
+    borderRadius: designTokens.radius.circular,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginRight: designTokens.spacing.space8,
   },
   label: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    fontWeight: '600',
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    lineHeight: designTokens.type.supporting.lineHeight,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
   },
 });

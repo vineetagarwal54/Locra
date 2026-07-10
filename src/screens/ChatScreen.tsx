@@ -19,7 +19,7 @@ import { ChatComposer } from '../components/chat/ChatComposer';
 import { ImagePromptCard } from '../components/chat/ImagePromptCard';
 import { MessageBubble } from '../components/chat/MessageBubble';
 import { OfflineIndicator } from '../components/OfflineIndicator';
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
 import { useHistoryStore } from '../store/historyStore';
@@ -31,8 +31,6 @@ import type {
 } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
-
-const READABLE_LINE_HEIGHT_RATIO = 1.48;
 
 // FR-013: auto-follow streamed content only while the user sits within this many
 // points of the bottom; beyond it we assume they scrolled up to re-read and never
@@ -182,8 +180,8 @@ export function ChatScreen({ navigation, route }: Props) {
         <View style={styles.emptyWrap}>
           <MaterialCommunityIcons
             name="chat-remove-outline"
-            size={theme.space6 * 2}
-            color={theme.textMuted}
+            size={designTokens.spacing.space24 * 2}
+            color={designTokens.color.textSecondary}
           />
           <Text style={styles.emptyTitle}>This conversation is gone</Text>
           <Text style={styles.emptyBody}>It was deleted from history on this phone.</Text>
@@ -250,7 +248,7 @@ function AppHeader({ onMenu, onSettings }: AppHeaderProps) {
         style={styles.headerButton}
         onPress={onMenu}
       >
-        <MaterialCommunityIcons name="menu" size={24} color={theme.textSecondary} />
+        <MaterialCommunityIcons name="menu" size={24} color={designTokens.color.textSecondary} />
       </Pressable>
       <Text style={styles.headerTitle}>Locra</Text>
       <Pressable
@@ -299,7 +297,11 @@ function ChatHeaderContent({
   return (
     <View style={styles.newChat}>
       <View style={styles.privacyIcon}>
-        <MaterialCommunityIcons name="shield-check-outline" size={22} color={theme.accent} />
+        <MaterialCommunityIcons
+          name="shield-check-outline"
+          size={22}
+          color={designTokens.color.primary}
+        />
       </View>
       <Text style={styles.newChatTitle}>What is on your mind?</Text>
       <Text style={styles.newChatBody}>
@@ -360,9 +362,13 @@ function SuggestionCard({ icon, label, onPress }: SuggestionCardProps) {
         onPress();
       }}
     >
-      <MaterialCommunityIcons name={icon} size={20} color={theme.accent} />
+      <MaterialCommunityIcons name={icon} size={20} color={designTokens.color.primary} />
       <Text style={styles.suggestionText}>{label}</Text>
-      <MaterialCommunityIcons name="chevron-right" size={20} color={theme.textMuted} />
+      <MaterialCommunityIcons
+        name="chevron-right"
+        size={20}
+        color={designTokens.color.textSecondary}
+      />
     </Pressable>
   );
 }
@@ -382,119 +388,119 @@ function getComposerPlaceholder(conversation: Conversation | null, draft: Draft)
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.canvas,
   },
   header: {
-    minHeight: theme.space6 * 2,
+    minHeight: designTokens.spacing.space24 * 2,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderBottomWidth: designTokens.borderWidth,
+    borderBottomColor: designTokens.color.divider,
   },
   headerButton: {
-    minWidth: theme.space6 * 2,
-    height: theme.space6 * 2,
+    minWidth: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
   },
   screenError: {
-    color: theme.error,
-    fontSize: theme.fontSizeSm,
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space2,
+    color: designTokens.color.error,
+    fontSize: designTokens.type.supporting.fontSize,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space8,
   },
   listContent: {
     flexGrow: 1,
-    paddingHorizontal: theme.space4,
-    paddingTop: theme.space5,
-    paddingBottom: theme.space6 * 2,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space20,
+    paddingBottom: designTokens.spacing.space24 * 2,
   },
   newChat: {
     flex: 1,
     justifyContent: 'center',
-    paddingTop: theme.space6,
+    paddingTop: designTokens.spacing.space24,
   },
   privacyIcon: {
-    width: theme.space6 * 2,
-    height: theme.space6 * 2,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
-    marginBottom: theme.space4,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space16,
   },
   newChatTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeXl,
-    fontWeight: '700',
-    lineHeight: theme.fontSizeXl * 1.18,
-    marginBottom: theme.space2,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.screenTitle.fontSize,
+    fontWeight: designTokens.type.screenTitle.fontWeight,
+    lineHeight: designTokens.type.screenTitle.lineHeight,
+    marginBottom: designTokens.spacing.space8,
   },
   newChatBody: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
-    marginBottom: theme.space5,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
+    marginBottom: designTokens.spacing.space20,
   },
   suggestionList: {
-    marginBottom: theme.space5,
+    marginBottom: designTokens.spacing.space20,
   },
   suggestionCard: {
-    minHeight: theme.space6 * 2,
+    minHeight: designTokens.spacing.space24 * 2,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: theme.space4,
-    borderRadius: theme.radiusMd,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    marginBottom: theme.space3,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space12,
   },
   suggestionCardPressed: {
-    backgroundColor: theme.surface3,
+    backgroundColor: designTokens.color.divider,
   },
   suggestionText: {
     flex: 1,
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '600',
-    marginHorizontal: theme.space3,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.cardTitle.fontSize,
+    fontWeight: designTokens.type.cardTitle.fontWeight,
+    marginHorizontal: designTokens.spacing.space12,
   },
   previewBlock: {
-    marginBottom: theme.space5,
+    marginBottom: designTokens.spacing.space20,
   },
   footerNote: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    lineHeight: theme.fontSizeXs * READABLE_LINE_HEIGHT_RATIO,
-    marginTop: theme.space4,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    lineHeight: designTokens.type.caption.lineHeight,
+    marginTop: designTokens.spacing.space16,
   },
   emptyWrap: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: theme.space5,
+    paddingHorizontal: designTokens.spacing.space20,
   },
   emptyTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
-    marginTop: theme.space4,
-    marginBottom: theme.space2,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
+    marginTop: designTokens.spacing.space16,
+    marginBottom: designTokens.spacing.space8,
   },
   emptyBody: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
     textAlign: 'center',
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    lineHeight: designTokens.type.body.lineHeight,
   },
 });

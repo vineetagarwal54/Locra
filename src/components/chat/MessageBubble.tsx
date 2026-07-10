@@ -1,13 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { haptics, theme } from '../../constants/theme';
+import { designTokens, haptics } from '../../constants/theme';
 import type { ConversationMessage } from '../../types/models';
 
 import { ImagePromptCard } from './ImagePromptCard';
 import { StreamingMessage } from './StreamingMessage';
-
-const READABLE_LINE_HEIGHT_RATIO = 1.52;
 
 interface MessageBubbleProps {
   message: ConversationMessage;
@@ -61,7 +59,7 @@ function AssistantMessage({
             <MaterialCommunityIcons
               name="alert-circle-outline"
               size={18}
-              color={theme.error}
+              color={designTokens.color.error}
             />
             <Text style={styles.failedTitle}>Response failed</Text>
           </View>
@@ -112,79 +110,79 @@ function AssistantMessage({
 const styles = StyleSheet.create({
   userWrap: {
     alignItems: 'flex-end',
-    marginBottom: theme.space4,
+    marginBottom: designTokens.spacing.space16,
   },
   assistantWrap: {
     alignItems: 'flex-start',
-    marginBottom: theme.space4,
+    marginBottom: designTokens.spacing.space16,
   },
   userBubble: {
     maxWidth: '86%',
-    paddingHorizontal: theme.space4,
-    paddingVertical: theme.space3,
-    borderRadius: theme.radiusMd,
-    borderBottomRightRadius: theme.radiusSm,
-    backgroundColor: theme.accent,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingVertical: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.bubble,
+    borderBottomRightRadius: designTokens.radius.bubbleTail,
+    backgroundColor: designTokens.color.primarySoft,
   },
   userText: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    color: designTokens.color.onUserBubble,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
   },
   assistantBubble: {
     maxWidth: '92%',
-    paddingHorizontal: theme.space4,
-    paddingVertical: theme.space3,
-    borderRadius: theme.radiusMd,
-    borderBottomLeftRadius: theme.radiusSm,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingVertical: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.bubble,
+    borderBottomLeftRadius: designTokens.radius.bubbleTail,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   assistantText: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
   },
   assistantMuted: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
   },
   failedBubble: {
-    borderColor: theme.error,
-    backgroundColor: theme.errorGlow,
+    borderColor: designTokens.color.error,
+    backgroundColor: designTokens.color.errorSurface,
   },
   failedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.space2,
+    marginBottom: designTokens.spacing.space8,
   },
   failedTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    marginLeft: theme.space2,
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginLeft: designTokens.spacing.space8,
   },
   failedText: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    lineHeight: theme.fontSizeSm * READABLE_LINE_HEIGHT_RATIO,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    lineHeight: designTokens.type.supporting.lineHeight,
   },
   retryButton: {
     alignSelf: 'flex-start',
-    marginTop: theme.space3,
-    paddingVertical: theme.space2,
-    paddingHorizontal: theme.space4,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
+    marginTop: designTokens.spacing.space12,
+    paddingVertical: designTokens.spacing.space8,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
   },
   retryButtonPressed: {
-    backgroundColor: theme.accentDim,
+    opacity: 0.85,
   },
   retryButtonLabel: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeSm,
-    fontWeight: '700',
+    color: designTokens.color.onPrimary,
+    fontSize: designTokens.type.button.fontSize,
+    fontWeight: designTokens.type.button.fontWeight,
   },
 });

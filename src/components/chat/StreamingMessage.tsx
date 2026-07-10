@@ -10,7 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { theme } from '../../constants/theme';
+import { designTokens } from '../../constants/theme';
 
 const DOT_SIZE = 5;
 const DOT_CYCLE_MS = 1000;
@@ -68,9 +68,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   label: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    marginRight: theme.space2,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginRight: designTokens.spacing.space8,
   },
   dots: {
     flexDirection: 'row',
@@ -79,8 +79,8 @@ const styles = StyleSheet.create({
   dot: {
     width: DOT_SIZE,
     height: DOT_SIZE,
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
-    marginRight: theme.space1,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
+    marginRight: designTokens.spacing.space4,
   },
 });
