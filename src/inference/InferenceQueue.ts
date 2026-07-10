@@ -2,6 +2,8 @@
 // preprocessing before any tensor code), and III (OOM never crashes). This
 // module has ZERO imports from src/screens/ or UI/networking primitives.
 
+import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
+
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, InferenceStatus } from '../types/models';
 
@@ -37,6 +39,12 @@ import {
   type InferenceTraceStageKind,
 } from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
+import {
+  turnLifecycleMachine,
+  type PerceptionOutput,
+  type StreamOutput,
+  type TurnLifecycleRequest,
+} from './turnLifecycleMachine';
 
 export interface EngineGenerateRequest {
   messages: ModelRequestMessage[];
@@ -102,16 +110,43 @@ interface ActiveRequest {
   cancelled: boolean;
 }
 
+interface LifecycleGate<T> {
+  readonly promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+interface LifecycleGates {
+  readonly prepare: LifecycleGate<undefined>;
+  readonly perception: LifecycleGate<PerceptionOutput>;
+  readonly contextAssembly: LifecycleGate<undefined>;
+  readonly loadModel: LifecycleGate<undefined>;
+  readonly stream: LifecycleGate<StreamOutput>;
+}
+
 export class InferenceQueue implements IInferenceQueue {
   private state: InferenceState = { ...IDLE_STATE };
   private readonly listeners = new Set<(state: InferenceState) => void>();
+  private readonly lifecycleActor: ActorRefFrom<typeof turnLifecycleMachine>;
   private active: ActiveRequest | null = null;
+  private lifecycleGates: LifecycleGates | null = null;
+  private lifecycleRequestSequence = 0;
   private readonly createRecorder: () => InferenceMetricsRecorder;
   private readonly activityLock: ActivityLock;
 
   constructor(private readonly deps: InferenceQueueDeps) {
     this.createRecorder = deps.createRecorder ?? (() => new InferenceMetricsRecorder());
     this.activityLock = deps.activityLock ?? inferenceActivityLock;
+    this.lifecycleActor = createActor(
+      turnLifecycleMachine.provide({
+        actors: {
+          prepareTurn: fromPromise(() => this.requireLifecycleGates().prepare.promise),
+          runPerception: fromPromise(() => this.requireLifecycleGates().perception.promise),
+          assembleContext: fromPromise(() => this.requireLifecycleGates().contextAssembly.promise),
+          loadModel: fromPromise(() => this.requireLifecycleGates().loadModel.promise),
+          streamAnswer: fromPromise(() => this.requireLifecycleGates().stream.promise),
+        },
+      }),
+    ).start();
   }
 
   getState(): InferenceState {
@@ -140,6 +175,12 @@ export class InferenceQueue implements IInferenceQueue {
     const trace = traceEnabled ? createInferenceTrace() : null;
     const active: ActiveRequest = { controller: new AbortController(), trace, cancelled: false };
     this.active = active;
+    const lifecycleGates = createLifecycleGates();
+    this.lifecycleGates = lifecycleGates;
+    this.lifecycleActor.send({
+      type: 'SUBMIT',
+      request: this.createLifecycleRequest(request, options),
+    });
     const recorder = this.createRecorder();
     const isFollowUp = options.turn === 'followUp';
 
@@ -161,6 +202,7 @@ export class InferenceQueue implements IInferenceQueue {
       const processed = isFollowUp
         ? null
         : await this.deps.preprocess(request.imagePath);
+      lifecycleGates.prepare.resolve(undefined);
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
 
@@ -173,6 +215,7 @@ export class InferenceQueue implements IInferenceQueue {
       if (!isFollowUp) {
         await this.deps.engine.loadModel();
       }
+      lifecycleGates.loadModel.resolve(undefined);
       recorder.markModelLoadEnd();
       if (active.cancelled) return;
 
@@ -190,9 +233,17 @@ export class InferenceQueue implements IInferenceQueue {
               options.canonicalTurns ?? [],
               active,
               recorder,
-              markBudgetStopped
+              markBudgetStopped,
+              lifecycleGates,
             )
-          : await this.generateFirstImageAnswer(request, processed, active, recorder, markBudgetStopped);
+          : await this.generateFirstImageAnswer(
+              request,
+              processed,
+              active,
+              recorder,
+              markBudgetStopped,
+              lifecycleGates,
+            );
       if (active.cancelled) return;
 
       recorder.setTokenCount(result.tokenCount);
@@ -220,8 +271,13 @@ export class InferenceQueue implements IInferenceQueue {
         ),
         inferenceTrace: active.trace,
       });
+      lifecycleGates.stream.resolve({
+        response: processedAnswer.text,
+        tokenCount: result.tokenCount,
+      });
     } catch (error) {
       if (active.cancelled) return;
+      settleLifecycleGates(lifecycleGates);
       this.setState({
         status: 'errored',
         response: '',
@@ -237,6 +293,9 @@ export class InferenceQueue implements IInferenceQueue {
       if (this.active === active) {
         this.active = null;
       }
+      if (this.lifecycleGates === lifecycleGates) {
+        this.lifecycleGates = null;
+      }
       this.activityLock.release('vlm');
     }
   }
@@ -248,6 +307,11 @@ export class InferenceQueue implements IInferenceQueue {
     active.cancelled = true;
     active.controller.abort();
     this.active = null;
+    this.lifecycleActor.send({ type: 'CANCEL' });
+    if (this.lifecycleGates !== null) {
+      settleLifecycleGates(this.lifecycleGates);
+      this.lifecycleGates = null;
+    }
 
     this.setState({
       status: 'cancelled',
@@ -268,7 +332,8 @@ export class InferenceQueue implements IInferenceQueue {
     processed: PreprocessedImage,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    markBudgetStopped: () => void
+    markBudgetStopped: () => void,
+    lifecycleGates: LifecycleGates,
   ): Promise<EngineGenerateResult> {
     recorder.markPerceptionStart();
     const extractionRequest: EngineGenerateRequest = {
@@ -316,11 +381,16 @@ export class InferenceQueue implements IInferenceQueue {
       parsedOutput: extractionOutcome.hiddenEvidence,
       processedOutput: extractionOutcome.visibleAnswer,
     });
+    lifecycleGates.perception.resolve({
+      hiddenEvidence: extractionOutcome.hiddenEvidence,
+      pinnedExtraction: extractionOutcome.pinnedExtraction,
+    });
     if (active.cancelled) {
       return extractionResult;
     }
 
     if (extractionOutcome.hiddenEvidence === null) {
+      lifecycleGates.contextAssembly.resolve(undefined);
       recorder.markAnswerStart();
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
@@ -340,6 +410,7 @@ export class InferenceQueue implements IInferenceQueue {
       generationConfigId: CURRENT_GENERATION_CONFIG_ID,
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
     });
+    lifecycleGates.contextAssembly.resolve(undefined);
     const answerResult = await this.generateVisibleAnswer(
       buildSingleUserModelMessages(answerPrompt),
       active,
@@ -363,8 +434,14 @@ export class InferenceQueue implements IInferenceQueue {
     canonicalTurns: ContextTurn[],
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    markBudgetStopped: () => void
+    markBudgetStopped: () => void,
+    lifecycleGates: LifecycleGates,
   ): Promise<EngineGenerateResult> {
+    lifecycleGates.perception.resolve({
+      hiddenEvidence: null,
+      pinnedExtraction: null,
+    });
+    lifecycleGates.contextAssembly.resolve(undefined);
     return this.generateVisibleAnswer(
       buildCanonicalModelMessages({
         turns: canonicalTurns,
@@ -398,6 +475,11 @@ export class InferenceQueue implements IInferenceQueue {
         if (active.cancelled) return;
         recorder.markFirstToken();
         recorder.markAnswerFirstToken();
+        this.lifecycleActor.send({
+          type: 'TOKEN',
+          response: cumulative,
+          count: generatedTokenCount ?? 0,
+        });
         this.setState({ response: cumulative });
         if (
           generatedTokenCount !== undefined &&
@@ -485,6 +567,41 @@ export class InferenceQueue implements IInferenceQueue {
     return IN_FLIGHT.includes(this.state.status);
   }
 
+  private createLifecycleRequest(
+    request: InferenceRequest,
+    options: InferenceSubmitOptions,
+  ): TurnLifecycleRequest {
+    const requestWithAttribution = request as InferenceRequest & Partial<TurnLifecycleRequest>;
+    const fallbackRequestId = this.createFallbackLifecycleId('request');
+    const imagePath = options.turn === 'followUp' ? null : request.imagePath;
+
+    return {
+      requestId: requestWithAttribution.requestId ?? fallbackRequestId,
+      conversationId: requestWithAttribution.conversationId ?? this.createFallbackLifecycleId('conversation'),
+      originatingUserMessageId:
+        requestWithAttribution.originatingUserMessageId ??
+        this.createFallbackLifecycleId('user-message'),
+      assistantMessageId:
+        requestWithAttribution.assistantMessageId ??
+        this.createFallbackLifecycleId('assistant-message'),
+      question: request.question,
+      imagePath,
+    };
+  }
+
+  private createFallbackLifecycleId(prefix: string): string {
+    this.lifecycleRequestSequence += 1;
+    return `legacy-${prefix}-${this.lifecycleRequestSequence}`;
+  }
+
+  private requireLifecycleGates(): LifecycleGates {
+    if (this.lifecycleGates === null) {
+      throw new Error('No active lifecycle request.');
+    }
+
+    return this.lifecycleGates;
+  }
+
   private setState(patch: Partial<InferenceState>): void {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) {
@@ -527,4 +644,37 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return 'Inference failed for an unknown reason.';
+}
+
+function createLifecycleGates(): LifecycleGates {
+  return {
+    prepare: createLifecycleGate<undefined>(),
+    perception: createLifecycleGate<PerceptionOutput>(),
+    contextAssembly: createLifecycleGate<undefined>(),
+    loadModel: createLifecycleGate<undefined>(),
+    stream: createLifecycleGate<StreamOutput>(),
+  };
+}
+
+function createLifecycleGate<T>(): LifecycleGate<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
+}
+
+function settleLifecycleGates(gates: LifecycleGates): void {
+  gates.prepare.resolve(undefined);
+  gates.perception.resolve({
+    hiddenEvidence: null,
+    pinnedExtraction: null,
+  });
+  gates.contextAssembly.resolve(undefined);
+  gates.loadModel.resolve(undefined);
+  gates.stream.resolve({
+    response: '',
+    tokenCount: 0,
+  });
 }

@@ -25,12 +25,12 @@ export type TurnLifecycleEvent =
   | { type: 'CANCEL' }
   | { type: 'RETRY' };
 
-interface PerceptionOutput {
+export interface PerceptionOutput {
   hiddenEvidence: HiddenVisualEvidence | null;
   pinnedExtraction: string | null;
 }
 
-interface StreamOutput {
+export interface StreamOutput {
   response: string;
   tokenCount: number;
 }
@@ -49,13 +49,13 @@ export const turnLifecycleMachine = setup({
     events: {} as TurnLifecycleEvent,
   },
   actors: {
-    prepareTurn: fromPromise(async () => undefined),
+    prepareTurn: fromPromise(async (): Promise<undefined> => undefined),
     runPerception: fromPromise(async (): Promise<PerceptionOutput> => ({
       hiddenEvidence: null,
       pinnedExtraction: null,
     })),
-    assembleContext: fromPromise(async () => undefined),
-    loadModel: fromPromise(async () => undefined),
+    assembleContext: fromPromise(async (): Promise<undefined> => undefined),
+    loadModel: fromPromise(async (): Promise<undefined> => undefined),
     streamAnswer: fromPromise(async (): Promise<StreamOutput> => ({
       response: '',
       tokenCount: 0,
@@ -223,10 +223,19 @@ export const turnLifecycleMachine = setup({
       },
     },
     completed: {
-      type: 'final',
+      on: {
+        SUBMIT: {
+          target: 'preparing',
+          actions: 'acceptSubmit',
+        },
+      },
     },
     failed: {
       on: {
+        SUBMIT: {
+          target: 'preparing',
+          actions: 'acceptSubmit',
+        },
         RETRY: {
           target: 'preparing',
           actions: 'prepareRetry',
@@ -235,7 +244,12 @@ export const turnLifecycleMachine = setup({
       },
     },
     interrupted: {
-      type: 'final',
+      on: {
+        SUBMIT: {
+          target: 'preparing',
+          actions: 'acceptSubmit',
+        },
+      },
     },
   },
 });
