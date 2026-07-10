@@ -28,7 +28,10 @@ jest.mock('react-native-nitro-image', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
+import {
+  createCanonicalConversationContext,
+  type ModelRequestMessage,
+} from '../../../src/inference/ContextBuilder';
 import {
   RESPONSE_LIMIT_WARNING_TOKEN_THRESHOLD,
   getResponseLimitWarning,
@@ -51,13 +54,6 @@ interface HistoryStoreMock {
 const historyStoreMock = jest.requireMock(
   '../../../src/store/historyStore'
 ) as HistoryStoreMock;
-
-interface FollowUpSubmitter {
-  submit(
-    request: InferenceRequest,
-    options?: { turn: 'followUp'; canonicalTurns?: Array<{ question: string; answer: string }> }
-  ): Promise<void>;
-}
 
 const firstRequest: InferenceRequest = {
   imagePath: '/camera/original.jpg',
@@ -121,7 +117,10 @@ describe('multi-turn follow-up exchanges', () => {
     });
 
     await queue.submit(firstRequest);
-    await (queue as FollowUpSubmitter).submit(followUpRequest, { turn: 'followUp' });
+    await queue.submit(followUpRequest, {
+      turn: 'followUp',
+      conversationContext: createCanonicalConversationContext([]),
+    });
 
     expect(generatedRequests[0]).toEqual(
       expect.objectContaining({

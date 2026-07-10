@@ -1,11 +1,13 @@
-import type { ConversationMessage } from '../types/models';
+import type {
+  CanonicalContextTurn,
+  CanonicalConversationContext,
+  ConversationMessage,
+} from '../types/models';
 
-import { LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
+import { LOCRA_FOLLOW_UP_INSTRUCTION, LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
-export interface ContextTurn {
-  question: string;
-  answer: string;
-}
+export type ContextTurn = CanonicalContextTurn;
+export type { CanonicalConversationContext };
 
 export type ModelRequestRole = 'system' | 'user' | 'assistant';
 
@@ -16,7 +18,7 @@ export interface ModelRequestMessage {
 }
 
 export interface BuildCanonicalContextInput {
-  turns: ContextTurn[];
+  conversationContext: CanonicalConversationContext;
   currentQuestion: string;
   recentTurnLimit?: number;
 }
@@ -31,8 +33,11 @@ export interface BuildImageAnswerContextInput extends BuildConversationContextIn
   answerPrompt: string;
 }
 
-export const DEFAULT_RECENT_TURN_LIMIT = 6;
-export const MAX_CONTEXT_MESSAGE_CHARS = 1200;
+export const DEFAULT_RECENT_TURN_LIMIT = 12;
+export const MAX_CANONICAL_CONTEXT_CHARS = 14_400;
+
+const CONTEXT_TURN_OVERHEAD_CHARS = 32;
+const CONTEXT_SHORTENED_MARKER = '\n[... context shortened ...]\n';
 
 const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
   'You are Locra internal visual evidence extraction. Return only the requested structured evidence.';
@@ -40,11 +45,36 @@ const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
 export function buildCanonicalModelMessages(
   input: BuildCanonicalContextInput
 ): ModelRequestMessage[] {
+  const contextTurns = boundedTurns(
+    input.conversationContext.turns,
+    input.recentTurnLimit,
+  );
   return [
-    systemMessage(LOCRA_SYSTEM_PROMPT),
-    ...boundedTurns(input.turns, input.recentTurnLimit).flatMap(turnToMessages),
+    answerSystemMessage(contextTurns.length > 0),
+    ...contextTurns.flatMap(turnToMessages),
     userMessage(input.currentQuestion),
   ];
+}
+
+export function createCanonicalConversationContext(
+  turns: ReadonlyArray<ContextTurn>,
+): CanonicalConversationContext {
+  return {
+    version: 'canonical-conversation-v1',
+    turns: turns.map((turn) => ({
+      question: turn.question,
+      answer: turn.answer,
+    })),
+  };
+}
+
+export function buildCanonicalConversationContextBeforeMessage(
+  messages: ConversationMessage[],
+  currentUserMessageId: string,
+): CanonicalConversationContext {
+  return createCanonicalConversationContext(
+    buildContextTurnsBeforeMessage(messages, currentUserMessageId),
+  );
 }
 
 export function buildCanonicalModelMessagesForConversation(
@@ -52,7 +82,10 @@ export function buildCanonicalModelMessagesForConversation(
 ): ModelRequestMessage[] {
   const currentMessage = findUserMessage(input.messages, input.currentUserMessageId);
   return buildCanonicalModelMessages({
-    turns: buildContextTurnsBeforeMessage(input.messages, input.currentUserMessageId),
+    conversationContext: buildCanonicalConversationContextBeforeMessage(
+      input.messages,
+      input.currentUserMessageId,
+    ),
     currentQuestion: currentMessage.text,
     recentTurnLimit: input.recentTurnLimit,
   });
@@ -61,12 +94,16 @@ export function buildCanonicalModelMessagesForConversation(
 export function buildImageAnswerModelMessages(
   input: BuildImageAnswerContextInput
 ): ModelRequestMessage[] {
+  const contextTurns = boundedTurns(
+    buildCanonicalConversationContextBeforeMessage(
+      input.messages,
+      input.currentUserMessageId,
+    ).turns,
+    input.recentTurnLimit,
+  );
   return [
-    systemMessage(LOCRA_SYSTEM_PROMPT),
-    ...boundedTurns(
-      buildContextTurnsBeforeMessage(input.messages, input.currentUserMessageId),
-      input.recentTurnLimit,
-    ).flatMap(turnToMessages),
+    answerSystemMessage(contextTurns.length > 0),
+    ...contextTurns.flatMap(turnToMessages),
     userMessage(input.answerPrompt),
   ];
 }
@@ -141,8 +178,35 @@ function findUserMessage(
   return message;
 }
 
-function boundedTurns(turns: ContextTurn[], recentTurnLimit: number | undefined): ContextTurn[] {
-  return turns.slice(-resolveRecentTurnLimit(recentTurnLimit));
+function boundedTurns(
+  turns: ReadonlyArray<ContextTurn>,
+  recentTurnLimit: number | undefined,
+): ContextTurn[] {
+  const turnLimit = resolveRecentTurnLimit(recentTurnLimit);
+  if (turnLimit === 0) {
+    return [];
+  }
+
+  const candidates = turns.slice(-turnLimit);
+  const selected: ContextTurn[] = [];
+  let remainingChars = MAX_CANONICAL_CONTEXT_CHARS;
+
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const turn = normalizedTurn(candidates[index]);
+    const turnChars = contextTurnChars(turn);
+    if (turnChars <= remainingChars) {
+      selected.unshift(turn);
+      remainingChars -= turnChars;
+      continue;
+    }
+
+    if (selected.length === 0 && remainingChars > CONTEXT_TURN_OVERHEAD_CHARS) {
+      selected.unshift(shortenTurnToBudget(turn, remainingChars));
+    }
+    break;
+  }
+
+  return selected;
 }
 
 function resolveRecentTurnLimit(limit: number | undefined): number {
@@ -154,13 +218,21 @@ function resolveRecentTurnLimit(limit: number | undefined): number {
 
 function turnToMessages(turn: ContextTurn): ModelRequestMessage[] {
   return [
-    userMessage(truncateContextText(turn.question)),
-    assistantMessage(truncateContextText(turn.answer)),
+    userMessage(turn.question),
+    assistantMessage(turn.answer),
   ];
 }
 
 function systemMessage(content: string): ModelRequestMessage {
   return { role: 'system', content };
+}
+
+function answerSystemMessage(hasPriorContext: boolean): ModelRequestMessage {
+  if (!hasPriorContext) {
+    return systemMessage(LOCRA_SYSTEM_PROMPT);
+  }
+
+  return systemMessage(`${LOCRA_SYSTEM_PROMPT}\n\n${LOCRA_FOLLOW_UP_INSTRUCTION}`);
 }
 
 function userMessage(content: string): ModelRequestMessage {
@@ -171,11 +243,51 @@ function assistantMessage(content: string): ModelRequestMessage {
   return { role: 'assistant', content: content.trim() };
 }
 
-function truncateContextText(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= MAX_CONTEXT_MESSAGE_CHARS) {
-    return trimmed;
+function normalizedTurn(turn: ContextTurn): ContextTurn {
+  return {
+    question: turn.question.trim(),
+    answer: turn.answer.trim(),
+  };
+}
+
+function contextTurnChars(turn: ContextTurn): number {
+  return turn.question.length + turn.answer.length + CONTEXT_TURN_OVERHEAD_CHARS;
+}
+
+function shortenTurnToBudget(turn: ContextTurn, budget: number): ContextTurn {
+  const contentBudget = Math.max(0, budget - CONTEXT_TURN_OVERHEAD_CHARS);
+  const totalChars = turn.question.length + turn.answer.length;
+  if (totalChars <= contentBudget) {
+    return turn;
   }
 
-  return `${trimmed.slice(0, MAX_CONTEXT_MESSAGE_CHARS).trimEnd()}...`;
+  const questionShare = totalChars === 0
+    ? 0
+    : Math.round(contentBudget * (turn.question.length / totalChars));
+  return {
+    question: shortenContextText(turn.question, questionShare),
+    answer: shortenContextText(turn.answer, contentBudget - questionShare),
+  };
+}
+
+function shortenContextText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 0) {
+    return '';
+  }
+  if (maxChars <= 3) {
+    return value.slice(-maxChars);
+  }
+  if (maxChars <= CONTEXT_SHORTENED_MARKER.length + 2) {
+    return `...${value.slice(-(maxChars - 3))}`;
+  }
+
+  const remainingChars = maxChars - CONTEXT_SHORTENED_MARKER.length;
+  const headChars = Math.ceil(remainingChars / 2);
+  const tailChars = remainingChars - headChars;
+  return `${value.slice(0, headChars).trimEnd()}${CONTEXT_SHORTENED_MARKER}${value
+    .slice(-tailChars)
+    .trimStart()}`;
 }

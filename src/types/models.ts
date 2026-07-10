@@ -60,6 +60,16 @@ export interface Conversation {
   flagNote: string | null;
 }
 
+export interface CanonicalContextTurn {
+  readonly question: string;
+  readonly answer: string;
+}
+
+export interface CanonicalConversationContext {
+  readonly version: 'canonical-conversation-v1';
+  readonly turns: ReadonlyArray<CanonicalContextTurn>;
+}
+
 export interface Draft {
   conversationId: string | null;
   text: string;

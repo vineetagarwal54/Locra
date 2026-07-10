@@ -52,4 +52,13 @@ describe('ToolRefusalRecovery', () => {
     expect(recovered[0].content).toContain(TOOL_REFUSAL_RECOVERY_INSTRUCTION);
     expect(recovered.slice(1)).toEqual(messages.slice(1));
   });
+
+  it('uses a positive-first recovery instruction focused on answering usefully', () => {
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).toMatch(/unnecessarily unhelpful/i);
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).toMatch(/user's actual question/i);
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).toMatch(/knowledge, reasoning, and conversation context/i);
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).toMatch(/practical guidance directly/i);
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).toMatch(/most useful answer/i);
+    expect(TOOL_REFUSAL_RECOVERY_INSTRUCTION).not.toMatch(/do not discuss tools/i);
+  });
 });

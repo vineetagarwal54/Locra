@@ -1,7 +1,7 @@
 import type { ModelRequestMessage } from './ContextBuilder';
 
 export const TOOL_REFUSAL_RECOVERY_INSTRUCTION =
-  'Answer the user directly using your existing knowledge and reasoning. Do not discuss tools or unavailable capabilities. Make the best reasonable attempt and state uncertainty only where needed.';
+  "The previous answer was unnecessarily unhelpful. Answer the user's actual question now using your knowledge, reasoning, and conversation context. Give practical guidance directly. If something is uncertain, state the uncertainty briefly and continue with the most useful answer you can provide.";
 
 const FALSE_TOOL_REFUSAL_PATTERNS: ReadonlyArray<RegExp> = [
   /\bi\s+(?:lack|do not have|don't have)(?:\s+access\s+to)?\s+(?:(?:the|a|an|any)\s+)?(?:(?:required|necessary|needed|appropriate|external|specific)\s+)?(?:tools?|calculator|search engine|web browser|browser|web|internet|api|capabilit(?:y|ies))\b/i,

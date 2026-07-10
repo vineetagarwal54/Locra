@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { createCanonicalConversationContext } from '../inference/ContextBuilder';
 import {
   createInferenceQueue,
   type InferenceEngineAdapter,
@@ -130,7 +131,12 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
     activeTurn = turn;
     const options: InferenceSubmitOptions = turn.baseSession === null
       ? { turn: 'first' }
-      : { turn: 'followUp', canonicalTurns: normalizedTurns(turn.baseSession) };
+      : {
+          turn: 'followUp',
+          conversationContext: createCanonicalConversationContext(
+            normalizedTurns(turn.baseSession),
+          ),
+        };
 
     try {
       await queue.submit(turn.request, options);

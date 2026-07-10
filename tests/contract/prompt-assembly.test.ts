@@ -1,17 +1,22 @@
 import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
-import { buildCanonicalModelMessages } from '../../src/inference/ContextBuilder';
+import {
+  buildCanonicalModelMessages,
+  createCanonicalConversationContext,
+} from '../../src/inference/ContextBuilder';
 import { buildStructuredExtractionPrompt } from '../../src/inference/ExtractionPrompt';
 import { LOCRA_SYSTEM_PROMPT } from '../../src/inference/SystemPrompt';
 
 const OFF_IMAGE_FOLLOW_UP = 'My pan is sticky, how do I fix it?';
 describe('persistent system prompt', () => {
-  it('establishes a concise grounded answer-first identity', () => {
+  it('establishes a short positive-first offline assistant identity', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/you are locra/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/answer the user's actual question/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/visible evidence/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/general knowledge/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/concise/i);
-    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertaint/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/helpful offline assistant/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/most useful answer/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/conversation context/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/available image evidence/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/practical steps/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/current value cannot be confirmed/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/uncertain/i);
   });
 
   it('drops the older expansive persona language', () => {
@@ -22,12 +27,12 @@ describe('persistent system prompt', () => {
 
 describe('canonical follow-up assembly', () => {
   const messages = buildCanonicalModelMessages({
-    turns: [
+    conversationContext: createCanonicalConversationContext([
       {
         question: 'What is this?',
         answer: 'It is a cast-iron skillet with dull, patchy residue.',
       },
-    ],
+    ]),
     currentQuestion: OFF_IMAGE_FOLLOW_UP,
   });
 

@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
+import { createCanonicalConversationContext } from '../../src/inference/ContextBuilder';
 import {
   InferenceQueue,
   type InferenceEngineAdapter,
@@ -110,16 +111,32 @@ describe('output pipeline contract', () => {
       engine: { loadModel, generate },
     });
 
-    await queue.submit(request, { turn: 'followUp' });
+    await queue.submit(request, {
+      turn: 'followUp',
+      conversationContext: createCanonicalConversationContext([
+        {
+          question: 'List the available repair paths.',
+          answer: 'Replacement keeps the warranty. Repair is faster but voids it.',
+        },
+      ]),
+    });
 
     expect(preprocessSpy).not.toHaveBeenCalled();
     expect(loadModel).not.toHaveBeenCalled();
     expect(generate).toHaveBeenCalledWith(
       {
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: 'system' }),
-          expect.objectContaining({ role: 'user', content: request.question }),
-        ]),
+        messages: [
+          expect.objectContaining({
+            role: 'system',
+            content: expect.stringMatching(/final user message is the current request/i),
+          }),
+          { role: 'user', content: 'List the available repair paths.' },
+          {
+            role: 'assistant',
+            content: 'Replacement keeps the warranty. Repair is faster but voids it.',
+          },
+          { role: 'user', content: request.question },
+        ],
         kind: 'chat',
         originalQuestion: request.question,
       },

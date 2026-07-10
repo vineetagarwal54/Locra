@@ -4,6 +4,7 @@
 
 import type {
   Conversation,
+  CanonicalConversationContext,
   ConversationRuntimeState,
   DeviceCompatibilityResult,
   Draft,
@@ -18,7 +19,7 @@ export interface IInferenceQueue {
     request: InferenceRequest,
     options?: {
       turn?: 'first' | 'followUp';
-      canonicalTurns?: Array<{ question: string; answer: string }>;
+      conversationContext?: CanonicalConversationContext;
     }
   ): Promise<void>;
   cancel(): void;

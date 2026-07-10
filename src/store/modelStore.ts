@@ -71,9 +71,18 @@ setConfig({
   notificationsGrouping: {
     enabled: true,
     mode: 'summaryOnly',
+    // Product-identity notification copy (design.md §12 content rules: direct,
+    // calm, plain-language; never an internal model filename). The Android small
+    // icon is supplied by the app's notification icon (app.json adaptiveIcon
+    // monochrome), so tapping the notification opens Locra with its own mark.
     texts: {
-      downloadTitle: 'Downloading Locra model',
-      downloadProgress: 'Downloading… {progress}%',
+      downloadTitle: 'Locra',
+      downloadStarting: 'Preparing your on-device AI…',
+      downloadProgress: 'Downloading AI model · {progress}%',
+      downloadPaused: 'Download paused',
+      downloadFinished: 'Locra is ready',
+      groupTitle: 'Locra',
+      groupText: 'Setting up your on-device AI',
     },
   },
 });

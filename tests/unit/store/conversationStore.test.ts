@@ -36,7 +36,12 @@ jest.mock('../../../src/store/historyStore', () => ({
 
 import { createConversationStore } from '../../../src/store/conversationStore';
 import type { IHistoryStore, IInferenceQueue } from '../../../src/types/interfaces';
-import type { Conversation, InferenceState, MetricsSummary } from '../../../src/types/models';
+import type {
+  CanonicalConversationContext,
+  Conversation,
+  InferenceState,
+  MetricsSummary,
+} from '../../../src/types/models';
 
 const ID_SEQUENCE = [
   'conversation-a',
@@ -58,12 +63,14 @@ class FakeInferenceQueue implements IInferenceQueue {
     imagePath: string | null;
     question: string;
   }> = [];
+  readonly submittedContexts: Array<CanonicalConversationContext | undefined> = [];
 
   private state: InferenceState = makeInferenceState('idle');
   private readonly listeners = new Set<(state: InferenceState) => void>();
 
-  submit = jest.fn((request) => {
+  submit = jest.fn((request, options?: { conversationContext?: CanonicalConversationContext }) => {
     this.submitted.push(request);
+    this.submittedContexts.push(options?.conversationContext);
     return Promise.resolve();
   });
 
@@ -221,6 +228,31 @@ describe('conversationStore', () => {
       'user-a',
       'assistant-a',
     ]);
+  });
+
+  it('snapshots completed canonical turns for every follow-up in chronological order', async () => {
+    const { store, queue } = makeStore();
+
+    const first = await store.submit('new', {
+      question: 'Give me two deployment options.',
+      imagePath: null,
+    });
+    queue.emit(makeInferenceState('completed', '1. Local APK.\n2. Managed EAS build.'));
+
+    await store.submit(first.conversationId, {
+      question: 'Which one is easier to maintain?',
+      imagePath: null,
+    });
+
+    expect(queue.submittedContexts[1]).toEqual({
+      version: 'canonical-conversation-v1',
+      turns: [
+        {
+          question: 'Give me two deployment options.',
+          answer: '1. Local APK.\n2. Managed EAS build.',
+        },
+      ],
+    });
   });
 
   it('rejects a submit elsewhere while preserving that conversation draft and messages', async () => {
