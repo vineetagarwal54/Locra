@@ -142,9 +142,9 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 
 ### Implementation for User Story 2
 
-- [ ] T037 [US2] Implement image preview/remove controls in `src/components/chat/ChatComposer.tsx` and `src/components/chat/ImagePromptCard.tsx` — removal clears only the draft's `imagePath` via `conversationStore.setDraftImage(null)`, preserving typed text (FR-006/FR-007)
-- [ ] T038 [US2] Wire `ChatScreen.tsx`/`ChatComposer.tsx` so switching away from and back to a conversation (including the not-yet-created New Chat slot) restores the exact draft via `conversationStore.getDraft` (FR-031)
-- [ ] T039 [US2] Verify a never-sent New Chat draft (including one where the image was removed) creates no `HistoryStore` entry, relying on `conversationStore.startNewConversation()`'s isolation guarantee, already proven automatically in Phase 4 (FR-008/FR-032)
+- [X] T037 [US2] Implement image preview/remove controls in `src/components/chat/ChatComposer.tsx` and `src/components/chat/ImagePromptCard.tsx` — removal clears only the draft's `imagePath` via `conversationStore.setDraftImage(null)`, preserving typed text (FR-006/FR-007)
+- [X] T038 [US2] Wire `ChatScreen.tsx`/`ChatComposer.tsx` so switching away from and back to a conversation (including the not-yet-created New Chat slot) restores the exact draft via `conversationStore.getDraft` (FR-031)
+- [X] T039 [US2] Verify a never-sent New Chat draft (including one where the image was removed) creates no `HistoryStore` entry, relying on `conversationStore.startNewConversation()`'s isolation guarantee, already proven automatically in Phase 4 (FR-008/FR-032)
 
 **Checkpoint**: User Stories 1 and 2 both implemented. Validate manually per Phase 9's checklist.
 
@@ -158,13 +158,13 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 
 ### Tests for User Story 3
 
-- [ ] T040 [P] [US3] Write **one** focused mixed-multimodal integration regression test in `tests/integration/unified-chat-flow.test.ts` covering exactly: `text → image A → text follow-up → image B → text follow-up`, asserting each reply stays correctly scoped to its own message (by `id`, not position), no earlier message is altered or reset, and both images' content remain distinguishable when later referenced (FR-009/FR-010/FR-011/FR-033). This is the one integration-level multimodal regression this feature keeps automated; all other US3 scroll/UI behavior is validated manually (Phase 9).
+- [X] T040 [P] [US3] Write **one** focused mixed-multimodal integration regression test in `tests/integration/unified-chat-flow.test.ts` covering exactly: `text → image A → text follow-up → image B → text follow-up`, asserting each reply stays correctly scoped to its own message (by `id`, not position), no earlier message is altered or reset, and both images' content remain distinguishable when later referenced (FR-009/FR-010/FR-011/FR-033). This is the one integration-level multimodal regression this feature keeps automated; all other US3 scroll/UI behavior is validated manually (Phase 9).
 
 ### Implementation for User Story 3
 
-- [ ] T041 [US3] Implement multi-message rendering in `src/screens/ChatScreen.tsx`: virtualized `FlatList` of `ConversationMessage` entries in any ordering, each rendered via `MessageBubble`/`ImagePromptCard` per the message's own `attachments`/`status`, keyed by `message.id` (research.md R6)
-- [ ] T042 [US3] Implement scroll-position-aware auto-follow behavior in `ChatScreen.tsx`: auto-scroll to newest streamed content only while the user is already at/near the bottom; never force-scroll while the user has scrolled away to re-read earlier content (FR-013) — validated manually (Phase 9), no dedicated structural test
-- [ ] T043 [US3] Run `tests/integration/unified-chat-flow.test.ts` (T040) to green
+- [X] T041 [US3] Implement multi-message rendering in `src/screens/ChatScreen.tsx`: virtualized `FlatList` of `ConversationMessage` entries in any ordering, each rendered via `MessageBubble`/`ImagePromptCard` per the message's own `attachments`/`status`, keyed by `message.id` (research.md R6)
+- [X] T042 [US3] Implement scroll-position-aware auto-follow behavior in `ChatScreen.tsx`: auto-scroll to newest streamed content only while the user is already at/near the bottom; never force-scroll while the user has scrolled away to re-read earlier content (FR-013) — validated manually (Phase 9), no dedicated structural test
+- [X] T043 [US3] Run `tests/integration/unified-chat-flow.test.ts` (T040) to green
 
 **Checkpoint**: User Stories 1, 2, and 3 all implemented, with one automated mixed-multimodal regression green. Validate the rest manually per Phase 9's checklist.
 
@@ -178,12 +178,12 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 
 ### Implementation for User Story 4
 
-- [ ] T044 [P] [US4] Create `src/components/ConversationListItem.tsx` (shared row for drawer + History, design.md §8 "Cards and rows" — no unread badges, per the explicit design guardrail)
-- [ ] T045 [US4] Create `src/navigation/ConversationDrawer.tsx`: recent conversations via `IHistoryStore.list(small limit)`, a "start new conversation" action calling `conversationStore.startNewConversation()` then navigating to `Chat` with `conversationId: 'new'`, a "view all history" link, and a Settings entry (design.md §6/§7.10); resuming a conversation navigates to `Chat` with its `conversationId` — never to `Answer` (research.md R12) — depends on T044
-- [ ] T046 [US4] Extend `src/navigation/AppNavigator.tsx` to wrap the app in the Conversation Drawer navigator (`@react-navigation/drawer`, installed in T002) — depends on T045, T002
-- [ ] T047 [US4] Rebuild `src/screens/HistoryScreen.tsx` with the four recency groups design.md §7.14 now defines — `Today` / `Yesterday` / `Previous 7 Days` / `Older` — computed at read time from each `Conversation.updatedAt`; every stored conversation MUST remain reachable, including everything in `Older` (FR-019, design.md: "Conversations older than seven days must not disappear"); local search via `ConversationSearch.ts`'s `searchConversations`; full-list access via `IHistoryStore.list(limit, offset)` (already defined in T016 — do not assume any pagination API beyond what T016 documents); explicit empty state (FR-019/FR-024/FR-026); resuming navigates to `Chat` with the selected `conversationId` — depends on T018, T044, T016
-- [ ] T048 [US4] Implement the "generation in progress elsewhere" composer lock state in `src/components/chat/ChatComposer.tsx`, distinct from "this conversation is generating," preserving the blocked conversation's draft (contracts/inference-ownership.md point 2, FR-016) — validated manually (Phase 9), no dedicated automated UI-rendering test
-- [ ] T049 [US4] Implement the cancel/stop control in `ChatScreen.tsx`/`ChatComposer.tsx`, rendered only when `conversationStore.getActiveGenerationOwner() === conversationId` for the currently displayed conversation (contracts/inference-ownership.md point 3) — validated manually (Phase 9), no dedicated automated UI-rendering test
+- [X] T044 [P] [US4] Create `src/components/ConversationListItem.tsx` (shared row for drawer + History, design.md §8 "Cards and rows" — no unread badges, per the explicit design guardrail)
+- [X] T045 [US4] Create `src/navigation/ConversationDrawer.tsx`: recent conversations via `IHistoryStore.list(small limit)`, a "start new conversation" action calling `conversationStore.startNewConversation()` then navigating to `Chat` with `conversationId: 'new'`, a "view all history" link, and a Settings entry (design.md §6/§7.10); resuming a conversation navigates to `Chat` with its `conversationId` — never to `Answer` (research.md R12) — depends on T044
+- [X] T046 [US4] Extend `src/navigation/AppNavigator.tsx` to wrap the app in the Conversation Drawer navigator (`@react-navigation/drawer`, installed in T002) — depends on T045, T002
+- [X] T047 [US4] Rebuild `src/screens/HistoryScreen.tsx` with the four recency groups design.md §7.14 now defines — `Today` / `Yesterday` / `Previous 7 Days` / `Older` — computed at read time from each `Conversation.updatedAt`; every stored conversation MUST remain reachable, including everything in `Older` (FR-019, design.md: "Conversations older than seven days must not disappear"); local search via `ConversationSearch.ts`'s `searchConversations`; full-list access via `IHistoryStore.list(limit, offset)` (already defined in T016 — do not assume any pagination API beyond what T016 documents); explicit empty state (FR-019/FR-024/FR-026); resuming navigates to `Chat` with the selected `conversationId` — depends on T018, T044, T016
+- [X] T048 [US4] Implement the "generation in progress elsewhere" composer lock state in `src/components/chat/ChatComposer.tsx`, distinct from "this conversation is generating," preserving the blocked conversation's draft (contracts/inference-ownership.md point 2, FR-016) — validated manually (Phase 9), no dedicated automated UI-rendering test
+- [X] T049 [US4] Implement the cancel/stop control in `ChatScreen.tsx`/`ChatComposer.tsx`, rendered only when `conversationStore.getActiveGenerationOwner() === conversationId` for the currently displayed conversation (contracts/inference-ownership.md point 3) — validated manually (Phase 9), no dedicated automated UI-rendering test
 
 **Checkpoint**: All four user stories implemented. The full unified chat experience UI (New Chat, Active Chat, Image Preview, Image Answer, Conversation Drawer, Full History with all four recency groups) is complete, every navigation call site targets `Chat`, and it's ready for the Phase 9 manual validation pass.
 
@@ -193,8 +193,8 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
 
 **Purpose**: Final cleanup, full automated verification, and the mandatory physical-device manual validation pass (research.md R11 step 7, quickstart.md) that stands in for the automated UI tests this plan deliberately does not add.
 
-- [ ] T050 [P] Update `src/store/historyStore.ts` (the Zustand wrapper) from the `QASession`/turn-pair type to `Conversation`/`ConversationMessage[]` (T010); remove any remaining reference to the deleted `src/screens/AnswerScreen.tsx` or the `Answer` route
-- [ ] T051 [P] Run `npx tsc --noEmit`, `npx eslint src tests --ext .ts,.tsx`, and `npm test` — all retained contract/unit/integration tests must pass (quickstart.md §1)
+- [X] T050 [P] Update `src/store/historyStore.ts` (the Zustand wrapper) from the `QASession`/turn-pair type to `Conversation`/`ConversationMessage[]` (T010); remove any remaining reference to the deleted `src/screens/AnswerScreen.tsx` or the `Answer` route
+- [X] T051 [P] Run `npx tsc --noEmit`, `npx eslint src tests --ext .ts,.tsx`, and `npm test` — all retained contract/unit/integration tests must pass (quickstart.md §1)
 - [ ] T052 Seed ~200 stored conversations (including some older than 7 days, to exercise the `Older` History group) and validate drawer/History browsing plus a single ~200-message conversation for crashes, drops, duplicates, or reordering (quickstart.md §2.7, spec SC-003/SC-010) **(device-required)**
 - [ ] T053 Perform the full physical-device manual validation pass. This checklist absorbs the UI-behavior coverage this plan deliberately keeps out of automated tests, so treat every item as required, not optional:
   - Text-only first conversation, reached via the `Chat` route's New Chat state
@@ -224,7 +224,7 @@ Single Expo/React Native project — `src/`, `tests/` at repository root (no fro
   - Visual conformance against `design/design.md` and `design/references/*.png` for all touched screens, including Attachment Source Selection and the `Older` History group
   - Motion conformance against `design/motion.md` (transition/streaming/drawer timing)
   - The existing camera-first (Phase 002) flow behaves identically to before this feature — no regression
-- [ ] T054 Final confirmation that `tests/integration/vision-once-chat-flow.test.ts`'s original turn-1-image assertions still pass unmodified end-to-end after all Feature 003 work (FR-034/SC-014 closing gate)
+- [X] T054 Final confirmation that `tests/integration/vision-once-chat-flow.test.ts`'s original turn-1-image assertions still pass unmodified end-to-end after all Feature 003 work (FR-034/SC-014 closing gate)
 
 ---
 

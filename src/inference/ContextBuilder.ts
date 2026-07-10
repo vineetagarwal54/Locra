@@ -98,7 +98,7 @@ export function getImageAttachmentPath(message: ConversationMessage): string | n
   return attachment?.path ?? null;
 }
 
-function buildContextTurnsBeforeMessage(
+export function buildContextTurnsBeforeMessage(
   messages: ConversationMessage[],
   currentUserMessageId: string,
 ): ContextTurn[] {
@@ -115,7 +115,9 @@ function buildContextTurnsBeforeMessage(
       }
 
       const assistant = priorMessages[index + 1];
-      if (assistant?.role !== 'assistant') {
+      // Only completed pairs carry answer text worth feeding back as context —
+      // failed/interrupted/still-generating assistants have empty or partial text.
+      if (assistant?.role !== 'assistant' || assistant.status !== 'completed') {
         return turns;
       }
 

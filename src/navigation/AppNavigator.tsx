@@ -1,6 +1,9 @@
-import { NavigationContainer } from '@react-navigation/native';
+import { createDrawerNavigator } from '@react-navigation/drawer';
+import { getFocusedRouteNameFromRoute, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useEffect, useState } from 'react';
+import { StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
@@ -16,6 +19,8 @@ import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 import { useVoiceStore } from '../store/voiceStore';
 
+import { ConversationDrawer } from './ConversationDrawer';
+
 export type RootStackParamList = {
   Welcome: undefined;
   Chat: { conversationId: string };
@@ -25,7 +30,12 @@ export type RootStackParamList = {
   Benchmark: undefined;
 };
 
+export type RootDrawerParamList = {
+  Root: undefined;
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const Drawer = createDrawerNavigator<RootDrawerParamList>();
 
 // Constitution Principle III: every screen is wrapped so a render crash in one
 // degrades to a legible fallback instead of taking down the app.
@@ -49,6 +59,22 @@ function resolveInitialRoute(): keyof RootStackParamList {
     return 'ModelSetup';
   }
   return 'Chat';
+}
+
+// The stack owns every screen and the onboarding launch gate; the drawer (T046)
+// wraps it so the conversation drawer is available app-wide.
+function RootStack() {
+  const initialRouteName = resolveInitialRoute();
+  return (
+    <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Welcome" component={Welcome} />
+      <Stack.Screen name="Chat" component={Chat} initialParams={{ conversationId: 'new' }} />
+      <Stack.Screen name="Capture" component={Capture} />
+      <Stack.Screen name="History" component={History} />
+      <Stack.Screen name="ModelSetup" component={ModelSetup} />
+      <Stack.Screen name="Benchmark" component={Benchmark} />
+    </Stack.Navigator>
+  );
 }
 
 export function AppNavigator() {
@@ -99,20 +125,38 @@ export function AppNavigator() {
     );
   }
 
-  const initialRouteName = resolveInitialRoute();
-
   return (
-    <NavigationContainer>
-      {engineHostMounted ? <InferenceEngineHost /> : null}
-      {voiceEnabled ? <VoiceTranscriptionHost /> : null}
-      <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Welcome" component={Welcome} />
-        <Stack.Screen name="Chat" component={Chat} initialParams={{ conversationId: 'new' }} />
-        <Stack.Screen name="Capture" component={Capture} />
-        <Stack.Screen name="History" component={History} />
-        <Stack.Screen name="ModelSetup" component={ModelSetup} />
-        <Stack.Screen name="Benchmark" component={Benchmark} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <GestureHandlerRootView style={styles.root}>
+      <NavigationContainer>
+        {engineHostMounted ? <InferenceEngineHost /> : null}
+        {voiceEnabled ? <VoiceTranscriptionHost /> : null}
+        <Drawer.Navigator
+          screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}
+          drawerContent={(props) => <ConversationDrawer {...props} />}
+        >
+          <Drawer.Screen
+            name="Root"
+            component={RootStack}
+            options={({ route }) => ({
+              // The drawer belongs to the chat experience only — the swipe
+              // gesture must not open it over onboarding, model setup, the
+              // camera viewfinder, or History (design.md §6: hamburger opens
+              // the drawer; motion.md §10 keeps the gesture on chat).
+              swipeEnabled:
+                (getFocusedRouteNameFromRoute(route) ?? resolveInitialRoute()) === 'Chat',
+            })}
+          />
+        </Drawer.Navigator>
+      </NavigationContainer>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+  drawer: {
+    width: '82%',
+  },
+});

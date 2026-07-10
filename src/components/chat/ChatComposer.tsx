@@ -1,5 +1,4 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import {
   Modal,
@@ -19,13 +18,21 @@ import type { Draft } from '../../types/models';
 
 const READABLE_LINE_HEIGHT_RATIO = 1.45;
 
+type LockVariant = 'self' | 'elsewhere';
+
 interface ChatComposerProps {
   conversationId: string;
   placeholder: string;
   locked: boolean;
   lockLabel: string | null;
+  lockVariant: LockVariant | null;
+  canCancel: boolean;
+  // Controlled: ChatScreen owns the draft (single source of truth, FR-031) —
+  // the composer writes through conversationStore and reports back up.
+  draft: Draft;
+  onCancel: () => void;
   onOpenCamera: () => void;
-  onDraftChange?: (draft: Draft) => void;
+  onDraftChange: (draft: Draft) => void;
   onConversationResolved: (conversationId: string) => void;
 }
 
@@ -34,24 +41,18 @@ export function ChatComposer({
   placeholder,
   locked,
   lockLabel,
+  lockVariant,
+  canCancel,
+  draft,
+  onCancel,
   onOpenCamera,
   onDraftChange,
   onConversationResolved,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
-  const [draft, setDraft] = useState<Draft>(() => conversationStore.getDraft(conversationId));
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useFocusEffect(
-    useCallback(() => {
-      const nextDraft = conversationStore.getDraft(conversationId);
-      setDraft(nextDraft);
-      onDraftChange?.(nextDraft);
-      return undefined;
-    }, [conversationId, onDraftChange])
-  );
 
   const canSend =
     !locked && !submitting && (draft.text.trim() !== '' || draft.imagePath !== null);
@@ -61,13 +62,9 @@ export function ChatComposer({
     (text: string): void => {
       setSendError(null);
       conversationStore.setDraftText(conversationId, text);
-      setDraft((current) => {
-        const nextDraft = { ...current, text };
-        onDraftChange?.(nextDraft);
-        return nextDraft;
-      });
+      onDraftChange({ ...draft, text });
     },
-    [conversationId, onDraftChange]
+    [conversationId, draft, onDraftChange]
   );
 
   const onVoiceTranscript = useCallback(
@@ -81,13 +78,9 @@ export function ChatComposer({
   const setDraftImage = useCallback(
     (imagePath: string | null): void => {
       conversationStore.setDraftImage(conversationId, imagePath);
-      setDraft((current) => {
-        const nextDraft = { ...current, imagePath };
-        onDraftChange?.(nextDraft);
-        return nextDraft;
-      });
+      onDraftChange({ ...draft, imagePath });
     },
-    [conversationId, onDraftChange]
+    [conversationId, draft, onDraftChange]
   );
 
   const onChooseCamera = useCallback((): void => {
@@ -124,9 +117,7 @@ export function ChatComposer({
     void conversationStore
       .submit(conversationId, { question, imagePath })
       .then((result) => {
-        const nextDraft = conversationStore.getDraft(conversationId);
-        setDraft(nextDraft);
-        onDraftChange?.(nextDraft);
+        onDraftChange(conversationStore.getDraft(conversationId));
         onConversationResolved(result.conversationId);
       })
       .catch((error: unknown) => {
@@ -153,11 +144,42 @@ export function ChatComposer({
           <Text style={styles.attachmentText} numberOfLines={1}>
             Image attached
           </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Remove attached image"
+            disabled={controlsDisabled}
+            hitSlop={theme.space2}
+            style={({ pressed }) => [
+              styles.attachmentRemove,
+              pressed && !controlsDisabled && styles.attachmentRemovePressed,
+              controlsDisabled && styles.disabled,
+            ]}
+            onPress={() => {
+              void haptics.tap();
+              setDraftImage(null);
+            }}
+          >
+            <MaterialCommunityIcons name="close" size={16} color={theme.accent} />
+          </Pressable>
         </View>
       ) : null}
 
       {sendError !== null ? <Text style={styles.errorText}>{sendError}</Text> : null}
-      {lockLabel !== null ? <Text style={styles.lockText}>{lockLabel}</Text> : null}
+      {lockLabel !== null ? (
+        <View
+          style={[
+            styles.lockRow,
+            lockVariant === 'elsewhere' && styles.lockRowElsewhere,
+          ]}
+        >
+          <MaterialCommunityIcons
+            name={lockVariant === 'elsewhere' ? 'lock-outline' : 'loading'}
+            size={14}
+            color={lockVariant === 'elsewhere' ? theme.textSecondary : theme.accent}
+          />
+          <Text style={styles.lockText}>{lockLabel}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.composer}>
         <Pressable
@@ -188,20 +210,34 @@ export function ChatComposer({
 
         <VoiceButton disabled={controlsDisabled} onTranscript={onVoiceTranscript} />
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Send message"
-          accessibilityState={{ disabled: !canSend }}
-          disabled={!canSend}
-          style={({ pressed }) => [
-            styles.sendButton,
-            pressed && canSend && styles.sendButtonPressed,
-            !canSend && styles.disabled,
-          ]}
-          onPress={onSubmit}
-        >
-          <MaterialCommunityIcons name="arrow-up" size={22} color={theme.textPrimary} />
-        </Pressable>
+        {canCancel ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Stop generating"
+            style={({ pressed }) => [styles.stopButton, pressed && styles.stopButtonPressed]}
+            onPress={() => {
+              void haptics.tap();
+              onCancel();
+            }}
+          >
+            <MaterialCommunityIcons name="stop" size={22} color={theme.textPrimary} />
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            accessibilityState={{ disabled: !canSend }}
+            disabled={!canSend}
+            style={({ pressed }) => [
+              styles.sendButton,
+              pressed && canSend && styles.sendButtonPressed,
+              !canSend && styles.disabled,
+            ]}
+            onPress={onSubmit}
+          >
+            <MaterialCommunityIcons name="arrow-up" size={22} color={theme.textPrimary} />
+          </Pressable>
+        )}
       </View>
 
       <SourceModal
@@ -299,15 +335,39 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginLeft: theme.space2,
   },
+  attachmentRemove: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: theme.space2,
+  },
+  attachmentRemovePressed: {
+    opacity: 0.6,
+  },
   errorText: {
     color: theme.error,
     fontSize: theme.fontSizeSm,
     marginBottom: theme.space2,
   },
+  lockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingVertical: theme.space1,
+    paddingHorizontal: theme.space3,
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.accentGlow,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.accentBorder,
+    marginBottom: theme.space2,
+  },
+  lockRowElsewhere: {
+    backgroundColor: theme.surface,
+    borderColor: theme.border,
+  },
   lockText: {
     color: theme.textSecondary,
     fontSize: theme.fontSizeSm,
-    marginBottom: theme.space2,
+    marginLeft: theme.space2,
   },
   composer: {
     flexDirection: 'row',
@@ -354,6 +414,17 @@ const styles = StyleSheet.create({
   },
   sendButtonPressed: {
     backgroundColor: theme.accentDim,
+  },
+  stopButton: {
+    width: theme.space6 * 2,
+    height: theme.space6 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: theme.radiusPill,
+    backgroundColor: theme.error,
+  },
+  stopButtonPressed: {
+    opacity: 0.8,
   },
   disabled: {
     opacity: 0.42,

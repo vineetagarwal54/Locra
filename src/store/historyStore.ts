@@ -7,7 +7,11 @@ import type { Conversation, MetricsSummary, QASession } from '../types/models';
 const history = new HistoryStore();
 
 export interface HistoryStoreState {
-  sessions: QASession[];
+  // Feature 003: the canonical persisted state is Conversation/ConversationMessage[]
+  // (T010/T050). The QASession-typed methods below remain only as compatibility
+  // shims for the frozen Phase-002 Answer-flow store (src/store/inferenceStore.ts),
+  // which the SC-014 regression gate still exercises unmodified.
+  conversations: Conversation[];
   metricsSummary: MetricsSummary;
   refresh: () => void;
   save: (session: QASession) => void;
@@ -23,7 +27,7 @@ export interface HistoryStoreState {
 }
 
 export const useHistoryStore = create<HistoryStoreState>((set) => ({
-  sessions: history.list().map(conversationToSession),
+  conversations: history.list(),
   metricsSummary: history.getMetricsSummary(),
   refresh: (): void => {
     set(snapshot());
@@ -73,9 +77,9 @@ export const historyStore: IHistoryStore = {
   getMetricsSummary: (): MetricsSummary => useHistoryStore.getState().getMetricsSummary(),
 };
 
-function snapshot(): Pick<HistoryStoreState, 'sessions' | 'metricsSummary'> {
+function snapshot(): Pick<HistoryStoreState, 'conversations' | 'metricsSummary'> {
   return {
-    sessions: history.list().map(conversationToSession),
+    conversations: history.list(),
     metricsSummary: history.getMetricsSummary(),
   };
 }

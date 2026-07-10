@@ -1,3 +1,4 @@
+import { buildContextTurnsBeforeMessage, type ContextTurn } from '../inference/ContextBuilder';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -113,6 +114,12 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId,
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
+    // FR-009/FR-011: bounded prior canonical turns from THIS conversation only —
+    // the queue assembles them into the model request via ContextBuilder.
+    const canonicalTurns = buildContextTurnsBeforeMessage(
+      updatedConversation.messages,
+      originatingUserMessageId
+    );
 
     this.dependencies.historyStore.save(updatedConversation);
     this.activeGeneration = activeGeneration;
@@ -124,7 +131,7 @@ export class ConversationStore implements IConversationStore {
       isOwnerOfActiveInference: true,
     });
 
-    this.startQueueSubmission(activeGeneration, inferenceRequest);
+    this.startQueueSubmission(activeGeneration, inferenceRequest, canonicalTurns);
     this.clearDraft(conversationId);
     return activeGeneration;
   }
@@ -193,7 +200,8 @@ export class ConversationStore implements IConversationStore {
           imagePath: firstImagePath(userMessage),
         },
         requestId
-      )
+      ),
+      buildContextTurnsBeforeMessage(messages, userMessage.id)
     );
   }
 
@@ -337,9 +345,16 @@ export class ConversationStore implements IConversationStore {
 
   private startQueueSubmission(
     activeGeneration: ActiveGeneration,
-    request: InferenceRequest
+    request: InferenceRequest,
+    canonicalTurns: ContextTurn[]
   ): void {
-    void this.dependencies.inferenceQueue.submit(request).catch((error: unknown) => {
+    const options = {
+      // Mirrors the legacy store's semantics: a turn with prior completed
+      // context is a follow-up (model already resident); otherwise first.
+      turn: canonicalTurns.length > 0 ? ('followUp' as const) : ('first' as const),
+      canonicalTurns,
+    };
+    void this.dependencies.inferenceQueue.submit(request, options).catch((error: unknown) => {
       if (
         this.activeGeneration?.conversationId !== activeGeneration.conversationId ||
         this.activeGeneration.assistantMessageId !== activeGeneration.assistantMessageId

@@ -1,8 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { DrawerActions, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -31,10 +34,16 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 
 const READABLE_LINE_HEIGHT_RATIO = 1.48;
 
+// FR-013: auto-follow streamed content only while the user sits within this many
+// points of the bottom; beyond it we assume they scrolled up to re-read and never
+// force a jump back down.
+const AUTO_FOLLOW_THRESHOLD = 96;
+
 export function ChatScreen({ navigation, route }: Props) {
   const conversationId = route.params.conversationId;
-  const historyRevision = useHistoryStore((s) => s.sessions);
+  const historyRevision = useHistoryStore((s) => s.conversations);
   const listRef = useRef<FlatList<ConversationMessage> | null>(null);
+  const isNearBottomRef = useRef(true);
 
   const [runtimeState, setRuntimeState] = useState<ConversationRuntimeState | null>(() =>
     conversationStore.getConversationRuntimeState(conversationId)
@@ -59,6 +68,16 @@ export function ChatScreen({ navigation, route }: Props) {
     setDraft(conversationStore.getDraft(conversationId));
   }, [conversationId, historyRevision]);
 
+  // FR-031: switching away from and back to a conversation (including the
+  // not-yet-created 'new' slot) restores its exact draft from conversationStore.
+  useFocusEffect(
+    useCallback(() => {
+      setDraft(conversationStore.getDraft(conversationId));
+      setRuntimeState(conversationStore.getConversationRuntimeState(conversationId));
+      return undefined;
+    }, [conversationId])
+  );
+
   const isMissingConversation = conversationId !== 'new' && conversation === null;
   const activeOwner = conversationStore.getActiveGenerationOwner();
   const isOwnGeneration = runtimeState?.isOwnerOfActiveInference === true;
@@ -70,12 +89,21 @@ export function ChatScreen({ navigation, route }: Props) {
     : lockedByAnotherConversation
       ? 'Generation is in progress elsewhere.'
       : null;
+  const lockVariant = isOwnGeneration ? 'self' : lockedByAnotherConversation ? 'elsewhere' : null;
+  // T049 / contracts/inference-ownership.md point 3: the stop control exists only
+  // for the conversation that actually owns the in-flight generation.
+  const canCancel = activeOwner === conversationId;
   const placeholder = getComposerPlaceholder(conversation, draft);
 
-  const onOpenHistory = useCallback((): void => {
+  const onOpenDrawer = useCallback((): void => {
     void haptics.tap();
-    navigation.navigate('History');
+    // The action bubbles up from this stack screen to the parent drawer (T046).
+    navigation.dispatch(DrawerActions.openDrawer());
   }, [navigation]);
+
+  const onCancelGeneration = useCallback((): void => {
+    conversationStore.cancelActiveGeneration(conversationId);
+  }, [conversationId]);
 
   const onOpenSettings = useCallback((): void => {
     void haptics.tap();
@@ -84,6 +112,11 @@ export function ChatScreen({ navigation, route }: Props) {
   const onOpenCamera = useCallback((): void => {
     navigation.navigate('Capture', { conversationId });
   }, [conversationId, navigation]);
+
+  const onRemoveDraftImage = useCallback((): void => {
+    conversationStore.setDraftImage(conversationId, null);
+    setDraft(conversationStore.getDraft(conversationId));
+  }, [conversationId]);
 
   const onConversationResolved = useCallback(
     (resolvedConversationId: string): void => {
@@ -107,15 +140,35 @@ export function ChatScreen({ navigation, route }: Props) {
     [conversationId]
   );
 
+  const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>): void => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom =
+      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    isNearBottomRef.current = distanceFromBottom <= AUTO_FOLLOW_THRESHOLD;
+  }, []);
+
+  const onContentSizeChange = useCallback((): void => {
+    if (isNearBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: true });
+    }
+  }, []);
+
   const renderItem: ListRenderItem<ConversationMessage> = useCallback(
     ({ item }) => {
       const streamingText =
         runtimeState?.assistantMessageId === item.id ? runtimeState.streamingText : '';
+      // FR-030: a persisted 'generating' message that no live runtime owns (e.g.
+      // the process died mid-generation) is shown as interrupted, matched by the
+      // message's own id — never an indefinite spinner.
+      const message: ConversationMessage =
+        item.status === 'generating' && runtimeState?.assistantMessageId !== item.id
+          ? { ...item, status: 'interrupted' }
+          : item;
 
       return (
         <View>
-          {item.role === 'assistant' ? <AssistantIdentityRow /> : null}
-          <MessageBubble message={item} streamingText={streamingText} onRetry={onRetry} />
+          {message.role === 'assistant' ? <AssistantIdentityRow /> : null}
+          <MessageBubble message={message} streamingText={streamingText} onRetry={onRetry} />
         </View>
       );
     },
@@ -125,7 +178,7 @@ export function ChatScreen({ navigation, route }: Props) {
   if (isMissingConversation) {
     return (
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
-        <AppHeader onMenu={onOpenHistory} onSettings={onOpenSettings} />
+        <AppHeader onMenu={onOpenDrawer} onSettings={onOpenSettings} />
         <View style={styles.emptyWrap}>
           <MaterialCommunityIcons
             name="chat-remove-outline"
@@ -141,7 +194,7 @@ export function ChatScreen({ navigation, route }: Props) {
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
-      <AppHeader onMenu={onOpenHistory} onSettings={onOpenSettings} />
+      <AppHeader onMenu={onOpenDrawer} onSettings={onOpenSettings} />
       {screenError !== null ? <Text style={styles.screenError}>{screenError}</Text> : null}
       <FlatList
         ref={listRef}
@@ -159,17 +212,22 @@ export function ChatScreen({ navigation, route }: Props) {
               setDraft(conversationStore.getDraft(conversationId));
             }}
             onPhotoSuggestion={onOpenCamera}
+            onRemoveImage={onRemoveDraftImage}
           />
         }
-        onContentSizeChange={() => {
-          listRef.current?.scrollToEnd({ animated: true });
-        }}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onContentSizeChange={onContentSizeChange}
       />
       <ChatComposer
         conversationId={conversationId}
         placeholder={placeholder}
         locked={locked}
         lockLabel={lockLabel}
+        lockVariant={lockVariant}
+        canCancel={canCancel}
+        draft={draft}
+        onCancel={onCancelGeneration}
         onOpenCamera={onOpenCamera}
         onDraftChange={setDraft}
         onConversationResolved={onConversationResolved}
@@ -212,6 +270,7 @@ interface ChatHeaderContentProps {
   draft: Draft;
   onSuggestion: (text: string) => void;
   onPhotoSuggestion: () => void;
+  onRemoveImage: () => void;
 }
 
 function ChatHeaderContent({
@@ -219,6 +278,7 @@ function ChatHeaderContent({
   draft,
   onSuggestion,
   onPhotoSuggestion,
+  onRemoveImage,
 }: ChatHeaderContentProps) {
   const hasMessages = conversation !== null && conversation.messages.length > 0;
 
@@ -230,6 +290,7 @@ function ChatHeaderContent({
           imagePath={draft.imagePath}
           question={draft.text}
           metadata="Attached to your next message"
+          onRemove={onRemoveImage}
         />
       </View>
     ) : null;
@@ -252,6 +313,7 @@ function ChatHeaderContent({
             imagePath={draft.imagePath}
             question={draft.text}
             metadata="Attached to your first message"
+            onRemove={onRemoveImage}
           />
         </View>
       ) : (

@@ -384,16 +384,19 @@ describe('screen wiring for resumable threads (FR-046, FR-047, FR-048)', () => {
   const read = (relativePath: string): string =>
     readFileSync(join(process.cwd(), relativePath), 'utf8');
 
-  it('HistoryScreen cards navigate to the chat screen keyed by session id', () => {
+  it('HistoryScreen cards navigate to the chat screen keyed by conversation id', () => {
     const source = read('src/screens/HistoryScreen.tsx');
-    expect(source).toMatch(/navigate\('Chat',\s*\{\s*conversationId:\s*sessionId/);
+    expect(source).toMatch(/navigate\('Chat',\s*\{\s*conversationId/);
   });
 
   it('ChatScreen subscribes to conversation runtime without cancelling on unmount', () => {
     const source = read('src/screens/ChatScreen.tsx');
     expect(source).toContain('subscribeToConversation');
     expect(source).toContain('assistantMessageId');
-    expect(source).not.toContain('cancelActiveGeneration');
+    // The runtime subscription effect returns the unsubscribe directly — it never
+    // cancels generation on unmount (T030). The only cancel is the explicit,
+    // user-triggered Stop control (T049).
+    expect(source).toMatch(/return conversationStore\.subscribeToConversation\(/);
   });
 
   it('CaptureScreen writes a captured image into the route-scoped draft owner', () => {
