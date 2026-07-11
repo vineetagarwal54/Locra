@@ -286,6 +286,30 @@ describe('InferenceQueue false tool-refusal recovery', () => {
     expect(queue.getState().response).toBe('17 times 24 is 408.');
   });
 
+  it('marks only the retried stage as a refusal retry in the dev trace', async () => {
+    let attempts = 0;
+    const generate = jest.fn((_generateRequest, onToken) => {
+      attempts += 1;
+      const response =
+        attempts === 1
+          ? "I don't have the tool needed to calculate that."
+          : '17 times 24 is 408.';
+      onToken(response, 6);
+      return Promise.resolve({ response, tokenCount: 6 });
+    });
+    const queue = makeQueue({
+      engine: { loadModel: () => Promise.resolve(), generate },
+      isTraceEnabled: () => true,
+    });
+
+    await queue.submit(textRequest);
+
+    const stages = queue.getState().inferenceTrace?.stages ?? [];
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.refusalRetry).toBeUndefined();
+    expect(stages[1]?.refusalRetry).toBe(true);
+  });
+
   it('does not retry a successful first response', async () => {
     const generate = jest.fn((_generateRequest, onToken) => {
       const response = '17 times 24 is 408.';
@@ -498,6 +522,24 @@ describe('InferenceQueue two-stage first image turns', () => {
     );
     expect(trace?.finalResponse).toBe('answer');
     expect(queue.getState().response).toBe('answer');
+  });
+
+  it('stamps conversation and message attribution onto the dev trace', async () => {
+    const queue = makeQueue({ isTraceEnabled: () => true });
+    const attributedRequest: InferenceRequest = {
+      ...request,
+      requestId: 'request-1',
+      conversationId: 'conversation-1',
+      originatingUserMessageId: 'user-message-1',
+      assistantMessageId: 'assistant-message-1',
+    };
+
+    await queue.submit(attributedRequest);
+
+    const trace = queue.getState().inferenceTrace;
+    expect(trace?.conversationId).toBe('conversation-1');
+    expect(trace?.originatingUserMessageId).toBe('user-message-1');
+    expect(trace?.assistantMessageId).toBe('assistant-message-1');
   });
 
   it('exposes a completed production-owned objective result record', async () => {

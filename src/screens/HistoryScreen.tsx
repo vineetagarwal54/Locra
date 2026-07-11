@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConversationListItem } from '../components/ConversationListItem';
 import { designTokens, haptics } from '../constants/theme';
+import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import {
   type RecencyBucket,
   groupConversationsByRecency,
@@ -21,6 +22,8 @@ import { searchConversations } from '../history/ConversationSearch';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
 import type { Conversation } from '../types/models';
+
+const diagnosticsExportAvailable = isDiagnosticsExportAvailable({ isDevBuild: __DEV__ });
 
 type Props = NativeStackScreenProps<RootStackParamList, 'History'>;
 
@@ -72,6 +75,11 @@ export function HistoryScreen({ navigation }: Props) {
     navigation.navigate('Benchmark');
   }, [navigation]);
 
+  const onOpenDiagnosticsExport = useCallback((): void => {
+    void haptics.tap();
+    navigation.navigate('DiagnosticsExport');
+  }, [navigation]);
+
   const onResume = useCallback(
     (conversationId: string): void => {
       navigation.navigate('Chat', { conversationId });
@@ -95,18 +103,34 @@ export function HistoryScreen({ navigation }: Props) {
           />
         </Pressable>
         <Text style={styles.title}>History</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Open benchmarks"
-          style={styles.headerButton}
-          onPress={onOpenBenchmarks}
-        >
-          <MaterialCommunityIcons
-            name="speedometer"
-            size={20}
-            color={designTokens.color.textSecondary}
-          />
-        </Pressable>
+        <View style={styles.headerActions}>
+          {diagnosticsExportAvailable ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Export diagnostics"
+              style={styles.headerButton}
+              onPress={onOpenDiagnosticsExport}
+            >
+              <MaterialCommunityIcons
+                name="bug-outline"
+                size={20}
+                color={designTokens.color.textSecondary}
+              />
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open benchmarks"
+            style={styles.headerButton}
+            onPress={onOpenBenchmarks}
+          >
+            <MaterialCommunityIcons
+              name="speedometer"
+              size={20}
+              color={designTokens.color.textSecondary}
+            />
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.searchRow}>
@@ -191,6 +215,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: designTokens.spacing.space12,
     paddingVertical: designTokens.spacing.space12,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   headerButton: {
     width: designTokens.spacing.space24 * 2,

@@ -44,7 +44,8 @@
         {
           "microphonePermission": "Locra uses the microphone only to turn your spoken question into text, entirely on this device."
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "extra": {
       "eas": {

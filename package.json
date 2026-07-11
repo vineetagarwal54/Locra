@@ -21,7 +21,9 @@
     "expo-image": "~56.0.11",
     "expo-image-manipulator": "~56.0.21",
     "expo-network": "~56.0.5",
+    "expo-sharing": "~56.0.21",
     "expo-status-bar": "~56.0.4",
+    "fflate": "^0.8.3",
     "js-sha256": "^0.11.1",
     "react": "19.2.3",
     "react-native": "0.85.3",
@@ -71,7 +73,10 @@
     "test": "jest"
   },
   "jest": {
-    "preset": "jest-expo"
+    "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^react-native-device-info$": "react-native-device-info/jest/react-native-device-info-mock"
+    }
   },
   "expo": {
     "doctor": {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 
+import { getCurrentDeviceBuildMetadata } from '../diagnostics/DeviceBuildMetadataProvider';
 import { createCanonicalConversationContext } from '../inference/ContextBuilder';
 import {
   createInferenceQueue,
@@ -105,6 +106,7 @@ const bridgeEngine: InferenceEngineAdapter = {
 
 const queue = createInferenceQueue(bridgeEngine, {
   isReadyForInference: () => useModelStore.getState().isReadyForInference(),
+  getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,
 });
 
 export interface InferenceStoreState extends InferenceState {
