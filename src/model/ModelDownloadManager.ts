@@ -47,6 +47,8 @@ export interface ModelDownloadManagerDeps {
   getModelConfig: () => Promise<ModelConfig>;
   /** Model + tokenizer + config sources, in order; `sources[0]` is the `.pte`. */
   sources: ResourceSource[];
+  /** Exact `.pte` filename for the selected model. */
+  expectedModelFilename: string;
 }
 
 const INITIAL_STATE: ModelState = {
@@ -195,13 +197,16 @@ export class ModelDownloadManager {
   async reconcile(): Promise<void> {
     try {
       const models = await this.deps.fetcher.listDownloadedModels();
-      if (models.length === 0) {
+      const activeModelPath = models.find(
+        (modelPath) => getFilename(modelPath) === this.deps.expectedModelFilename
+      );
+      if (activeModelPath === undefined) {
         this.setState({ ...INITIAL_STATE });
         return;
       }
       const config = this.lastModelConfig ?? await this.deps.getModelConfig();
       this.lastModelConfig = config;
-      const size = await this.deps.getFileSize(models[0]);
+      const size = await this.deps.getFileSize(activeModelPath);
       if (size < config.expectedSize) {
         await this.safeDelete();
         this.setState({ ...INITIAL_STATE });
@@ -360,4 +365,8 @@ function toMessage(error: unknown): string {
   return error instanceof Error && error.message.trim() !== ''
     ? error.message
     : 'Model download failed.';
+}
+
+function getFilename(path: string): string {
+  return path.split(/[\\/]/).at(-1) ?? '';
 }

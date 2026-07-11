@@ -20,7 +20,14 @@ export interface EvaluationComparisonSummary {
   candidateOnly: number;
 }
 
+export interface EvaluationModelIdentity {
+  modelId: string;
+  generationConfigId: string;
+}
+
 export interface EvaluationComparison {
+  baselineModel: EvaluationModelIdentity | null;
+  candidateModel: EvaluationModelIdentity | null;
   cases: CaseComparison[];
   summary: EvaluationComparisonSummary;
 }
@@ -39,8 +46,23 @@ export function compareEvaluationResults(
   });
 
   return {
+    baselineModel: modelIdentityOf(baseline),
+    candidateModel: modelIdentityOf(candidate),
     cases,
     summary: summarize(cases),
+  };
+}
+
+function modelIdentityOf(
+  results: readonly EvaluationResult[]
+): EvaluationModelIdentity | null {
+  const first = results[0];
+  if (first === undefined) {
+    return null;
+  }
+  return {
+    modelId: first.modelId,
+    generationConfigId: first.generationConfigId,
   };
 }
 

@@ -1,14 +1,20 @@
 import { compareEvaluationResults } from '../../../src/evaluation/QualityEvalCompare';
 import type { EvaluationResult } from '../../../src/evaluation/QualityEvalSchemas';
 
-function makeResult(caseId: string, usefulness: number, variant: string): EvaluationResult {
+function makeResult(
+  caseId: string,
+  usefulness: number,
+  variant: string,
+  modelId = 'LFM2_5_VL_1_6B_QUANTIZED',
+  generationConfigId = 'lfm2.5-vl-official-v1'
+): EvaluationResult {
   return {
     caseId,
     variant,
     official: true,
     caseSetVersion: 'cases.v1',
-    modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-    generationConfigId: 'lfm2-vl-preset',
+    modelId,
+    generationConfigId,
     deviceNameModel: 'Pixel 8 Pro',
     appBuildId: 'locra-build',
     output: `${variant} output`,
@@ -34,13 +40,31 @@ describe('QualityEvalCompare', () => {
   it('compares baseline and candidate by case id and usefulness delta', () => {
     const comparison = compareEvaluationResults(
       [makeResult('visible-001', 3, 'baseline-current')],
-      [makeResult('visible-001', 5, 'two-stage-v1')]
+      [
+        makeResult(
+          'visible-001',
+          5,
+          'two-stage-v1',
+          'GEMMA4_E2B_MM',
+          'gemma4-e2b-mm-library-default'
+        ),
+      ]
     );
 
     expect(comparison.cases[0]).toMatchObject({
       caseId: 'visible-001',
       status: 'improved',
       usefulnessDelta: 2,
+    });
+    expect(comparison).toMatchObject({
+      baselineModel: {
+        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+        generationConfigId: 'lfm2.5-vl-official-v1',
+      },
+      candidateModel: {
+        modelId: 'GEMMA4_E2B_MM',
+        generationConfigId: 'gemma4-e2b-mm-library-default',
+      },
     });
     expect(comparison.summary).toMatchObject({ sharedCases: 1, improved: 1 });
   });

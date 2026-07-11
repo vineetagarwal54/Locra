@@ -36,6 +36,7 @@ describe('EvaluationRecorder', () => {
       expect.objectContaining({
         caseId: 'practical-001',
         variant: 'recommended-sampling-v1',
+        caseSetVersion: 'cases.v1',
         modelId: OBJECTIVE_RECORD.modelId,
         generationConfigId: OBJECTIVE_RECORD.generationConfigId,
         output: OBJECTIVE_RECORD.answerText,
@@ -49,6 +50,25 @@ describe('EvaluationRecorder', () => {
         appBuildId: OBJECTIVE_RECORD.appBuildId,
       }),
     );
+  });
+
+  it('passes Gemma identity through with the unchanged case-set version', () => {
+    const gemmaObjective: ObjectiveInferenceResultRecord = {
+      ...OBJECTIVE_RECORD,
+      modelId: 'GEMMA4_E2B_MM',
+      generationConfigId: 'gemma4-e2b-mm-library-default',
+    };
+    const state = createEvaluationRecorderState({
+      currentObjectiveRecord: gemmaObjective,
+      selectedCaseId: 'practical-001',
+      isAvailable: true,
+    });
+
+    expect(buildEvaluationResultDraft(state)).toMatchObject({
+      caseSetVersion: 'cases.v1',
+      modelId: gemmaObjective.modelId,
+      generationConfigId: gemmaObjective.generationConfigId,
+    });
   });
 
   it('keeps subjective fields separate from objective fields until scoring', () => {

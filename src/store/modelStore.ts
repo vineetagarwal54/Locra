@@ -5,10 +5,11 @@ import {
 } from '@kesha-antonov/react-native-background-downloader';
 import { Directory, File } from 'expo-file-system';
 import { documentDirectory } from 'expo-file-system/legacy';
-import { LFM2_5_VL_1_6B_QUANTIZED, ResourceFetcherUtils } from 'react-native-executorch';
+import { ResourceFetcherUtils } from 'react-native-executorch';
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher';
 import { create } from 'zustand';
 
+import { activeModel } from '../model/ActiveModel';
 import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
 import { checkDeviceCompatibility } from '../model/DeviceCompatibility';
 import { fetchModelConfig } from '../model/ModelConfig';
@@ -28,15 +29,17 @@ import type { DeviceCompatibilityResult, ModelState } from '../types/models';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MODEL_SOURCES: ResourceSource[] = [
-  LFM2_5_VL_1_6B_QUANTIZED.modelSource,
-  LFM2_5_VL_1_6B_QUANTIZED.tokenizerSource,
-  LFM2_5_VL_1_6B_QUANTIZED.tokenizerConfigSource,
+  activeModel.modelConstant.modelSource,
+  activeModel.modelConstant.tokenizerSource,
+  activeModel.modelConstant.tokenizerConfigSource,
 ];
 
 // Remote config is fetched once per download attempt (FR-028), so hash/size
 // metadata can rotate without a new app binary.
-const MODEL_CONFIG_ENDPOINT =
-  'https://raw.githubusercontent.com/vineetagarwal54/Locra/001-camera-vlm-qa/model-configs/lfm2.5-vl-1.6b-quantized.json';
+const MODEL_CONFIG_ENDPOINT = activeModel.integrityConfigEndpoint;
+const EXPECTED_MODEL_FILENAME = ResourceFetcherUtils.getFilenameFromUri(
+  activeModel.modelConstant.modelSource
+);
 
 // Development escape hatch: skip post-download AND launch-time verification
 // entirely so iterating on inference doesn't require hashing a 2.4 GB file on
@@ -119,6 +122,7 @@ const manager = new ModelDownloadManager({
   getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
   getModelConfig: () => fetchModelConfig(MODEL_CONFIG_ENDPOINT),
   sources: MODEL_SOURCES,
+  expectedModelFilename: EXPECTED_MODEL_FILENAME,
 });
 
 function toFileUri(path: string): string {

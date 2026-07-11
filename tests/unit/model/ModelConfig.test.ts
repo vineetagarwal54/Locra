@@ -4,9 +4,17 @@ import {
   type ModelConfigFetch,
 } from '../../../src/model/ModelConfig';
 
+jest.mock('react-native-executorch', () => ({
+  GEMMA4_E2B_MM: { modelName: 'gemma4-e2b-multimodal' },
+  LFM2_5_VL_1_6B_QUANTIZED: { modelName: 'lfm2.5-vl-1.6b-quantized' },
+}));
+
 const ENDPOINT = 'https://example.test/models/lfm2.5-vl-1.6b-quantized.json';
 const HASH = 'a'.repeat(64);
 const FALLBACK_HASH = 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4';
+const GEMMA_ENDPOINT = 'https://example.test/models/gemma-4-e2b-multimodal.json';
+const GEMMA_FALLBACK_HASH = '56c6137e47ae5b64174259deb5d96a5d18bb86f2d992cfd96b65d869889b3fd2';
+const GEMMA_FALLBACK_SIZE = 4_371_419_520;
 
 function response(body: unknown, ok = true, status = 200): Awaited<ReturnType<ModelConfigFetch>> {
   return {
@@ -97,5 +105,28 @@ describe('fetchModelConfig', () => {
       expectedSize: 2_427_656_704,
     });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unable to resolve host'));
+  });
+
+  it('uses the active Gemma endpoint and Gemma-specific integrity fallback', async () => {
+    jest.resetModules();
+    jest.doMock('../../../src/model/ActiveModel', () => ({
+      activeModel: {
+        integrityConfigEndpoint: GEMMA_ENDPOINT,
+        integrityFallback: {
+          expectedSha256: GEMMA_FALLBACK_HASH,
+          expectedSize: GEMMA_FALLBACK_SIZE,
+        },
+      },
+    }));
+    const { fetchModelConfig: fetchGemmaModelConfig } = require('../../../src/model/ModelConfig') as typeof import('../../../src/model/ModelConfig');
+    const fetcher = jest.fn(async () => response({}, false, 503));
+
+    await expect(fetchGemmaModelConfig(undefined, fetcher)).resolves.toEqual({
+      expectedSha256: GEMMA_FALLBACK_HASH,
+      expectedSize: GEMMA_FALLBACK_SIZE,
+    });
+    expect(fetcher).toHaveBeenCalledWith(GEMMA_ENDPOINT, {
+      headers: { Accept: 'application/json' },
+    });
   });
 });
