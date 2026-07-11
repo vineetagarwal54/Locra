@@ -12,8 +12,10 @@ import type {
   ConversationMessage,
 } from '../types/models';
 
+import { assessAnswerQuality } from './AnswerPostProcessor';
 import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
+import { isToolRefusalResponse } from './ToolRefusalRecovery';
 
 const DEFAULT_MAXIMUM_UNITS = 14_400;
 const DEFAULT_RECENT_EXACT_TURN_LIMIT = 8;
@@ -22,6 +24,35 @@ const DEFAULT_MAX_FACT_ITEMS = 6;
 const DEFAULT_MAX_SUMMARY_ENTRIES = 6;
 const TURN_ROLE_OVERHEAD_UNITS = 32;
 const CANDIDATE_PREVIEW_MAX_CHARS = 240;
+const USER_MEMORY_CUE =
+  /\b(?:i\s+(?:am|have|use|live|work|need|prefer|want|chose|choose|decided|cannot|can't|do not|don't)|my\s+[a-z0-9]+\s+(?:is|are|has|have)|we\s+(?:use|need|prefer|chose|choose|decided|cannot|can't|do not|don't)|please\s+(?:use|keep|avoid|do not|don't|never|always)|must|need to|prefer|correction|actually|i meant|not\s+.+\s+but)\b/i;
+const TOKEN_STOP_WORDS = new Set([
+  'about',
+  'again',
+  'also',
+  'and',
+  'are',
+  'can',
+  'could',
+  'did',
+  'does',
+  'for',
+  'from',
+  'have',
+  'image',
+  'into',
+  'more',
+  'that',
+  'the',
+  'this',
+  'was',
+  'what',
+  'when',
+  'where',
+  'which',
+  'with',
+  'would',
+]);
 
 export type ContextCandidateExclusionReason = 'budget' | 'item-cap';
 
@@ -145,7 +176,7 @@ export class ContextOrchestrator {
     let usedUnits = selection.usedUnits;
 
     const mediaEvidence = selectWithinBudget(
-      rankMediaEvidence(memory.mediaEvidence, snapshot.currentMessage.text),
+      relevantMediaCandidates(memory.mediaEvidence, snapshot.currentMessage.text),
       this.budgetPolicy.maxMediaEvidenceItems,
       usedUnits,
       this.budgetPolicy,
@@ -370,7 +401,8 @@ function completedTurnsFromMessages(
     if (
       user?.role === 'user' &&
       assistant?.role === 'assistant' &&
-      assistant.status === 'completed'
+      assistant.status === 'completed' &&
+      isUsableDerivedMemoryAnswer(assistant.text)
     ) {
       turns.push({
         userMessageId: user.id,
@@ -396,13 +428,28 @@ function turnToSummaryEntry(turn: CompletedTurn): ContextSummaryEntry {
 }
 
 function turnToFacts(turn: CompletedTurn): ContextMemoryFact[] {
-  return splitFactCandidates(turn.answer).slice(0, 3).map((text, index) => ({
-    version: 'context-memory-fact-v1',
-    id: `${turn.assistantMessageId}:fact:${index}`,
-    sourceMessageId: turn.assistantMessageId,
-    text,
-    createdAt: turn.createdAt,
-  }));
+  return splitFactCandidates(turn.question)
+    .filter(isExplicitUserMemory)
+    .slice(0, 3)
+    .map((text, index) => ({
+      version: 'context-memory-fact-v1',
+      id: `${turn.userMessageId}:fact:${index}`,
+      sourceMessageId: turn.userMessageId,
+      text,
+      createdAt: turn.createdAt,
+    }));
+}
+
+function isUsableDerivedMemoryAnswer(answer: string): boolean {
+  return (
+    answer.trim() !== '' &&
+    assessAnswerQuality(answer) === 'complete' &&
+    !isToolRefusalResponse(answer)
+  );
+}
+
+function isExplicitUserMemory(text: string): boolean {
+  return USER_MEMORY_CUE.test(text);
 }
 
 function splitFactCandidates(text: string): string[] {
@@ -417,6 +464,15 @@ function rankMediaEvidence(
   query: string,
 ): RankedItem<ContextMediaEvidence>[] {
   return rankItems(evidence, query, formatMediaEvidence, (item) => item.createdAt, (item) => item.id);
+}
+
+function relevantMediaCandidates(
+  evidence: ReadonlyArray<ContextMediaEvidence>,
+  query: string,
+): RankedItem<ContextMediaEvidence>[] {
+  const ranked = rankMediaEvidence(evidence, query);
+  const relevant = ranked.filter((candidate) => candidate.relevance > 0);
+  return relevant.length > 0 ? relevant : ranked.slice(0, 1);
 }
 
 function rankFacts(
@@ -472,7 +528,7 @@ function tokenSet(value: string): Set<string> {
     value
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 3),
+      .filter((token) => token.length >= 3 && !TOKEN_STOP_WORDS.has(token)),
   );
 }
 

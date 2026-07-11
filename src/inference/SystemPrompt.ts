@@ -17,9 +17,5 @@ export const LOCRA_SYSTEM_PROMPT = [
   'For live or changing information that cannot be verified, briefly say the current value cannot be confirmed, then provide useful general knowledge or explain how the user can verify it.',
 ].join('\n');
 
-export const LOCRA_FOLLOW_UP_INSTRUCTION = [
-  'The final user message is the current request. Use earlier turns only to understand its references and requested continuation.',
-  'Resolve references against the wording and meaning of the earlier turns before answering.',
-  'Treat referenced prior content as fixed source material. Do not substitute, renumber, reorder, or answer a different part of it.',
-  'Answer only the current request. Do not repeat or recycle an earlier answer unless the user asks for repetition, restatement, summary, or continuation.',
-].join('\n');
+export const LOCRA_FOLLOW_UP_INSTRUCTION =
+  'Answer the latest user message. Use earlier context only when it helps, and do not repeat an earlier answer unless asked.';
