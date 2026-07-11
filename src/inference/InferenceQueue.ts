@@ -181,15 +181,16 @@ export class InferenceQueue implements IInferenceQueue {
       );
     }
 
+    const lifecycleRequest = this.createLifecycleRequest(request, options);
     const traceEnabled = this.deps.isTraceEnabled?.() ?? isDevelopmentInferenceTraceEnabled();
-    const trace = traceEnabled ? createInferenceTrace() : null;
+    const trace = traceEnabled ? this.stampTraceAttribution(createInferenceTrace(), lifecycleRequest) : null;
     const active: ActiveRequest = { controller: new AbortController(), trace, cancelled: false };
     this.active = active;
     const lifecycleGates = createLifecycleGates();
     this.lifecycleGates = lifecycleGates;
     this.lifecycleActor.send({
       type: 'SUBMIT',
-      request: this.createLifecycleRequest(request, options),
+      request: lifecycleRequest,
     });
     const recorder = this.createRecorder();
     const isFollowUp = options.turn === 'followUp';
@@ -530,7 +531,7 @@ export class InferenceQueue implements IInferenceQueue {
       onToken,
       active.controller.signal,
     );
-    this.recordVisibleTraceStage(active, stage, retryRequest, retryResult);
+    this.recordVisibleTraceStage(active, stage, retryRequest, retryResult, { refusalRetry: true });
     return retryResult;
   }
 
@@ -539,10 +540,12 @@ export class InferenceQueue implements IInferenceQueue {
     stage: InferenceTraceStageKind,
     request: EngineGenerateRequest,
     result: EngineGenerateResult,
+    options: { refusalRetry?: boolean } = {},
   ): void {
     const processed = postProcessAnswer(result.response);
     this.recordTraceStage(active, stage, request, result, {
       processedOutput: processed.text,
+      refusalRetry: options.refusalRetry,
     });
   }
 
@@ -578,7 +581,7 @@ export class InferenceQueue implements IInferenceQueue {
     stage: InferenceTraceStageKind,
     request: EngineGenerateRequest,
     result: EngineGenerateResult,
-    parsed: { parsedOutput?: unknown; processedOutput?: string } = {}
+    parsed: { parsedOutput?: unknown; processedOutput?: string; refusalRetry?: boolean } = {}
   ): void {
     if (active.trace === null) {
       return;
@@ -633,6 +636,16 @@ export class InferenceQueue implements IInferenceQueue {
       question: request.question,
       imagePath,
     };
+  }
+
+  private stampTraceAttribution(
+    trace: InferenceTrace,
+    lifecycleRequest: TurnLifecycleRequest,
+  ): InferenceTrace {
+    trace.conversationId = lifecycleRequest.conversationId;
+    trace.originatingUserMessageId = lifecycleRequest.originatingUserMessageId;
+    trace.assistantMessageId = lifecycleRequest.assistantMessageId;
+    return trace;
   }
 
   private createFallbackLifecycleId(prefix: string): string {

@@ -1,3 +1,4 @@
+import { diagnosticsTraceStore } from '../diagnostics/DiagnosticsTraceStore';
 import {
   type CanonicalConversationContext,
 } from '../inference/ContextBuilder';
@@ -5,7 +6,9 @@ import {
   ContextOrchestrator,
   createCanonicalConversationSnapshot,
   mergeVisualEvidenceIntoMemory,
+  type ContextSelectionDiagnostics,
 } from '../inference/ContextOrchestrator';
+import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -32,6 +35,7 @@ interface ActiveGeneration {
   conversationId: string;
   originatingUserMessageId: string;
   assistantMessageId: string;
+  contextDiagnostics?: ContextSelectionDiagnostics;
 }
 
 interface SubmitResult {
@@ -125,6 +129,7 @@ export class ConversationStore implements IConversationStore {
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
     );
+    activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const conversationWithMemory: Conversation = {
       ...updatedConversation,
       contextMemory: orchestration.memory,
@@ -142,7 +147,11 @@ export class ConversationStore implements IConversationStore {
 
     this.startQueueSubmission(activeGeneration, inferenceRequest, orchestration.context);
     this.clearDraft(conversationId);
-    return activeGeneration;
+    return {
+      conversationId: activeGeneration.conversationId,
+      originatingUserMessageId: activeGeneration.originatingUserMessageId,
+      assistantMessageId: activeGeneration.assistantMessageId,
+    };
   }
 
   async retryFailedMessage(conversationId: string, assistantMessageId: string): Promise<void> {
@@ -192,6 +201,7 @@ export class ConversationStore implements IConversationStore {
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversationWithoutMemory, userMessage.id),
     );
+    activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const updatedConversation: Conversation = {
       ...updatedConversationWithoutMemory,
       contextMemory: orchestration.memory,
@@ -324,8 +334,27 @@ export class ConversationStore implements IConversationStore {
       });
     }
 
+    this.recordDiagnosticTurn(activeGeneration, state);
     this.activeGeneration = null;
     this.setRuntimeState(this.idleRuntimeState(activeGeneration, state.response));
+  }
+
+  private recordDiagnosticTurn(activeGeneration: ActiveGeneration, state: InferenceState): void {
+    const trace = state.inferenceTrace;
+    if (trace === null || trace === undefined || !isDevelopmentInferenceTraceEnabled()) {
+      return;
+    }
+
+    diagnosticsTraceStore.append({
+      id: trace.id,
+      conversationId: activeGeneration.conversationId,
+      originatingUserMessageId: activeGeneration.originatingUserMessageId,
+      assistantMessageId: activeGeneration.assistantMessageId,
+      capturedAt: this.dependencies.now(),
+      trace,
+      objectiveResult: state.objectiveResult ?? null,
+      contextDiagnostics: activeGeneration.contextDiagnostics ?? null,
+    });
   }
 
   private assertCanStartGeneration(): void {

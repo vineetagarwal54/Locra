@@ -34,6 +34,7 @@ jest.mock('../../../src/store/historyStore', () => ({
   },
 }));
 
+import { storage } from '../../../src/storage/mmkv';
 import { createConversationStore } from '../../../src/store/conversationStore';
 import type { IHistoryStore, IInferenceQueue } from '../../../src/types/interfaces';
 import type {
@@ -364,5 +365,49 @@ describe('conversationStore', () => {
         assistantMessageId: 'assistant-a',
       })
     );
+  });
+
+  it('persists a bounded diagnostic turn record when a dev trace completes', async () => {
+    const setSpy = jest.spyOn(storage, 'set');
+    setSpy.mockClear();
+    const { store, queue } = makeStore();
+    await store.submit('new', { question: 'What is this?', imagePath: '/capture.jpg' });
+
+    queue.emit({
+      ...makeInferenceState('completed', 'It is a mug.'),
+      inferenceTrace: {
+        id: 'trace-1',
+        createdAt: '2026-07-10T00:00:00.000Z',
+        stages: [],
+        finalResponse: 'It is a mug.',
+      },
+    });
+
+    const recordCall = setSpy.mock.calls.find(([key]) =>
+      String(key).startsWith('diagnostics:turn:record:'),
+    );
+    expect(recordCall).toBeDefined();
+    const persisted: unknown = JSON.parse(String(recordCall?.[1]));
+    expect(persisted).toEqual(
+      expect.objectContaining({
+        conversationId: 'conversation-a',
+        originatingUserMessageId: 'user-a',
+        assistantMessageId: 'assistant-a',
+      }),
+    );
+  });
+
+  it('does not persist a diagnostic turn when no trace was captured', async () => {
+    const setSpy = jest.spyOn(storage, 'set');
+    setSpy.mockClear();
+    const { store, queue } = makeStore();
+    await store.submit('new', { question: 'What is this?', imagePath: '/capture.jpg' });
+
+    queue.emit(makeInferenceState('completed', 'It is a mug.'));
+
+    const recordCall = setSpy.mock.calls.find(([key]) =>
+      String(key).startsWith('diagnostics:turn:record:'),
+    );
+    expect(recordCall).toBeUndefined();
   });
 });

@@ -328,6 +328,97 @@ describe('ContextOrchestrator', () => {
     expect(nextResult.memory.rollingSummary?.entries).toHaveLength(2);
     expect(nextResult.memory.rollingSummary?.coveredThroughMessageId).toBe('assistant-2');
   });
+
+  it('omits diagnostics entirely when diagnosticsEnabled is false', () => {
+    const messages = [
+      ...completedTurn(1, 'Question one', 'Answer one'),
+      currentMessage(2, 'Continue.'),
+    ];
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+      { diagnosticsEnabled: false },
+    );
+
+    expect(result.diagnostics).toBeUndefined();
+  });
+
+  it('reports selected recent turns with source ids and cost when diagnostics are enabled', () => {
+    const messages = [
+      ...completedTurn(1, 'Question one', 'Answer one'),
+      ...completedTurn(2, 'Question two', 'Answer two'),
+      currentMessage(3, 'Continue.'),
+    ];
+
+    const result = new ContextOrchestrator(compactPolicy({ recentExactTurnLimit: 2 })).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.diagnostics?.recentTurnsConsidered).toBe(2);
+    expect(result.diagnostics?.recentTurnsSelected).toEqual([
+      expect.objectContaining({ sourceUserMessageId: 'user-1', sourceAssistantMessageId: 'assistant-1' }),
+      expect.objectContaining({ sourceUserMessageId: 'user-2', sourceAssistantMessageId: 'assistant-2' }),
+    ]);
+    expect(result.diagnostics?.recentTurnsSelected.every((turn) => turn.costUnits > 0)).toBe(true);
+    expect(result.diagnostics?.budget).toEqual(result.context.budget);
+  });
+
+  it('marks excluded media evidence candidates with a budget or item-cap reason', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      ...completedTurn(2, 'Inspect the chair.', 'The chair is wooden.', '/images/chair.jpg'),
+      currentMessage(3, 'Which serial code was visible on the label?'),
+    ];
+    let memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+    memory = mergeVisualEvidenceIntoMemory(
+      memory,
+      visualEvidence('/images/chair.jpg', 'wooden chair'),
+      'user-2',
+    );
+    const orchestrator = new ContextOrchestrator(
+      compactPolicy({ recentExactTurnLimit: 1, maxMediaEvidenceItems: 1 }),
+    );
+
+    const result = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    const candidates = result.diagnostics?.mediaEvidenceCandidates ?? [];
+    expect(candidates).toHaveLength(2);
+    const selected = candidates.filter((candidate) => candidate.selected);
+    const excluded = candidates.filter((candidate) => !candidate.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.exclusionReason).toBeNull();
+    expect(excluded).toHaveLength(1);
+    expect(excluded[0]?.exclusionReason).toBe('item-cap');
+  });
+
+  it('marks a candidate excluded for budget when the item cap has not been reached', () => {
+    const messages = [
+      ...completedTurn(1, 'Set the backup policy.', 'The backup schedule is nightly, with a thirty-day retention window.'),
+      ...completedTurn(2, 'Choose the theme.', 'The interface will use the light theme for readability across screens.'),
+      currentMessage(3, 'What retention window did we choose for backups?'),
+    ];
+    const orchestrator = new ContextOrchestrator(
+      compactPolicy({ recentExactTurnLimit: 0, maximumUnits: 120, maxFactItems: 5 }),
+    );
+
+    const result = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    const excludedForBudget = result.diagnostics?.factCandidates.filter(
+      (candidate) => candidate.exclusionReason === 'budget',
+    );
+    expect(excludedForBudget?.length).toBeGreaterThan(0);
+  });
 });
 import { readFileSync } from 'fs';
 import { join } from 'path';

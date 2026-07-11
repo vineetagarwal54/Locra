@@ -12,6 +12,7 @@ export interface InferenceTraceStage {
   rawOutput: string;
   parsedOutput?: unknown;
   processedOutput?: string;
+  refusalRetry?: boolean;
 }
 
 export interface InferenceTrace {
@@ -19,6 +20,9 @@ export interface InferenceTrace {
   createdAt: string;
   stages: InferenceTraceStage[];
   finalResponse: string | null;
+  conversationId?: string;
+  originatingUserMessageId?: string;
+  assistantMessageId?: string;
 }
 
 export function createInferenceTrace(): InferenceTrace {

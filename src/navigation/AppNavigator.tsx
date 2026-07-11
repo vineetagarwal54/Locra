@@ -17,6 +17,7 @@ import { VoiceTranscriptionHost } from '../components/VoiceTranscriptionHost';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { DiagnosticsExportScreen } from '../screens/DiagnosticsExportScreen';
 import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { InsufficientStorageScreen } from '../screens/InsufficientStorageScreen';
@@ -43,6 +44,7 @@ export type RootStackParamList = {
   Capture: { conversationId: string };
   History: undefined;
   Benchmark: undefined;
+  DiagnosticsExport: undefined;
 };
 
 export type RootDrawerParamList = {
@@ -65,6 +67,7 @@ const Chat = withErrorBoundary(ChatScreen);
 const Capture = withErrorBoundary(CaptureScreen);
 const History = withErrorBoundary(HistoryScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
+const DiagnosticsExport = withErrorBoundary(DiagnosticsExportScreen);
 
 // Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
 // screen_map.md Welcome → Privacy → Model Setup → …):
@@ -126,6 +129,7 @@ function RootStack() {
       <Stack.Screen name="Capture" component={Capture} />
       <Stack.Screen name="History" component={History} />
       <Stack.Screen name="Benchmark" component={Benchmark} />
+      <Stack.Screen name="DiagnosticsExport" component={DiagnosticsExport} />
     </Stack.Navigator>
   );
 }

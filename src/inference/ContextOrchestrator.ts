@@ -2,6 +2,7 @@ import type {
   CanonicalContextTurn,
   CanonicalConversationContext,
   CanonicalConversationSnapshot,
+  ContextBudgetMetadata,
   ContextMediaEvidence,
   ContextMemoryFact,
   ContextRollingSummary,
@@ -11,6 +12,7 @@ import type {
   ConversationMessage,
 } from '../types/models';
 
+import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
 
 const DEFAULT_MAXIMUM_UNITS = 14_400;
@@ -19,6 +21,34 @@ const DEFAULT_MAX_MEDIA_EVIDENCE_ITEMS = 3;
 const DEFAULT_MAX_FACT_ITEMS = 6;
 const DEFAULT_MAX_SUMMARY_ENTRIES = 6;
 const TURN_ROLE_OVERHEAD_UNITS = 32;
+const CANDIDATE_PREVIEW_MAX_CHARS = 240;
+
+export type ContextCandidateExclusionReason = 'budget' | 'item-cap';
+
+export interface RankedCandidateDiagnostic {
+  readonly stableId: string;
+  readonly relevance: number;
+  readonly createdAt: number;
+  readonly selected: boolean;
+  readonly exclusionReason: ContextCandidateExclusionReason | null;
+  readonly preview: string;
+}
+
+export interface RecentTurnDiagnostic {
+  readonly sourceUserMessageId: string;
+  readonly sourceAssistantMessageId: string;
+  readonly costUnits: number;
+  readonly createdAt: number;
+}
+
+export interface ContextSelectionDiagnostics {
+  readonly recentTurnsConsidered: number;
+  readonly recentTurnsSelected: ReadonlyArray<RecentTurnDiagnostic>;
+  readonly mediaEvidenceCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
+  readonly factCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
+  readonly summaryCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
+  readonly budget: ContextBudgetMetadata;
+}
 
 interface CompletedTurn {
   readonly userMessageId: string;
@@ -86,6 +116,11 @@ export class CharacterContextBudgetPolicy implements ContextBudgetPolicy {
 export interface ContextOrchestrationResult {
   readonly context: CanonicalConversationContext;
   readonly memory: ConversationContextMemory;
+  readonly diagnostics?: ContextSelectionDiagnostics;
+}
+
+export interface ContextOrchestrationOptions {
+  readonly diagnosticsEnabled?: boolean;
 }
 
 export class ContextOrchestrator {
@@ -93,12 +128,17 @@ export class ContextOrchestrator {
     private readonly budgetPolicy: ContextBudgetPolicy = new CharacterContextBudgetPolicy(),
   ) {}
 
-  orchestrate(snapshot: CanonicalConversationSnapshot): ContextOrchestrationResult {
+  orchestrate(
+    snapshot: CanonicalConversationSnapshot,
+    options: ContextOrchestrationOptions = {},
+  ): ContextOrchestrationResult {
+    const diagnosticsEnabled = options.diagnosticsEnabled ?? isDevelopmentInferenceTraceEnabled();
     const completedTurns = completedTurnsFromMessages(snapshot.priorMessages);
     const selection = selectRecentTurns(
       completedTurns,
       snapshot.currentMessage.text,
       this.budgetPolicy,
+      diagnosticsEnabled,
     );
     const olderTurns = completedTurns.slice(0, completedTurns.length - selection.turns.length);
     const memory = rebuildDerivedMemory(snapshot, olderTurns);
@@ -110,6 +150,7 @@ export class ContextOrchestrator {
       usedUnits,
       this.budgetPolicy,
       formatMediaEvidence,
+      diagnosticsEnabled,
     );
     usedUnits = mediaEvidence.usedUnits;
 
@@ -119,6 +160,7 @@ export class ContextOrchestrator {
       usedUnits,
       this.budgetPolicy,
       formatMemoryFact,
+      diagnosticsEnabled,
     );
     usedUnits = importantFacts.usedUnits;
 
@@ -128,23 +170,42 @@ export class ContextOrchestrator {
       usedUnits,
       this.budgetPolicy,
       formatSummaryEntry,
+      diagnosticsEnabled,
     );
     usedUnits = summaryEntries.usedUnits;
 
-    return {
+    const budget: ContextBudgetMetadata = {
+      policyId: this.budgetPolicy.policyId,
+      maximumUnits: this.budgetPolicy.maximumUnits,
+      usedUnits,
+    };
+
+    const result: ContextOrchestrationResult = {
       context: {
         version: 'canonical-conversation-v2',
         recentTurns: selection.turns.map(cloneContextTurn),
         mediaEvidence: mediaEvidence.items.map(cloneMediaEvidence),
         importantFacts: importantFacts.items.map(cloneMemoryFact),
         olderSummary: buildSelectedSummary(summaryEntries.items),
-        budget: {
-          policyId: this.budgetPolicy.policyId,
-          maximumUnits: this.budgetPolicy.maximumUnits,
-          usedUnits,
-        },
+        budget,
       },
       memory: cloneContextMemory(memory),
+    };
+
+    if (!diagnosticsEnabled) {
+      return result;
+    }
+
+    return {
+      ...result,
+      diagnostics: {
+        recentTurnsConsidered: selection.consideredCount,
+        recentTurnsSelected: selection.selectedDiagnostics,
+        mediaEvidenceCandidates: mediaEvidence.candidates,
+        factCandidates: importantFacts.candidates,
+        summaryCandidates: summaryEntries.candidates,
+        budget,
+      },
     };
   }
 }
@@ -232,8 +293,15 @@ function selectRecentTurns(
   turns: ReadonlyArray<CompletedTurn>,
   currentRequest: string,
   policy: ContextBudgetPolicy,
-): { turns: CanonicalContextTurn[]; usedUnits: number } {
+  collectDiagnostics: boolean,
+): {
+  turns: CanonicalContextTurn[];
+  usedUnits: number;
+  consideredCount: number;
+  selectedDiagnostics: RecentTurnDiagnostic[];
+} {
   const selected: CanonicalContextTurn[] = [];
+  const selectedDiagnostics: RecentTurnDiagnostic[] = [];
   let usedUnits = policy.measure(currentRequest);
   const candidates = turns.slice(-policy.recentExactTurnLimit);
 
@@ -245,9 +313,17 @@ function selectRecentTurns(
     }
     selected.unshift({ question: turn.question, answer: turn.answer });
     usedUnits += cost;
+    if (collectDiagnostics) {
+      selectedDiagnostics.unshift({
+        sourceUserMessageId: turn.userMessageId,
+        sourceAssistantMessageId: turn.assistantMessageId,
+        costUnits: cost,
+        createdAt: turn.createdAt,
+      });
+    }
   }
 
-  return { turns: selected, usedUnits };
+  return { turns: selected, usedUnits, consideredCount: candidates.length, selectedDiagnostics };
 }
 
 function rebuildDerivedMemory(
@@ -416,21 +492,62 @@ function selectWithinBudget<T>(
   initialUsedUnits: number,
   policy: ContextBudgetPolicy,
   format: (item: T) => string,
-): { items: T[]; usedUnits: number } {
+  collectDiagnostics: boolean,
+): { items: T[]; usedUnits: number; candidates: RankedCandidateDiagnostic[] } {
   const items: T[] = [];
+  const candidates: RankedCandidateDiagnostic[] = [];
   let usedUnits = initialUsedUnits;
-  for (const rankedItem of ranked) {
+  let stopIndex = ranked.length;
+
+  for (let index = 0; index < ranked.length; index += 1) {
     if (items.length >= maximumItems) {
+      stopIndex = index;
       break;
     }
+    const rankedItem = ranked[index];
     const cost = policy.measure(format(rankedItem.item)) + TURN_ROLE_OVERHEAD_UNITS;
     if (usedUnits + cost > policy.maximumUnits) {
+      if (collectDiagnostics) {
+        candidates.push(toCandidateDiagnostic(rankedItem, format, false, 'budget'));
+      }
       continue;
     }
     items.push(rankedItem.item);
     usedUnits += cost;
+    if (collectDiagnostics) {
+      candidates.push(toCandidateDiagnostic(rankedItem, format, true, null));
+    }
   }
-  return { items, usedUnits };
+
+  if (collectDiagnostics) {
+    for (let index = stopIndex; index < ranked.length; index += 1) {
+      candidates.push(toCandidateDiagnostic(ranked[index], format, false, 'item-cap'));
+    }
+  }
+
+  return { items, usedUnits, candidates };
+}
+
+function toCandidateDiagnostic<T>(
+  rankedItem: RankedItem<T>,
+  format: (item: T) => string,
+  selected: boolean,
+  exclusionReason: ContextCandidateExclusionReason | null,
+): RankedCandidateDiagnostic {
+  return {
+    stableId: rankedItem.stableId,
+    relevance: rankedItem.relevance,
+    createdAt: rankedItem.createdAt,
+    selected,
+    exclusionReason: selected ? null : exclusionReason,
+    preview: truncatePreview(format(rankedItem.item)),
+  };
+}
+
+function truncatePreview(value: string): string {
+  return value.length <= CANDIDATE_PREVIEW_MAX_CHARS
+    ? value
+    : `${value.slice(0, CANDIDATE_PREVIEW_MAX_CHARS)}…`;
 }
 
 function buildSelectedSummary(entries: ReadonlyArray<ContextSummaryEntry>): string | null {
