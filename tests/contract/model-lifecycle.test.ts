@@ -53,6 +53,7 @@ function makeManager() {
     getFileSize,
     getModelConfig,
     sources: SOURCES,
+    expectedModelFilename: 'model.pte',
   });
 
   return {

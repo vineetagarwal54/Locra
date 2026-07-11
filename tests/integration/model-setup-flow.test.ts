@@ -64,6 +64,7 @@ describe('model setup integration flow', () => {
       getFileSize,
       getModelConfig,
       sources: SOURCES,
+      expectedModelFilename: 'model.pte',
     });
 
     await manager.reconcile();

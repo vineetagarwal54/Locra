@@ -334,7 +334,8 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
       expect.objectContaining({
         answerText: FIRST_VISIBLE_ANSWER,
         pipelineVariantId: 'recommended-sampling-v1',
-        generationConfigId: 'recommended-lfm2-vl-v1',
+        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+        generationConfigId: 'lfm2.5-vl-official-v1',
       }),
     );
     expect(saved).not.toHaveProperty('currentObjectiveResult');

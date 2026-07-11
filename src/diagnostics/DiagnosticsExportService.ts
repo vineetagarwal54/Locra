@@ -2,10 +2,8 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { strToU8, zipSync } from 'fflate';
 
-import {
-  CURRENT_GENERATION_CONFIG_ID,
-  CURRENT_PIPELINE_VARIANT_ID,
-} from '../inference/GenerationTuning';
+import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
+import { activeModel } from '../model/ActiveModel';
 import { historyStore } from '../store/historyStore';
 import type { Conversation } from '../types/models';
 
@@ -76,11 +74,13 @@ function cleanPreviousExports(directory: Directory): void {
 }
 
 function resolveAppDiagnosticsInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): AppDiagnosticsInfo {
-  const mostRecentTurn = [...turns].sort((a, b) => b.capturedAt - a.capturedAt)[0];
+  const mostRecentObjectiveResult = [...turns]
+    .sort((a, b) => b.capturedAt - a.capturedAt)
+    .find((turn) => turn.objectiveResult !== null)?.objectiveResult;
   const deviceMetadata = getCurrentDeviceBuildMetadata();
   return {
-    modelId: mostRecentTurn?.objectiveResult?.modelId ?? 'unknown-model',
-    generationConfigId: CURRENT_GENERATION_CONFIG_ID,
+    modelId: mostRecentObjectiveResult?.modelId ?? activeModel.id,
+    generationConfigId: mostRecentObjectiveResult?.generationConfigId ?? activeModel.generationConfigId,
     pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
     appBuildId: deviceMetadata.appBuildId,
     deviceNameModel: deviceMetadata.deviceNameModel,

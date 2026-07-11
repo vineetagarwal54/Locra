@@ -6,10 +6,17 @@ jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: jest.fn(),
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
+jest.mock('../../../src/model/ActiveModel', () => ({
+  activeModel: {
+    id: 'LFM2_5_VL_1_6B_QUANTIZED',
+    generationConfigId: 'lfm2.5-vl-official-v1',
+  },
+}));
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { activeModel } from '../../../src/model/ActiveModel';
 import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import { createCanonicalConversationContext } from '../../../src/inference/ContextBuilder';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
@@ -578,6 +585,7 @@ describe('InferenceQueue two-stage first image turns', () => {
     clock.advanceTo(0);
     await queue.submit(request);
 
+    expect(queue.getState().error).toBeNull();
     const record = queue.getState().objectiveResult;
     expect(record).toEqual(
       expect.objectContaining({
@@ -588,8 +596,8 @@ describe('InferenceQueue two-stage first image turns', () => {
         totalEndToEndLatencyMs: 700,
         generatedTokens: 6,
         promptTokens: 44,
-        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-        generationConfigId: 'recommended-lfm2-vl-v1',
+        modelId: activeModel.id,
+        generationConfigId: activeModel.generationConfigId,
         pipelineVariantId: 'recommended-sampling-v1',
         deviceNameModel: 'Pixel 8 Pro',
         appBuildId: 'locra-test-build',

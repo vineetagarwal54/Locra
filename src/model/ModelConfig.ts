@@ -1,3 +1,5 @@
+import { activeModel } from './ActiveModel';
+
 export interface ModelConfig {
   expectedSha256: string;
   expectedSize: number;
@@ -15,19 +17,9 @@ export type ModelConfigFetch = (
 ) => Promise<ModelConfigResponse>;
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
-const FALLBACK_MODEL_CONFIG: ModelConfig = {
-  expectedSha256: 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4',
-  expectedSize: 2_427_656_704,
-};
-
-// The pinned expected download size (bytes) for the on-device model. Exposed for
-// presentation only (the setup UI shows the download/storage figures before the
-// remote config is fetched). This does not affect download or verification
-// behavior, which always uses the fetched/fallback config above.
-export const PINNED_MODEL_SIZE_BYTES = FALLBACK_MODEL_CONFIG.expectedSize;
 
 export async function fetchModelConfig(
-  endpoint: string,
+  endpoint: string = activeModel.integrityConfigEndpoint,
   fetcher: ModelConfigFetch = defaultFetch
 ): Promise<ModelConfig> {
   try {
@@ -41,7 +33,7 @@ export async function fetchModelConfig(
     return parseModelConfig(await response.json());
   } catch (error) {
     warnModelConfigFallback(endpoint, error);
-    return FALLBACK_MODEL_CONFIG;
+    return activeModel.integrityFallback;
   }
 }
 

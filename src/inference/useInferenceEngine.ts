@@ -1,9 +1,7 @@
 import { useEffect, useRef } from 'react';
-import {
-  LFM2_5_VL_1_6B_QUANTIZED,
-  type Message,
-  useLLM,
-} from 'react-native-executorch';
+import { type Message, useLLM } from 'react-native-executorch';
+
+import { activeModel } from '../model/ActiveModel';
 
 import type { ModelRequestMessage } from './ContextBuilder';
 
@@ -39,7 +37,7 @@ export interface InferenceEngineHandle {
 }
 
 export function useInferenceEngine(): InferenceEngineHandle {
-  const llm = useLLM({ model: LFM2_5_VL_1_6B_QUANTIZED });
+  const llm = useLLM({ model: activeModel.modelConstant });
   const llmRef = useRef(llm);
   const listenersRef = useRef<Set<() => void>>(new Set());
 

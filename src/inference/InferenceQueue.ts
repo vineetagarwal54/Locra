@@ -4,6 +4,7 @@
 
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
+import { activeModel } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -564,8 +565,8 @@ export class InferenceQueue implements IInferenceQueue {
       truncated: verdict === 'truncated',
       looping: verdict === 'looping',
       timestamp: new Date().toISOString(),
-      modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-      generationConfigId: CURRENT_GENERATION_CONFIG_ID,
+      modelId: activeModel.id,
+      generationConfigId: activeModel.generationConfigId,
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
       deviceNameModel: metadata.deviceNameModel,
       appBuildId: metadata.appBuildId,

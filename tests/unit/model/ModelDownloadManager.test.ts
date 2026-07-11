@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import { ModelDownloadManager, type ReattachedDownload } from '../../../src/model/ModelDownloadManager';
 import type { ModelDownloadStatus } from '../../../src/types/models';
 
@@ -10,7 +13,9 @@ const SOURCES = ['https://example.test/model.pte', 'https://example.test/tokeniz
 const EXPECTED_HASH = 'abc123def456';
 const EXPECTED_SIZE = 2_427_656_704;
 const LOCAL_MODEL_PATH = '/local/react-native-executorch/model.pte';
+const OTHER_MODEL_PATH = '/local/react-native-executorch/other-model.pte';
 const LOCAL_TOKENIZER_PATH = '/local/react-native-executorch/tokenizer.json';
+const EXPECTED_MODEL_FILENAME = 'model.pte';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -69,6 +74,7 @@ function makeHarness() {
     getFileSize,
     getModelConfig,
     sources: SOURCES,
+    expectedModelFilename: EXPECTED_MODEL_FILENAME,
   });
 
   return {
@@ -86,6 +92,14 @@ function makeHarness() {
 }
 
 describe('ModelDownloadManager', () => {
+  it('receives model sources derived from the active model at the composition root', () => {
+    const source = readFileSync(join(process.cwd(), 'src/store/modelStore.ts'), 'utf8');
+
+    expect(source).toContain('activeModel.modelConstant.modelSource');
+    expect(source).toContain('activeModel.modelConstant.tokenizerSource');
+    expect(source).toContain('activeModel.modelConstant.tokenizerConfigSource');
+  });
+
   it('resolves to downloaded with a true integrity check on success', async () => {
     const { manager, verifyIntegrity, getModelConfig } = makeHarness();
     verifyIntegrity.mockResolvedValue(true);
@@ -253,6 +267,7 @@ describe('ModelDownloadManager', () => {
       getFileSize: jest.fn(async () => EXPECTED_SIZE),
       getModelConfig,
       sources: SOURCES,
+      expectedModelFilename: EXPECTED_MODEL_FILENAME,
     });
 
     await expect(manager.reattachExistingDownload()).resolves.toBe(true);
@@ -270,6 +285,28 @@ describe('ModelDownloadManager', () => {
   });
 
   describe('reconcile (launch-time disk reconciliation)', () => {
+    it('reports not-ready when only another model is present', async () => {
+      const { manager, listDownloadedModels, getFileSize } = makeHarness();
+      listDownloadedModels.mockResolvedValue([OTHER_MODEL_PATH]);
+
+      await manager.reconcile();
+
+      expect(getFileSize).not.toHaveBeenCalled();
+      expect(manager.isReadyForInference()).toBe(false);
+    });
+
+    it('reports ready from the active model when both model files coexist', async () => {
+      const { manager, listDownloadedModels, getFileSize, deleteResources } = makeHarness();
+      listDownloadedModels.mockResolvedValue([OTHER_MODEL_PATH, LOCAL_MODEL_PATH]);
+      getFileSize.mockResolvedValue(EXPECTED_SIZE);
+
+      await manager.reconcile();
+
+      expect(getFileSize).toHaveBeenCalledWith(LOCAL_MODEL_PATH);
+      expect(deleteResources).not.toHaveBeenCalled();
+      expect(manager.isReadyForInference()).toBe(true);
+    });
+
     it('reports ready when a present model has the expected size, without re-hashing a multi-GB file', async () => {
       const { manager, listDownloadedModels, getFileSize, verifyIntegrity, getModelConfig } = makeHarness();
       listDownloadedModels.mockResolvedValue([LOCAL_MODEL_PATH]);
