@@ -24,8 +24,6 @@ const DEFAULT_MAX_FACT_ITEMS = 6;
 const DEFAULT_MAX_SUMMARY_ENTRIES = 6;
 const TURN_ROLE_OVERHEAD_UNITS = 32;
 const CANDIDATE_PREVIEW_MAX_CHARS = 240;
-const USER_MEMORY_CUE =
-  /\b(?:i\s+(?:am|have|use|live|work|need|prefer|want|chose|choose|decided|cannot|can't|do not|don't)|my\s+[a-z0-9]+\s+(?:is|are|has|have)|we\s+(?:use|need|prefer|chose|choose|decided|cannot|can't|do not|don't)|please\s+(?:use|keep|avoid|do not|don't|never|always)|must|need to|prefer|correction|actually|i meant|not\s+.+\s+but)\b/i;
 const TOKEN_STOP_WORDS = new Set([
   'about',
   'again',
@@ -54,7 +52,7 @@ const TOKEN_STOP_WORDS = new Set([
   'would',
 ]);
 
-export type ContextCandidateExclusionReason = 'budget' | 'item-cap';
+export type ContextCandidateExclusionReason = 'budget' | 'item-cap' | 'relevance';
 
 export interface RankedCandidateDiagnostic {
   readonly stableId: string;
@@ -81,11 +79,11 @@ export interface ContextSelectionDiagnostics {
   readonly budget: ContextBudgetMetadata;
 }
 
-interface CompletedTurn {
+interface ConversationTurn {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
   readonly question: string;
-  readonly answer: string;
+  readonly answer: string | null;
   readonly createdAt: number;
 }
 
@@ -164,23 +162,26 @@ export class ContextOrchestrator {
     options: ContextOrchestrationOptions = {},
   ): ContextOrchestrationResult {
     const diagnosticsEnabled = options.diagnosticsEnabled ?? isDevelopmentInferenceTraceEnabled();
-    const completedTurns = completedTurnsFromMessages(snapshot.priorMessages);
+    const conversationTurns = conversationTurnsFromMessages(snapshot.priorMessages);
     const selection = selectRecentTurns(
-      completedTurns,
+      conversationTurns,
       snapshot.currentMessage.text,
       this.budgetPolicy,
       diagnosticsEnabled,
     );
-    const olderTurns = completedTurns.slice(0, completedTurns.length - selection.turns.length);
+    const olderTurns = conversationTurns.slice(
+      0,
+      conversationTurns.length - selection.turns.length,
+    );
     const memory = rebuildDerivedMemory(snapshot, olderTurns);
     let usedUnits = selection.usedUnits;
 
-    const mediaEvidence = selectWithinBudget(
-      relevantMediaCandidates(memory.mediaEvidence, snapshot.currentMessage.text),
+    const mediaEvidence = selectMediaEvidenceWithinBudget(
+      memory.mediaEvidence,
+      snapshot.currentMessage.text,
       this.budgetPolicy.maxMediaEvidenceItems,
       usedUnits,
       this.budgetPolicy,
-      formatMediaEvidence,
       diagnosticsEnabled,
     );
     usedUnits = mediaEvidence.usedUnits;
@@ -321,7 +322,7 @@ export function formatSummaryEntry(entry: ContextSummaryEntry): string {
 }
 
 function selectRecentTurns(
-  turns: ReadonlyArray<CompletedTurn>,
+  turns: ReadonlyArray<ConversationTurn>,
   currentRequest: string,
   policy: ContextBudgetPolicy,
   collectDiagnostics: boolean,
@@ -338,7 +339,10 @@ function selectRecentTurns(
 
   for (let index = candidates.length - 1; index >= 0; index -= 1) {
     const turn = candidates[index];
-    const cost = policy.measure(turn.question) + policy.measure(turn.answer) + TURN_ROLE_OVERHEAD_UNITS;
+    const cost =
+      policy.measure(turn.question) +
+      policy.measure(turn.answer ?? '') +
+      TURN_ROLE_OVERHEAD_UNITS;
     if (usedUnits + cost > policy.maximumUnits) {
       break;
     }
@@ -359,7 +363,7 @@ function selectRecentTurns(
 
 function rebuildDerivedMemory(
   snapshot: CanonicalConversationSnapshot,
-  olderTurns: ReadonlyArray<CompletedTurn>,
+  olderTurns: ReadonlyArray<ConversationTurn>,
 ): ConversationContextMemory {
   const validSourceIds = new Set(
     snapshot.priorMessages
@@ -391,24 +395,22 @@ function rebuildDerivedMemory(
   };
 }
 
-function completedTurnsFromMessages(
+function conversationTurnsFromMessages(
   messages: ReadonlyArray<ConversationMessage>,
-): CompletedTurn[] {
-  const turns: CompletedTurn[] = [];
+): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
   for (let index = 0; index < messages.length - 1; index += 1) {
     const user = messages[index];
     const assistant = messages[index + 1];
     if (
       user?.role === 'user' &&
-      assistant?.role === 'assistant' &&
-      assistant.status === 'completed' &&
-      isUsableDerivedMemoryAnswer(assistant.text)
+      assistant?.role === 'assistant'
     ) {
       turns.push({
         userMessageId: user.id,
         assistantMessageId: assistant.id,
         question: user.text.trim(),
-        answer: assistant.text.trim(),
+        answer: assistant.status === 'completed' ? assistant.text.trim() : null,
         createdAt: assistant.createdAt,
       });
       index += 1;
@@ -417,19 +419,21 @@ function completedTurnsFromMessages(
   return turns;
 }
 
-function turnToSummaryEntry(turn: CompletedTurn): ContextSummaryEntry {
+function turnToSummaryEntry(turn: ConversationTurn): ContextSummaryEntry {
+  const assistantSummary = turn.answer !== null && isUsableDerivedMemoryAnswer(turn.answer)
+    ? `\nLocra: ${compactText(turn.answer, 280)}`
+    : '';
   return {
     version: 'context-summary-entry-v1',
     sourceUserMessageId: turn.userMessageId,
     sourceAssistantMessageId: turn.assistantMessageId,
-    text: `User: ${compactText(turn.question, 180)}\nLocra: ${compactText(turn.answer, 280)}`,
+    text: `User: ${compactText(turn.question, 180)}${assistantSummary}`,
     createdAt: turn.createdAt,
   };
 }
 
-function turnToFacts(turn: CompletedTurn): ContextMemoryFact[] {
-  return splitFactCandidates(turn.question)
-    .filter(isExplicitUserMemory)
+function turnToFacts(turn: ConversationTurn): ContextMemoryFact[] {
+  return splitUserMemoryCandidates(turn.question)
     .slice(0, 3)
     .map((text, index) => ({
       version: 'context-memory-fact-v1',
@@ -448,15 +452,10 @@ function isUsableDerivedMemoryAnswer(answer: string): boolean {
   );
 }
 
-function isExplicitUserMemory(text: string): boolean {
-  return USER_MEMORY_CUE.test(text);
-}
-
-function splitFactCandidates(text: string): string[] {
-  return text
-    .split(/[\r\n.!?]+/)
+function splitUserMemoryCandidates(text: string): string[] {
+  return (text.match(/[^\r\n.!?]+[.!?]?/g) ?? [])
     .map((item) => item.trim())
-    .filter((item) => item.length >= 12);
+    .filter((item) => item.length >= 12 && !item.endsWith('?'));
 }
 
 function rankMediaEvidence(
@@ -466,13 +465,44 @@ function rankMediaEvidence(
   return rankItems(evidence, query, formatMediaEvidence, (item) => item.createdAt, (item) => item.id);
 }
 
-function relevantMediaCandidates(
+function selectMediaEvidenceWithinBudget(
   evidence: ReadonlyArray<ContextMediaEvidence>,
   query: string,
-): RankedItem<ContextMediaEvidence>[] {
+  maximumItems: number,
+  initialUsedUnits: number,
+  policy: ContextBudgetPolicy,
+  collectDiagnostics: boolean,
+): {
+  items: ContextMediaEvidence[];
+  usedUnits: number;
+  candidates: RankedCandidateDiagnostic[];
+} {
   const ranked = rankMediaEvidence(evidence, query);
   const relevant = ranked.filter((candidate) => candidate.relevance > 0);
-  return relevant.length > 0 ? relevant : ranked.slice(0, 1);
+  const eligible = relevant.length > 0 ? relevant : ranked.slice(0, 1);
+  const selection = selectWithinBudget(
+    eligible,
+    maximumItems,
+    initialUsedUnits,
+    policy,
+    formatMediaEvidence,
+    collectDiagnostics,
+  );
+  if (!collectDiagnostics || eligible.length === ranked.length) {
+    return selection;
+  }
+
+  const diagnosticsById = new Map(
+    selection.candidates.map((candidate) => [candidate.stableId, candidate]),
+  );
+  return {
+    ...selection,
+    candidates: ranked.map(
+      (candidate) =>
+        diagnosticsById.get(candidate.stableId) ??
+        toCandidateDiagnostic(candidate, formatMediaEvidence, false, 'relevance'),
+    ),
+  };
 }
 
 function rankFacts(

@@ -18,4 +18,4 @@ export const LOCRA_SYSTEM_PROMPT = [
 ].join('\n');
 
 export const LOCRA_FOLLOW_UP_INSTRUCTION =
-  'Answer the latest user message. Use earlier context only when it helps, and do not repeat an earlier answer unless asked.';
+  'Answer the latest user message. Use earlier context to resolve references, and do not repeat an earlier answer unless asked.';
