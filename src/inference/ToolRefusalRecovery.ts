@@ -28,11 +28,15 @@ const HOW_TO_ADVICE_PATTERN =
   /\b(?:how\s+(?:do|can|should)\s+i|explain\s+how\s+to|tell\s+me\s+how\s+to|show\s+me\s+how\s+to|steps\s+to)\b/i;
 
 export function shouldRetryToolRefusal(response: string, userQuestion: string): boolean {
-  const normalizedResponse = response.replace(/\u2019/g, "'");
-  if (!FALSE_TOOL_REFUSAL_PATTERNS.some((pattern) => pattern.test(normalizedResponse))) {
+  if (!isToolRefusalResponse(response)) {
     return false;
   }
   return !isGenuineUnavailableCapabilityRequest(userQuestion);
+}
+
+export function isToolRefusalResponse(response: string): boolean {
+  const normalizedResponse = response.replace(/\u2019/g, "'");
+  return FALSE_TOOL_REFUSAL_PATTERNS.some((pattern) => pattern.test(normalizedResponse));
 }
 
 export function buildToolRefusalRecoveryMessages(
