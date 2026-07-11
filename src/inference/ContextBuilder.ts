@@ -60,7 +60,7 @@ export function createCanonicalConversationContext(
     answer: turn.answer,
   }));
   const usedUnits = recentTurns.reduce(
-    (total, turn) => total + turn.question.length + turn.answer.length,
+    (total, turn) => total + turn.question.length + (turn.answer?.length ?? 0),
     0,
   );
   return {
@@ -165,10 +165,11 @@ function conversationForContextBuilder(messages: ConversationMessage[]): Convers
 }
 
 function turnToMessages(turn: ContextTurn): ModelRequestMessage[] {
-  return [
-    userMessage(turn.question),
-    assistantMessage(turn.answer),
-  ];
+  const messages: ModelRequestMessage[] = [userMessage(turn.question)];
+  if (turn.answer !== null && turn.answer.trim() !== '') {
+    messages.push(assistantMessage(turn.answer));
+  }
+  return messages;
 }
 
 function systemMessage(content: string): ModelRequestMessage {
@@ -217,7 +218,7 @@ function formatDerivedMemory(context: CanonicalConversationContext): string {
   }
   if (context.importantFacts.length > 0) {
     sections.push(
-      `Important prior facts and decisions:\n${context.importantFacts
+      `Relevant user-provided details:\n${context.importantFacts
         .map((fact) => `- ${formatMemoryFact(fact)}`)
         .join('\n')}`,
     );

@@ -63,7 +63,7 @@ export interface Conversation {
 
 export interface CanonicalContextTurn {
   readonly question: string;
-  readonly answer: string;
+  readonly answer: string | null;
 }
 
 export type ContextEvidenceModality = 'image' | 'screenshot' | 'document';
