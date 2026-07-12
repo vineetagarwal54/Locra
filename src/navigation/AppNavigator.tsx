@@ -22,19 +22,25 @@ import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { InsufficientStorageScreen } from '../screens/InsufficientStorageScreen';
 import { ModelIntroScreen } from '../screens/ModelIntroScreen';
+import { ModelSelectionScreen } from '../screens/ModelSelectionScreen';
 import { NotificationRationaleScreen } from '../screens/NotificationRationaleScreen';
 import { PrivacyScreen } from '../screens/PrivacyScreen';
+import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
+import { getSelectedModel, useModelSelectionStore } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
+import { commitRequestedModelSwitch } from '../store/modelSwitchCoordinator';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 import { useVoiceStore } from '../store/voiceStore';
 
 import { ConversationDrawer } from './ConversationDrawer';
+import { resolveLaunchRoute } from './LaunchRouting';
 
 export type RootStackParamList = {
   Welcome: undefined;
   Privacy: undefined;
+  ModelSelection: undefined;
   ModelIntro: undefined;
   NotificationRationale: undefined;
   DownloadProgress: { autoStart?: boolean } | undefined;
@@ -45,6 +51,7 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: undefined;
+  Settings: undefined;
 };
 
 export type RootDrawerParamList = {
@@ -58,6 +65,7 @@ const Drawer = createDrawerNavigator<RootDrawerParamList>();
 // degrades to a legible fallback instead of taking down the app.
 const Welcome = withErrorBoundary(WelcomeScreen);
 const Privacy = withErrorBoundary(PrivacyScreen);
+const ModelSelection = withErrorBoundary(ModelSelectionScreen);
 const ModelIntro = withErrorBoundary(ModelIntroScreen);
 const NotificationRationale = withErrorBoundary(NotificationRationaleScreen);
 const DownloadProgress = withErrorBoundary(DownloadProgressScreen);
@@ -68,28 +76,25 @@ const Capture = withErrorBoundary(CaptureScreen);
 const History = withErrorBoundary(HistoryScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
 const DiagnosticsExport = withErrorBoundary(DiagnosticsExportScreen);
+const Settings = withErrorBoundary(SettingsScreen);
 
 // Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
 // screen_map.md Welcome → Privacy → Model Setup → …):
 //   1. Never onboarded            → Welcome (starts the setup progression)
-//   2. Onboarded, download live   → DownloadProgress (a reattached background
+//   2. Onboarded, no selection    → ModelSelection
+//   3. Onboarded, download live   → DownloadProgress (a reattached background
 //                                    download resumes from persisted state)
-//   3. Onboarded, model not ready → ModelIntro (download / re-download)
-//   4. Onboarded, model ready     → Chat (new conversation)
+//   4. Onboarded, model not ready → ModelIntro (download / re-download)
+//   5. Onboarded, model ready     → Chat (new conversation)
 // Returning users with a ready model land straight on New Chat.
 function resolveInitialRoute(): keyof RootStackParamList {
-  if (!hasCompletedWelcome()) {
-    return 'Welcome';
-  }
   const modelState = useModelStore.getState();
-  if (!modelState.isReadyForInference()) {
-    const status = modelState.downloadStatus;
-    if (status === 'downloading' || status === 'paused') {
-      return 'DownloadProgress';
-    }
-    return 'ModelIntro';
-  }
-  return 'Chat';
+  return resolveLaunchRoute({
+    welcomeCompleted: hasCompletedWelcome(),
+    selectedModelId: useModelSelectionStore.getState().selectedModelId,
+    modelReady: modelState.isReadyForInference(),
+    downloadStatus: modelState.downloadStatus,
+  });
 }
 
 // Where a foreground return (e.g. tapping Locra's background-download
@@ -120,6 +125,7 @@ function RootStack() {
     <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Welcome" component={Welcome} />
       <Stack.Screen name="Privacy" component={Privacy} />
+      <Stack.Screen name="ModelSelection" component={ModelSelection} />
       <Stack.Screen name="ModelIntro" component={ModelIntro} />
       <Stack.Screen name="NotificationRationale" component={NotificationRationale} />
       <Stack.Screen name="DownloadProgress" component={DownloadProgress} />
@@ -130,15 +136,18 @@ function RootStack() {
       <Stack.Screen name="History" component={History} />
       <Stack.Screen name="Benchmark" component={Benchmark} />
       <Stack.Screen name="DiagnosticsExport" component={DiagnosticsExport} />
+      <Stack.Screen name="Settings" component={Settings} />
     </Stack.Navigator>
   );
 }
 
 export function AppNavigator() {
+  const selectedModelId = useModelSelectionStore((state) => state.selectedModelId);
+  const pendingModelId = useModelSelectionStore((state) => state.pendingModelId);
+  const selectedModel = getSelectedModel();
   const engineReady = useModelStore(
     (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
   );
-  const [engineHostMounted, setEngineHostMounted] = useState(false);
   // FR-033: the voice host mounts lazily, only once the user activates voice, so
   // the Whisper model is never downloaded for users who never dictate.
   const voiceEnabled = useVoiceStore((s) => s.enabled);
@@ -151,7 +160,13 @@ export function AppNavigator() {
   useEffect(() => {
     let active = true;
     async function bootstrapModelState(): Promise<void> {
+      useModelSelectionStore.getState().bootstrap();
+      const model = getSelectedModel();
+      if (model === null) {
+        return;
+      }
       const modelStore = useModelStore.getState();
+      modelStore.initialize(model);
       const reattached = await modelStore.reattachExistingDownload();
       if (!reattached) {
         await modelStore.reconcile();
@@ -167,12 +182,6 @@ export function AppNavigator() {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (engineReady) {
-      setEngineHostMounted(true);
-    }
-  }, [engineReady]);
 
   // Route a foreground return (notification tap during an active background
   // download) to the live download screen. Preserves the background download
@@ -198,6 +207,26 @@ export function AppNavigator() {
     return () => subscription.remove();
   }, [navigationRef]);
 
+  useEffect(() => {
+    if (pendingModelId === null) {
+      return;
+    }
+    void commitRequestedModelSwitch().then((ready) => {
+      if (ready === null || !navigationRef.isReady()) {
+        return;
+      }
+      navigationRef.navigate('Root', {
+        screen: ready ? 'Success' : 'ModelIntro',
+      });
+    }).catch(() => {
+      useModelSelectionStore.getState().cancelModelSwitch();
+      const previousModel = getSelectedModel();
+      if (previousModel !== null) {
+        useModelStore.getState().initialize(previousModel);
+      }
+    });
+  }, [navigationRef, pendingModelId]);
+
   if (!bootstrapped) {
     return (
       <ErrorBoundary>
@@ -209,7 +238,9 @@ export function AppNavigator() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <NavigationContainer ref={navigationRef}>
-        {engineHostMounted ? <InferenceEngineHost /> : null}
+        {engineReady && selectedModel !== null && pendingModelId === null ? (
+          <InferenceEngineHost key={selectedModelId} model={selectedModel} />
+        ) : null}
         {voiceEnabled ? <VoiceTranscriptionHost /> : null}
         <Drawer.Navigator
           screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}

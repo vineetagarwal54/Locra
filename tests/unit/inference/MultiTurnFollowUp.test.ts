@@ -13,7 +13,10 @@ jest.mock('../../../src/store/historyStore', () => ({
 }));
 jest.mock('../../../src/store/modelStore', () => ({
   useModelStore: Object.assign(jest.fn(), {
-    getState: () => ({ isReadyForInference: () => true }),
+    getState: () => ({
+      selectedModelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+      isReadyForInference: () => true,
+    }),
   }),
 }));
 jest.mock('react-native-nitro-image', () => ({
@@ -247,8 +250,9 @@ describe('multi-turn follow-up exchanges', () => {
     expect(source).not.toContain('SlidingWindowContextStrategy');
     expect(source).not.toMatch(/sendMessage\(/);
     expect(countMatches(source, /\buseLLM\(/g)).toBe(1);
-    expect(navigatorSource).toContain('engineHostMounted');
-    expect(navigatorSource).not.toContain('engineReady ? <InferenceEngineHost /> : null');
+    expect(countMatches(navigatorSource, /<InferenceEngineHost\b/g)).toBe(1);
+    expect(navigatorSource).toContain('pendingModelId === null');
+    expect(navigatorSource).toContain('model={selectedModel}');
   });
 
   it('does not wait for runtime message history before completing and sending turn 2', async () => {

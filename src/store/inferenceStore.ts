@@ -9,6 +9,7 @@ import {
 } from '../inference/InferenceQueue';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
+import { getModelCandidate, type ModelCandidateId } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
 
@@ -107,6 +108,14 @@ const bridgeEngine: InferenceEngineAdapter = {
 const queue = createInferenceQueue(bridgeEngine, {
   isReadyForInference: () => useModelStore.getState().isReadyForInference(),
   getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,
+  getModelAttribution: () => {
+    const selectedModelId = useModelStore.getState().selectedModelId as ModelCandidateId | null;
+    if (selectedModelId === null) {
+      throw new Error('Inference attribution requires a selected model.');
+    }
+    const model = getModelCandidate(selectedModelId);
+    return { modelId: model.id, generationConfigId: model.generationConfigId };
+  },
 });
 
 export interface InferenceStoreState extends InferenceState {

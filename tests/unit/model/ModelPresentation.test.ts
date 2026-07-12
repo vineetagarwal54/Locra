@@ -1,19 +1,18 @@
-describe('active model presentation metadata', () => {
-  it('uses the selected model display name and integrity size', () => {
-    jest.resetModules();
-    jest.doMock('../../../src/model/ActiveModel', () => ({
-      activeModel: {
-        displayName: 'Gemma 4 E2B · Multimodal',
-        integrityFallback: { expectedSize: 4_371_419_520 },
-      },
-    }));
+import type { ModelCandidate } from '../../../src/model/ActiveModel';
+import { createModelPresentation } from '../../../src/model/ModelPresentation';
 
-    const presentation = require('../../../src/model/ModelPresentation') as typeof import('../../../src/model/ModelPresentation');
+describe('selected model presentation metadata', () => {
+  it('uses the supplied descriptor display name and integrity size', () => {
+    const model = {
+      displayName: 'Gemma 4 E2B Multimodal',
+      integrityFallback: { expectedSize: 4_371_419_520 },
+    } as ModelCandidate;
 
-    expect(presentation.MODEL_DISPLAY_NAME).toBe('Gemma 4 E2B · Multimodal');
-    expect(presentation.MODEL_TOTAL_BYTES).toBe(4_371_419_520);
-    expect(presentation.MODEL_DOWNLOAD_SIZE_LABEL).toBe('4.1 GB');
-    expect(presentation.MODEL_STORAGE_REQUIRED_BYTES).toBe(Math.round(4_371_419_520 * 1.12));
+    const presentation = createModelPresentation(model);
+
+    expect(presentation.displayName).toBe('Gemma 4 E2B Multimodal');
+    expect(presentation.downloadSizeLabel).toBe('4.1 GB');
+    expect(presentation.storageRequiredBytes).toBe(Math.round(4_371_419_520 * 1.12));
     expect(presentation.formatDownloadedOfTotal(1)).toBe('4.1 GB / 4.1 GB');
   });
 });

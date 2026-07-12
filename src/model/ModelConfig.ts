@@ -1,4 +1,4 @@
-import { activeModel } from './ActiveModel';
+import type { ModelIntegrityFallback } from './ActiveModel';
 
 export interface ModelConfig {
   expectedSha256: string;
@@ -19,7 +19,8 @@ export type ModelConfigFetch = (
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
 export async function fetchModelConfig(
-  endpoint: string = activeModel.integrityConfigEndpoint,
+  endpoint: string,
+  fallback: ModelIntegrityFallback,
   fetcher: ModelConfigFetch = defaultFetch
 ): Promise<ModelConfig> {
   try {
@@ -33,7 +34,7 @@ export async function fetchModelConfig(
     return parseModelConfig(await response.json());
   } catch (error) {
     warnModelConfigFallback(endpoint, error);
-    return activeModel.integrityFallback;
+    return fallback;
   }
 }
 

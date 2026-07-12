@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { type Message, useLLM } from 'react-native-executorch';
 
-import { activeModel } from '../model/ActiveModel';
+import type { ModelCandidate } from '../model/ActiveModel';
 
 import type { ModelRequestMessage } from './ContextBuilder';
 
@@ -36,8 +36,8 @@ export interface InferenceEngineHandle {
   subscribe(listener: () => void): () => void;
 }
 
-export function useInferenceEngine(): InferenceEngineHandle {
-  const llm = useLLM({ model: activeModel.modelConstant });
+export function useInferenceEngine(model: ModelCandidate): InferenceEngineHandle {
+  const llm = useLLM({ model: model.modelConstant });
   const llmRef = useRef(llm);
   const listenersRef = useRef<Set<() => void>>(new Set());
 

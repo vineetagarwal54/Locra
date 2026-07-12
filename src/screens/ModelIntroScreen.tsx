@@ -10,12 +10,9 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens } from '../constants/theme';
-import {
-  MODEL_DISPLAY_NAME,
-  MODEL_DOWNLOAD_SIZE_LABEL,
-  MODEL_STORAGE_REQUIRED_LABEL,
-} from '../model/ModelPresentation';
+import { createModelPresentation } from '../model/ModelPresentation';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { getSelectedModel } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ModelIntro'>;
@@ -28,14 +25,19 @@ interface MetadataRow {
 }
 
 export function ModelIntroScreen({ navigation }: Props) {
+  const selectedModel = getSelectedModel();
+  if (selectedModel === null) {
+    throw new Error('Model setup requires a selected model.');
+  }
+  const presentation = createModelPresentation(selectedModel);
   const checkDeviceCompatibility = useModelStore((s) => s.checkDeviceCompatibility);
   const compatibility = useMemo(() => checkDeviceCompatibility(), [checkDeviceCompatibility]);
 
   // design.md §7.3 dynamic metadata rule — bound to real model configuration.
   const metadata: MetadataRow[] = [
-    { icon: 'cube-outline', label: 'Model', value: MODEL_DISPLAY_NAME },
-    { icon: 'cloud-download-outline', label: 'Download Size', value: MODEL_DOWNLOAD_SIZE_LABEL },
-    { icon: 'harddisk', label: 'Storage Required', value: MODEL_STORAGE_REQUIRED_LABEL },
+    { icon: 'cube-outline', label: 'Model', value: presentation.displayName },
+    { icon: 'cloud-download-outline', label: 'Download Size', value: presentation.downloadSizeLabel },
+    { icon: 'harddisk', label: 'Storage Required', value: presentation.storageRequiredLabel },
   ];
 
   const onDownload = useCallback((): void => {

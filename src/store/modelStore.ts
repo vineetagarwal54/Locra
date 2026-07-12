@@ -9,7 +9,7 @@ import { ResourceFetcherUtils } from 'react-native-executorch';
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher';
 import { create } from 'zustand';
 
-import { activeModel } from '../model/ActiveModel';
+import type { ModelCandidate, ModelCandidateId } from '../model/ActiveModel';
 import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
 import { checkDeviceCompatibility } from '../model/DeviceCompatibility';
 import { fetchModelConfig } from '../model/ModelConfig';
@@ -28,18 +28,12 @@ import type { DeviceCompatibilityResult, ModelState } from '../types/models';
 // into the full IModelLifecycle contract. Screens read from THIS store only.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MODEL_SOURCES: ResourceSource[] = [
-  activeModel.modelConstant.modelSource,
-  activeModel.modelConstant.tokenizerSource,
-  activeModel.modelConstant.tokenizerConfigSource,
-];
-
-// Remote config is fetched once per download attempt (FR-028), so hash/size
-// metadata can rotate without a new app binary.
-const MODEL_CONFIG_ENDPOINT = activeModel.integrityConfigEndpoint;
-const EXPECTED_MODEL_FILENAME = ResourceFetcherUtils.getFilenameFromUri(
-  activeModel.modelConstant.modelSource
-);
+const INITIAL_MODEL_STATE: ModelState = {
+  downloadStatus: 'not_started',
+  downloadProgress: 0,
+  integrityVerified: false,
+  error: null,
+};
 
 // Development escape hatch: skip post-download AND launch-time verification
 // entirely so iterating on inference doesn't require hashing a 2.4 GB file on
@@ -116,21 +110,61 @@ const backgroundFetcher = new BackgroundDownloadFetcher({
   },
 });
 
-const manager = new ModelDownloadManager({
-  fetcher: backgroundFetcher,
-  verifyIntegrity: __DEV__ ? devSkipIntegrityCheck : verifyModelIntegrity,
-  getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
-  getModelConfig: () => fetchModelConfig(MODEL_CONFIG_ENDPOINT),
-  sources: MODEL_SOURCES,
-  expectedModelFilename: EXPECTED_MODEL_FILENAME,
-});
+let manager: ModelDownloadManager | null = null;
+let managerModelId: ModelCandidateId | null = null;
+let unsubscribeManager: (() => void) | null = null;
+
+function initializeManager(model: ModelCandidate): void {
+  if (manager !== null && managerModelId === model.id) {
+    return;
+  }
+
+  unsubscribeManager?.();
+  const sources: ResourceSource[] = [
+    model.modelConstant.modelSource,
+    model.modelConstant.tokenizerSource,
+    model.modelConstant.tokenizerConfigSource,
+  ];
+  manager = new ModelDownloadManager({
+    fetcher: backgroundFetcher,
+    verifyIntegrity: __DEV__ ? devSkipIntegrityCheck : verifyModelIntegrity,
+    getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
+    getModelConfig: () =>
+      fetchModelConfig(model.integrityConfigEndpoint, model.integrityFallback),
+    sources,
+    expectedModelFilename: ResourceFetcherUtils.getFilenameFromUri(
+      model.modelConstant.modelSource
+    ),
+  });
+  managerModelId = model.id;
+  useModelStore.setState({ ...INITIAL_MODEL_STATE, selectedModelId: model.id });
+  unsubscribeManager = manager.subscribe(syncManagerState);
+}
+
+function requireManager(): ModelDownloadManager {
+  if (manager === null) {
+    throw new Error('The model lifecycle is unavailable until a model is selected.');
+  }
+  return manager;
+}
+
+function syncManagerState(state: ModelState): void {
+  useModelStore.setState({
+    downloadStatus: state.downloadStatus,
+    downloadProgress: state.downloadProgress,
+    integrityVerified: state.integrityVerified,
+    error: state.error,
+  });
+}
 
 function toFileUri(path: string): string {
   return path.startsWith('file://') ? path : `file://${path}`;
 }
 
 export interface ModelStoreState extends ModelState {
+  selectedModelId: ModelCandidateId | null;
   cellularDownloadWarningVisible: boolean;
+  initialize: (model: ModelCandidate) => void;
   checkDeviceCompatibility: () => DeviceCompatibilityResult;
   /** Reattach native background downloads that survived process death. */
   reattachExistingDownload: () => Promise<boolean>;
@@ -146,11 +180,13 @@ export interface ModelStoreState extends ModelState {
 }
 
 export const useModelStore = create<ModelStoreState>(() => ({
-  ...manager.getState(),
+  ...INITIAL_MODEL_STATE,
+  selectedModelId: null,
   cellularDownloadWarningVisible: false,
+  initialize: initializeManager,
   checkDeviceCompatibility,
-  reattachExistingDownload: () => manager.reattachExistingDownload(),
-  reconcile: () => manager.reconcile(),
+  reattachExistingDownload: () => requireManager().reattachExistingDownload(),
+  reconcile: () => requireManager().reconcile(),
   startDownload: async () => {
     const gate = await evaluateNetworkGate({
       storage,
@@ -162,43 +198,33 @@ export const useModelStore = create<ModelStoreState>(() => ({
     }
 
     useModelStore.setState({ cellularDownloadWarningVisible: false });
-    await manager.startDownload();
+    await requireManager().startDownload();
   },
   confirmCellularDownload: async () => {
     allowCellularDownload(storage);
     useModelStore.setState({ cellularDownloadWarningVisible: false });
-    await manager.startDownload();
+    await requireManager().startDownload();
   },
   dismissCellularDownloadWarning: () => {
     useModelStore.setState({ cellularDownloadWarningVisible: false });
   },
-  pauseDownload: () => manager.pauseDownload(),
-  resumeDownload: () => manager.resumeDownload(),
-  cancelDownload: () => manager.cancelDownload(),
-  isReadyForInference: () => manager.isReadyForInference(),
+  pauseDownload: () => requireManager().pauseDownload(),
+  resumeDownload: () => requireManager().resumeDownload(),
+  cancelDownload: () => requireManager().cancelDownload(),
+  isReadyForInference: () => manager?.isReadyForInference() ?? false,
 }));
-
-// Mirror every manager transition into the store so the setup screen re-renders.
-manager.subscribe((state: ModelState) => {
-  useModelStore.setState({
-    downloadStatus: state.downloadStatus,
-    downloadProgress: state.downloadProgress,
-    integrityVerified: state.integrityVerified,
-    error: state.error,
-  });
-});
 
 // The imperative IModelLifecycle surface (contracts/model-lifecycle.contract.md)
 // for non-React consumers, e.g. the InferenceQueue's readiness gate (T027).
 export const modelLifecycle: IModelLifecycle = {
   checkDeviceCompatibility,
-  getState: () => manager.getState(),
-  subscribe: (listener) => manager.subscribe(listener),
-  isReadyForInference: () => manager.isReadyForInference(),
-  startDownload: () => manager.startDownload(),
-  pauseDownload: () => manager.pauseDownload(),
-  resumeDownload: () => manager.resumeDownload(),
-  cancelDownload: () => manager.cancelDownload(),
+  getState: () => manager?.getState() ?? INITIAL_MODEL_STATE,
+  subscribe: (listener) => requireManager().subscribe(listener),
+  isReadyForInference: () => manager?.isReadyForInference() ?? false,
+  startDownload: () => requireManager().startDownload(),
+  pauseDownload: () => requireManager().pauseDownload(),
+  resumeDownload: () => requireManager().resumeDownload(),
+  cancelDownload: () => requireManager().cancelDownload(),
 };
 
 type NativeDownloadTask =

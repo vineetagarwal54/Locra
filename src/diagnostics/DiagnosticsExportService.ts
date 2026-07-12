@@ -3,8 +3,8 @@ import * as Sharing from 'expo-sharing';
 import { strToU8, zipSync } from 'fflate';
 
 import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
-import { activeModel } from '../model/ActiveModel';
 import { historyStore } from '../store/historyStore';
+import { requireSelectedModel } from '../store/modelSelectionStore';
 import type { Conversation } from '../types/models';
 
 import { getCurrentDeviceBuildMetadata } from './DeviceBuildMetadataProvider';
@@ -78,9 +78,11 @@ function resolveAppDiagnosticsInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): 
     .sort((a, b) => b.capturedAt - a.capturedAt)
     .find((turn) => turn.objectiveResult !== null)?.objectiveResult;
   const deviceMetadata = getCurrentDeviceBuildMetadata();
+  const selectedModel = requireSelectedModel();
   return {
-    modelId: mostRecentObjectiveResult?.modelId ?? activeModel.id,
-    generationConfigId: mostRecentObjectiveResult?.generationConfigId ?? activeModel.generationConfigId,
+    modelId: mostRecentObjectiveResult?.modelId ?? selectedModel.id,
+    generationConfigId:
+      mostRecentObjectiveResult?.generationConfigId ?? selectedModel.generationConfigId,
     pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
     appBuildId: deviceMetadata.appBuildId,
     deviceNameModel: deviceMetadata.deviceNameModel,

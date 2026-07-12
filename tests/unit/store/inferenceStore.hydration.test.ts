@@ -21,7 +21,10 @@ jest.mock('../../../src/store/historyStore', () => {
 });
 jest.mock('../../../src/store/modelStore', () => ({
   useModelStore: Object.assign(jest.fn(), {
-    getState: () => ({ isReadyForInference: () => true }),
+    getState: () => ({
+      selectedModelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+      isReadyForInference: () => true,
+    }),
   }),
 }));
 jest.mock('react-native-nitro-image', () => ({

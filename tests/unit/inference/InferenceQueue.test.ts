@@ -6,17 +6,10 @@ jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: jest.fn(),
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
-jest.mock('../../../src/model/ActiveModel', () => ({
-  activeModel: {
-    id: 'LFM2_5_VL_1_6B_QUANTIZED',
-    generationConfigId: 'lfm2.5-vl-official-v1',
-  },
-}));
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { activeModel } from '../../../src/model/ActiveModel';
 import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import { createCanonicalConversationContext } from '../../../src/inference/ContextBuilder';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
@@ -74,6 +67,10 @@ function makeQueue(overrides: Partial<InferenceQueueDeps> = {}): InferenceQueue 
     preprocess: passthroughPreprocess,
     isReadyForInference: () => true,
     engine: overrides.engine ?? twoStageEngine('answer', 3),
+    getModelAttribution: () => ({
+      modelId: 'GEMMA4_E2B_MM',
+      generationConfigId: 'gemma4-e2b-mm-library-default',
+    }),
     ...overrides,
   };
   return new InferenceQueue(deps);
@@ -596,8 +593,8 @@ describe('InferenceQueue two-stage first image turns', () => {
         totalEndToEndLatencyMs: 700,
         generatedTokens: 6,
         promptTokens: 44,
-        modelId: activeModel.id,
-        generationConfigId: activeModel.generationConfigId,
+        modelId: 'GEMMA4_E2B_MM',
+        generationConfigId: 'gemma4-e2b-mm-library-default',
         pipelineVariantId: 'recommended-sampling-v1',
         deviceNameModel: 'Pixel 8 Pro',
         appBuildId: 'locra-test-build',

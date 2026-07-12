@@ -17,9 +17,10 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens, haptics } from '../constants/theme';
-import { formatGigabytes } from '../model/ModelPresentation';
+import { createModelPresentation, formatGigabytes } from '../model/ModelPresentation';
 import { getStorageAvailability, type StorageAvailability } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { requireSelectedModel } from '../store/modelSelectionStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'InsufficientStorage'>;
 
@@ -36,13 +37,14 @@ function bytesLabel(bytes: number | null): string {
 }
 
 export function InsufficientStorageScreen({ navigation }: Props) {
+  const requiredBytes = createModelPresentation(requireSelectedModel()).storageRequiredBytes;
   const reduceMotion = useReducedMotion();
   const [availability, setAvailability] = useState<StorageAvailability | null>(null);
   const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     let active = true;
-    void getStorageAvailability().then((result) => {
+    void getStorageAvailability(requiredBytes).then((result) => {
       if (active) {
         setAvailability(result);
       }
@@ -50,7 +52,7 @@ export function InsufficientStorageScreen({ navigation }: Props) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [requiredBytes]);
 
   const iconScale = useSharedValue(reduceMotion ? 1 : 0.94);
   useEffect(() => {
@@ -63,7 +65,7 @@ export function InsufficientStorageScreen({ navigation }: Props) {
   // Retry MUST re-check real free space before continuing (design.md §7.7).
   const onRetry = useCallback(async (): Promise<void> => {
     setChecking(true);
-    const next = await getStorageAvailability();
+    const next = await getStorageAvailability(requiredBytes);
     setAvailability(next);
     if (next.sufficient) {
       // Return to the download step. DownloadProgress only (re)starts when the
@@ -74,7 +76,7 @@ export function InsufficientStorageScreen({ navigation }: Props) {
     }
     setChecking(false);
     void haptics.error();
-  }, [navigation]);
+  }, [navigation, requiredBytes]);
 
   // Manage Storage opens the Android storage/settings surface (design.md §7.7).
   const onManageStorage = useCallback(async (): Promise<void> => {
