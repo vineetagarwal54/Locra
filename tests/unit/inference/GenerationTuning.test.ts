@@ -62,7 +62,7 @@ describe('generation tuning', () => {
 
   it('uses stateless context assembly without runtime generation overrides', () => {
     const engineSource = readFileSync(
-      join(process.cwd(), 'src/inference/useInferenceEngine.ts'),
+      join(process.cwd(), 'src/inference/llamaRn/QwenLlamaRuntime.ts'),
       'utf8',
     );
     const contextSource = readFileSync(
@@ -71,9 +71,8 @@ describe('generation tuning', () => {
     );
 
     expect(contextSource).toContain('LOCRA_SYSTEM_PROMPT');
-    expect(engineSource).toContain('generate(messages');
+    expect(engineSource).toContain('convertToQwenMessages');
     expect(engineSource).not.toContain('LOCRA_GENERATION_CONFIG');
-    expect(engineSource).not.toMatch(/generationConfig\s*:/);
     expect(engineSource).not.toContain('DEFAULT_SYSTEM_PROMPT');
   });
 });

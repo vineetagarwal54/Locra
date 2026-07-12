@@ -2,14 +2,17 @@ import { create } from 'zustand';
 
 import { getCurrentDeviceBuildMetadata } from '../diagnostics/DeviceBuildMetadataProvider';
 import { createCanonicalConversationContext } from '../inference/ContextBuilder';
+import type {
+  InferenceEngineAdapter,
+  InferenceEngineHandle,
+} from '../inference/InferenceEngineHandle';
 import {
   createInferenceQueue,
-  type InferenceEngineAdapter,
   type InferenceSubmitOptions,
 } from '../inference/InferenceQueue';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
-import type { InferenceEngineHandle } from '../inference/useInferenceEngine';
-import { getModelCandidate, type ModelCandidateId } from '../model/ActiveModel';
+import { getStartupRuntimeSelection } from '../inference/StartupRuntimeSelection';
+import { getModelCandidate, QWEN_V1_DESCRIPTOR, type ModelCandidateId } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
 
@@ -109,6 +112,14 @@ const queue = createInferenceQueue(bridgeEngine, {
   isReadyForInference: () => useModelStore.getState().isReadyForInference(),
   getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,
   getModelAttribution: () => {
+    // Qwen is the internal V1 runtime with no normal-user model selection; attribute
+    // to its safe aggregate descriptor rather than an ExecuTorch candidate lookup.
+    if (getStartupRuntimeSelection().selectedHost === 'qwen-llamarn') {
+      return {
+        modelId: QWEN_V1_DESCRIPTOR.id,
+        generationConfigId: QWEN_V1_DESCRIPTOR.generationConfigId,
+      };
+    }
     const selectedModelId = useModelStore.getState().selectedModelId as ModelCandidateId | null;
     if (selectedModelId === null) {
       throw new Error('Inference attribution requires a selected model.');

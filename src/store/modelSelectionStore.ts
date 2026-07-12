@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import {
+  ACTIVE_V1_MODEL_ID,
   getModelCandidate,
   isModelCandidateId,
   resolveDeveloperModelOverride,
@@ -31,10 +32,12 @@ export const useModelSelectionStore = create<ModelSelectionState>((set, get) => 
   bootstrap: (): void => {
     const override = resolveDeveloperModelOverride(process.env.EXPO_PUBLIC_LOCRA_VLM);
     const persisted = readPersistedModelId();
+    // Locra V1 has a single model (Qwen). There is no picker: default the selection
+    // to the active V1 model so onboarding goes straight to intro/download.
     set({
       bootstrapped: true,
       developerOverrideId: override?.id ?? null,
-      selectedModelId: override?.id ?? persisted,
+      selectedModelId: override?.id ?? persisted ?? ACTIVE_V1_MODEL_ID,
       pendingModelId: null,
     });
   },

@@ -40,12 +40,12 @@ import {
   getResponseLimitWarning,
 } from '../../../src/inference/GenerationLimits';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
+import type { InferenceEngineHandle } from '../../../src/inference/InferenceEngineHandle';
 import {
   InferenceQueue,
   type EngineGenerateRequest,
   type InferenceEngineAdapter,
 } from '../../../src/inference/InferenceQueue';
-import type { InferenceEngineHandle } from '../../../src/inference/useInferenceEngine';
 import { useInferenceStore } from '../../../src/store/inferenceStore';
 import type { InferenceRequest, QASession } from '../../../src/types/models';
 
@@ -237,7 +237,7 @@ describe('multi-turn follow-up exchanges', () => {
 
   it('uses stateless generate with Locra-owned canonical context', () => {
     const source = readFileSync(
-      join(process.cwd(), 'src/inference/useInferenceEngine.ts'),
+      join(process.cwd(), 'src/inference/llamaRn/QwenLlamaRuntime.ts'),
       'utf8'
     );
     const navigatorSource = readFileSync(
@@ -245,14 +245,12 @@ describe('multi-turn follow-up exchanges', () => {
       'utf8'
     );
 
-    expect(source).toContain('messageHistory');
-    expect(source).toContain('generate(messages');
+    // The Qwen runtime sends the full supplied context on every generate and
+    // keeps no hidden native conversation history.
+    expect(source).toContain('convertToQwenMessages');
+    expect(source).toContain('supplies the FULL authoritative message context');
     expect(source).not.toContain('SlidingWindowContextStrategy');
-    expect(source).not.toMatch(/sendMessage\(/);
-    expect(countMatches(source, /\buseLLM\(/g)).toBe(1);
     expect(countMatches(navigatorSource, /<InferenceEngineHost\b/g)).toBe(1);
-    expect(navigatorSource).toContain('pendingModelId === null');
-    expect(navigatorSource).toContain('model={selectedModel}');
   });
 
   it('does not wait for runtime message history before completing and sending turn 2', async () => {

@@ -10,8 +10,8 @@ jest.mock('expo-image-manipulator', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import { createCanonicalConversationContext } from '../../../src/inference/ContextBuilder';
+import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import { InferenceMetricsRecorder } from '../../../src/inference/InferenceMetrics';
 import {

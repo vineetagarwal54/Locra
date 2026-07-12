@@ -7,8 +7,8 @@ jest.mock('expo-image-manipulator', () => ({
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
 import { createCanonicalConversationContext } from '../../src/inference/ContextBuilder';
+import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
 import {
   InferenceQueue,
   type InferenceEngineAdapter,

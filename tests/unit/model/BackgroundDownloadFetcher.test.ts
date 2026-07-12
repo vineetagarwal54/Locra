@@ -64,10 +64,10 @@ function fakeTask(
   return task;
 }
 
-const MODEL_URL = 'https://example.test/vl_1_6b/model.pte';
+const MODEL_URL = 'https://example.test/vl_1_6b/model.gguf';
 const TOKENIZER_URL = 'https://example.test/tokenizer.json';
-const MODEL_DEST = '/data/user/0/com.locra.app/files/react-native-executorch/example.test_vl_1_6b_model.pte';
-const TOKENIZER_DEST = '/data/user/0/com.locra.app/files/react-native-executorch/example.test_tokenizer.json';
+const MODEL_DEST = '/data/user/0/com.locra.app/files/models/example.test_vl_1_6b_model.gguf';
+const TOKENIZER_DEST = '/data/user/0/com.locra.app/files/models/example.test_tokenizer.json';
 
 function destFor(url: string): string {
   if (url === MODEL_URL) return MODEL_DEST;
@@ -98,7 +98,7 @@ function makeHarness(overrides: Partial<BackgroundDownloadFetcherDeps> = {}) {
 }
 
 describe('BackgroundDownloadFetcher', () => {
-  it('downloads a not-yet-present file to executorch\'s destination and reports wasDownloaded', async () => {
+  it('downloads a not-yet-present file to the model destination and reports wasDownloaded', async () => {
     const { fetcher, tasks, createDownloadTask } = makeHarness();
     const progress: number[] = [];
 
@@ -107,7 +107,7 @@ describe('BackgroundDownloadFetcher', () => {
     const task = tasks.get(MODEL_URL);
     if (!task) throw new Error('task not created');
 
-    // kesha wrote the file to exactly the path executorch will look for.
+    // kesha wrote the file to exactly the path the runtime will look for.
     expect(createDownloadTask).toHaveBeenCalledWith(
       expect.objectContaining({ url: MODEL_URL, destination: MODEL_DEST }),
     );
@@ -228,7 +228,7 @@ describe('BackgroundDownloadFetcher', () => {
     expect(deleteFileIfExists).toHaveBeenCalledWith(TOKENIZER_DEST);
   });
 
-  it('listDownloadedModels returns only .pte files', async () => {
+  it('listDownloadedModels returns only .gguf files', async () => {
     const listDownloadedFiles = jest.fn(async () => [MODEL_DEST, TOKENIZER_DEST]);
     const { fetcher } = makeHarness({ listDownloadedFiles });
 
@@ -236,7 +236,7 @@ describe('BackgroundDownloadFetcher', () => {
   });
 
   it('reattaches an existing native task by destination id without starting a new task', async () => {
-    const existingTask = fakeTask('example.test_vl_1_6b_model.pte', 'DOWNLOADING', 25, 100, MODEL_DEST);
+    const existingTask = fakeTask('example.test_vl_1_6b_model.gguf', 'DOWNLOADING', 25, 100, MODEL_DEST);
     const getExistingDownloadTasks = jest.fn(async () => [existingTask]);
     const { fetcher, createDownloadTask } = makeHarness({ getExistingDownloadTasks });
     const progress: number[] = [];
@@ -260,7 +260,7 @@ describe('BackgroundDownloadFetcher', () => {
   });
 
   it('reattaches a paused native task so pause/resume/cancel controls can target it', async () => {
-    const existingTask = fakeTask('example.test_vl_1_6b_model.pte', 'PAUSED', 10, 100, MODEL_DEST);
+    const existingTask = fakeTask('example.test_vl_1_6b_model.gguf', 'PAUSED', 10, 100, MODEL_DEST);
     const getExistingDownloadTasks = jest.fn(async () => [existingTask]);
     const { fetcher } = makeHarness({ getExistingDownloadTasks });
 

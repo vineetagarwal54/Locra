@@ -1,25 +1,10 @@
-import { useEffect } from 'react';
-
-import { useInferenceEngine } from '../inference/useInferenceEngine';
-import type { ModelCandidate } from '../model/ActiveModel';
-import { useInferenceStore } from '../store/inferenceStore';
+import { QwenInferenceEngineHost } from './QwenInferenceEngineHost';
 
 /**
- * Mounts the one sanctioned ExecuTorch hook host and registers its plain handle
- * with the inference store. Screens drive inference through the store only.
+ * Mounts the sole Locra V1 inference host. Qwen through llama.rn is the only
+ * runtime; the host resolves its own artifact paths and registers a
+ * runtime-neutral handle. There is no runtime picker or in-process switching.
  */
-interface InferenceEngineHostProps {
-  model: ModelCandidate;
-}
-
-export function InferenceEngineHost({ model }: InferenceEngineHostProps) {
-  const registerEngine = useInferenceStore((s) => s.registerEngine);
-  const engine = useInferenceEngine(model);
-
-  useEffect(() => {
-    registerEngine(engine);
-    return () => registerEngine(null);
-  }, [engine, registerEngine]);
-
-  return null;
+export function InferenceEngineHost() {
+  return <QwenInferenceEngineHost />;
 }

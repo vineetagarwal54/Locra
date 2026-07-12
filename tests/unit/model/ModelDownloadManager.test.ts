@@ -92,12 +92,13 @@ function makeHarness() {
 }
 
 describe('ModelDownloadManager', () => {
-  it('receives model sources derived from the selected model at the composition root', () => {
+  it('wires the Qwen artifact bundle sources at the composition root', () => {
     const source = readFileSync(join(process.cwd(), 'src/store/modelStore.ts'), 'utf8');
 
-    expect(source).toContain('model.modelConstant.modelSource');
-    expect(source).toContain('model.modelConstant.tokenizerSource');
-    expect(source).toContain('model.modelConstant.tokenizerConfigSource');
+    expect(source).toContain('QWEN3_VL_2B_INSTRUCT_BUNDLE');
+    expect(source).toContain('artifact.sourceUri');
+    // ExecuTorch model-constant wiring is fully removed.
+    expect(source).not.toContain('modelConstant');
   });
 
   it('resolves to downloaded with a true integrity check on success', async () => {

@@ -65,8 +65,8 @@ jest.mock('expo-image-manipulator', () => ({
 
 import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
 import type { ModelRequestMessage } from '../../src/inference/ContextBuilder';
+import type { InferenceEngineHandle } from '../../src/inference/InferenceEngineHandle';
 import type { HiddenVisualEvidence } from '../../src/inference/OutputPipelineTypes';
-import type { InferenceEngineHandle } from '../../src/inference/useInferenceEngine';
 import { useHistoryStore } from '../../src/store/historyStore';
 import { useInferenceStore } from '../../src/store/inferenceStore';
 

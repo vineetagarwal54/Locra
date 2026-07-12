@@ -28,17 +28,22 @@ describe('persisted runtime model selection', () => {
     process.env.EXPO_PUBLIC_LOCRA_VLM = originalOverride;
   });
 
-  it('persists the user choice and restores it during bootstrap', () => {
+  it('persists the selected model and restores it during bootstrap', () => {
     useModelSelectionStore.getState().bootstrap();
-    useModelSelectionStore.getState().selectInitialModel('GEMMA4_E2B_MM');
+    useModelSelectionStore.getState().selectInitialModel('QWEN3_VL_2B_INSTRUCT_Q4_K_M');
     useModelSelectionStore.setState({ selectedModelId: null, bootstrapped: false });
 
     useModelSelectionStore.getState().bootstrap();
 
-    expect(useModelSelectionStore.getState().selectedModelId).toBe('GEMMA4_E2B_MM');
+    expect(useModelSelectionStore.getState().selectedModelId).toBe('QWEN3_VL_2B_INSTRUCT_Q4_K_M');
   });
 
-  it('routes completed onboarding without a selection to model selection', () => {
+  it('defaults the single V1 model selection during bootstrap (no picker)', () => {
+    useModelSelectionStore.getState().bootstrap();
+    expect(useModelSelectionStore.getState().selectedModelId).toBe('QWEN3_VL_2B_INSTRUCT_Q4_K_M');
+  });
+
+  it('still routes a null selection to model selection at the routing layer', () => {
     expect(resolveLaunchRoute({
       welcomeCompleted: true,
       selectedModelId: null,

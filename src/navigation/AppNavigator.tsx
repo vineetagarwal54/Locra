@@ -13,7 +13,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
-import { VoiceTranscriptionHost } from '../components/VoiceTranscriptionHost';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -32,7 +31,6 @@ import { getSelectedModel, useModelSelectionStore } from '../store/modelSelectio
 import { useModelStore } from '../store/modelStore';
 import { commitRequestedModelSwitch } from '../store/modelSwitchCoordinator';
 import { hasCompletedWelcome } from '../store/onboardingStore';
-import { useVoiceStore } from '../store/voiceStore';
 
 import { ConversationDrawer } from './ConversationDrawer';
 import { resolveLaunchRoute } from './LaunchRouting';
@@ -148,9 +146,6 @@ export function AppNavigator() {
   const engineReady = useModelStore(
     (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
   );
-  // FR-033: the voice host mounts lazily, only once the user activates voice, so
-  // the Whisper model is never downloaded for users who never dictate.
-  const voiceEnabled = useVoiceStore((s) => s.enabled);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -239,9 +234,8 @@ export function AppNavigator() {
     <GestureHandlerRootView style={styles.root}>
       <NavigationContainer ref={navigationRef}>
         {engineReady && selectedModel !== null && pendingModelId === null ? (
-          <InferenceEngineHost key={selectedModelId} model={selectedModel} />
+          <InferenceEngineHost key={selectedModelId} />
         ) : null}
-        {voiceEnabled ? <VoiceTranscriptionHost /> : null}
         <Drawer.Navigator
           screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}
           drawerContent={(props) => <ConversationDrawer {...props} />}
