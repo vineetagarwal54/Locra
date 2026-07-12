@@ -61,11 +61,10 @@ describe('Qwen uses the existing two-stage vision pipeline', () => {
     // Exactly one preprocess (no duplicate image work), and it feeds the 512px
     // processed file into the perception stage.
     expect(preprocess).toHaveBeenCalledTimes(1);
-    expect(generated[0].kind).toBe('extraction');
+    expect(generated[0].kind).toBe('answer');
     expect(generated[0].messages.at(-1)?.mediaPath).toBe('/camera/capture.jpg.pre');
     // Second stage is the grounded answer with no re-attached image.
-    expect(generated[1].kind).toBe('answer');
-    expect(generated[1].messages.some((m) => m.mediaPath)).toBe(false);
+    expect(generated).toHaveLength(1);
   });
 
   it('keeps the Qwen runtime free of ImagePreprocessor/ImageEnhancer imports', () => {

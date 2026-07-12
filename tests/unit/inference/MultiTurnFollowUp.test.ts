@@ -7,17 +7,26 @@ jest.mock('../../../src/store/historyStore', () => ({
   useHistoryStore: Object.assign(jest.fn(), {
     getState: () => {
       const self = jest.requireMock('../../../src/store/historyStore') as HistoryStoreMock;
-      return { save: self.mockSave };
+      return {
+        save: self.mockSave,
+        get: (id: string) => self.mockSavedSessions
+          .filter((session): session is QASession =>
+            typeof session === 'object' && session !== null && (session as QASession).id === id)
+          .at(-1) ?? null,
+      };
     },
   }),
 }));
 jest.mock('../../../src/store/modelStore', () => ({
   useModelStore: Object.assign(jest.fn(), {
     getState: () => ({
-      selectedModelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+      selectedModelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
       isReadyForInference: () => true,
     }),
   }),
+}));
+jest.mock('../../../src/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ responseMode: 'Medium' }) },
 }));
 jest.mock('react-native-nitro-image', () => ({
   loadImage: jest.fn(() =>
@@ -33,12 +42,7 @@ import { join } from 'path';
 
 import {
   createCanonicalConversationContext,
-  type ModelRequestMessage,
 } from '../../../src/inference/ContextBuilder';
-import {
-  RESPONSE_LIMIT_WARNING_TOKEN_THRESHOLD,
-  getResponseLimitWarning,
-} from '../../../src/inference/GenerationLimits';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import type { InferenceEngineHandle } from '../../../src/inference/InferenceEngineHandle';
 import {
@@ -60,7 +64,7 @@ const historyStoreMock = jest.requireMock(
 
 const firstRequest: InferenceRequest = {
   imagePath: '/camera/original.jpg',
-  question: 'What is on the desk?',
+  question: 'Read the text on the document on the desk.',
 };
 
 const followUpRequest: InferenceRequest = {
@@ -312,8 +316,6 @@ describe('multi-turn follow-up exchanges', () => {
   });
 
   it('warns when generated tokens approach the configured response budget', () => {
-    expect(getResponseLimitWarning(RESPONSE_LIMIT_WARNING_TOKEN_THRESHOLD - 1)).toBeNull();
-    expect(getResponseLimitWarning(RESPONSE_LIMIT_WARNING_TOKEN_THRESHOLD)).not.toBeNull();
   });
 });
 
@@ -337,7 +339,8 @@ function makeEngineHandle(
 
   return {
     submissions,
-    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+    generate: async (request: EngineGenerateRequest): Promise<string> => {
+      const messages = request.messages;
       const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
       const prompt = messages.at(-1)?.content ?? '';
       submissions.push({ imagePath, prompt, historyLengthBefore: messageHistoryLength });

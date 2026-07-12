@@ -5,7 +5,6 @@ import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   GENERATION_CONFIG_IDS,
-  OUTPUT_TOKEN_BUDGET,
   PIPELINE_VARIANT_IDS,
 } from '../../../src/inference/GenerationTuning';
 import { LOCRA_SYSTEM_PROMPT } from '../../../src/inference/SystemPrompt';
@@ -33,20 +32,15 @@ describe('generation tuning', () => {
 
   it('keeps stable generation and pipeline identifiers for reporting', () => {
     expect(GENERATION_CONFIG_IDS).toEqual([
-      'lfm2-vl-preset',
-      'recommended-lfm2-vl-v1',
+      'qwen3-vl-2b-instruct-v1',
     ]);
     expect(PIPELINE_VARIANT_IDS).toEqual([
       'baseline-current',
       'recommended-sampling-v1',
       'two-stage-v1',
     ]);
-    expect(CURRENT_GENERATION_CONFIG_ID).toBe('recommended-lfm2-vl-v1');
+    expect(CURRENT_GENERATION_CONFIG_ID).toBe('qwen3-vl-2b-instruct-v1');
     expect(CURRENT_PIPELINE_VARIANT_ID).toBe('recommended-sampling-v1');
-  });
-
-  it('keeps the app-level output token budget', () => {
-    expect(OUTPUT_TOKEN_BUDGET).toBeGreaterThan(256);
   });
 
   it('uses a short positive-first persistent system prompt', () => {

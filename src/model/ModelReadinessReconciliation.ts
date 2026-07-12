@@ -8,8 +8,6 @@
 //      internally selected/active runtime; existing LFM users under the
 //      ExecuTorch host are never pushed toward a Qwen download.
 
-import type { StartupRuntimeHost } from '../types/runtime';
-
 import {
   isBundleReady,
   type ArtifactReadiness,
@@ -26,7 +24,6 @@ export interface QwenReadinessInput {
    * make explicit that it is IGNORED — an old LFM flag can never establish Qwen
    * readiness.
    */
-  readonly legacyLfmDownloaded?: boolean;
 }
 
 /**
@@ -41,7 +38,6 @@ export function isQwenBundleReady(input: QwenReadinessInput): boolean {
 }
 
 export interface QwenDownloadRoutingInput {
-  readonly startupHost: StartupRuntimeHost;
   readonly qwenReady: boolean;
 }
 
@@ -51,5 +47,5 @@ export interface QwenDownloadRoutingInput {
  * LFM users are never routed to a Qwen download.
  */
 export function shouldRouteToQwenDownload(input: QwenDownloadRoutingInput): boolean {
-  return input.startupHost === 'qwen-llamarn' && !input.qwenReady;
+  return !input.qwenReady;
 }

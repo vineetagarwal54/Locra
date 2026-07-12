@@ -433,7 +433,10 @@ function turnToSummaryEntry(turn: ConversationTurn): ContextSummaryEntry {
 }
 
 function turnToFacts(turn: ConversationTurn): ContextMemoryFact[] {
-  return splitUserMemoryCandidates(turn.question)
+  const sourceText = turn.answer !== null && isUsableDerivedMemoryAnswer(turn.answer)
+    ? `${turn.question} ${turn.answer}`
+    : turn.question;
+  return splitUserMemoryCandidates(sourceText)
     .slice(0, 3)
     .map((text, index) => ({
       version: 'context-memory-fact-v1',
@@ -500,7 +503,8 @@ function selectMediaEvidenceWithinBudget(
     candidates: ranked.map(
       (candidate) =>
         diagnosticsById.get(candidate.stableId) ??
-        toCandidateDiagnostic(candidate, formatMediaEvidence, false, 'relevance'),
+        toCandidateDiagnostic(candidate, formatMediaEvidence, false,
+          selection.items.length >= maximumItems ? 'item-cap' : 'relevance'),
     ),
   };
 }

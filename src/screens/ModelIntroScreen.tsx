@@ -10,9 +10,8 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens } from '../constants/theme';
-import { createModelPresentation } from '../model/ModelPresentation';
+import { createQwenModelPresentation } from '../model/ModelPresentation';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { getSelectedModel } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ModelIntro'>;
@@ -25,11 +24,7 @@ interface MetadataRow {
 }
 
 export function ModelIntroScreen({ navigation }: Props) {
-  const selectedModel = getSelectedModel();
-  if (selectedModel === null) {
-    throw new Error('Model setup requires a selected model.');
-  }
-  const presentation = createModelPresentation(selectedModel);
+  const presentation = createQwenModelPresentation();
   const checkDeviceCompatibility = useModelStore((s) => s.checkDeviceCompatibility);
   const compatibility = useMemo(() => checkDeviceCompatibility(), [checkDeviceCompatibility]);
 

@@ -16,10 +16,9 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens } from '../constants/theme';
-import { createModelPresentation } from '../model/ModelPresentation';
+import { createQwenModelPresentation } from '../model/ModelPresentation';
 import { getStorageAvailability, isStorageError } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { requireSelectedModel } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
 import type { ModelDownloadStatus } from '../types/models';
 
@@ -29,7 +28,7 @@ const PROGRESS_MIN_PERCENT = 2;
 const PROGRESS_ANIM_MS = 250;
 
 export function DownloadProgressScreen({ navigation, route }: Props) {
-  const presentation = createModelPresentation(requireSelectedModel());
+  const presentation = createQwenModelPresentation();
   const autoStart = route.params?.autoStart ?? false;
 
   const downloadStatus = useModelStore((s) => s.downloadStatus);

@@ -6,6 +6,18 @@ const EXTRACTION_SCHEMA = `{
   "uncertainty": ["brief note for unclear, partial, or unreadable visual evidence"]
 }`;
 
+const STRUCTURED_VISION_PATTERNS = [
+  /\b(ocr|transcribe|read|extract)\b.*\b(text|words?|numbers?|receipt|document|form)\b/i,
+  /\b(text|code|serial|tracking|words?|numbers?)\b.*\b(label|document|form|receipt|image)\b/i,
+  /\b(form|invoice|receipt|table|document)\b.*\b(fields?|values?|rows?|columns?|items?|total)\b/i,
+  /\b(json|csv|schema|structured|key[- ]value)\b/i,
+];
+
+export function requiresStructuredVision(question: string): boolean {
+  const normalized = question.trim();
+  return normalized !== '' && STRUCTURED_VISION_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 export function buildStructuredExtractionPrompt(userQuestion: string): string {
   return [
     'This is a one-time perception pass over the attached image. For THIS step only,',

@@ -13,6 +13,8 @@
 // generation is a fresh stateless completion over the supplied messages.
 
 import type { ModelRequestMessage } from '../ContextBuilder';
+import { trimMessagesToContext } from '../ContextWindow';
+import { getResponseTokenBudget, type ResponseMode } from '../ResponseMode';
 
 import {
   convertToQwenMessages,
@@ -22,7 +24,6 @@ import {
 import {
   buildQwenInitLlamaParams,
   buildQwenInitMultimodalParams,
-  resolveNPredict,
   QWEN_RUNTIME_CONFIG,
   type QwenInitLlamaParams,
   type QwenRuntimeConfig,
@@ -98,7 +99,7 @@ export interface QwenGenerateRequest {
   messages: ModelRequestMessage[];
   signal: AbortSignal;
   onToken: (cumulativeText: string, generatedTokenCount?: number) => void;
-  nPredict?: number;
+  responseMode: ResponseMode;
 }
 
 export interface QwenGenerateResult {
@@ -163,6 +164,7 @@ export class QwenLlamaRuntime {
   private loadedProjectorPath: string | null = null;
   private multimodalEnabled = false;
   private multimodalVision = false;
+  private projectorError: string | null = null;
   private error: string | null = null;
   private loadPromise: Promise<void> | null = null;
   private cancelRequested = false;
@@ -243,17 +245,12 @@ export class QwenLlamaRuntime {
       this.multimodalEnabled = enabled;
       this.multimodalVision = support.vision;
     } catch (error) {
-      // A failed projector init must not leave a half-initialized context.
+      // The language context remains usable for text-only inference. Vision
+      // requests receive the projector error below and can retry after repair.
       await safe(() => context.releaseMultimodal());
-      await safe(() => context.release());
-      this.context = null;
-      this.loadedModelPath = null;
-      this.loadedProjectorPath = null;
       this.multimodalEnabled = false;
       this.multimodalVision = false;
-      this.status = 'errored';
-      this.error = toMessage(error);
-      throw new QwenProjectorInitError(toMessage(error));
+      this.projectorError = toMessage(error);
     }
 
     this.context = context;
@@ -267,13 +264,17 @@ export class QwenLlamaRuntime {
     if (context === null || this.status !== 'loaded') {
       throw new QwenNotLoadedError();
     }
-    if (!this.isMultimodalVisionReady()) {
-      throw new QwenNotLoadedError('Multimodal vision support is not confirmed.');
+    const requiresVision = request.messages.some((message) => message.mediaPath !== undefined);
+    if (requiresVision && !this.isMultimodalVisionReady()) {
+      throw new QwenProjectorInitError(
+        this.projectorError ?? 'Multimodal vision support is not confirmed.',
+      );
     }
 
     // Convert BEFORE flipping to 'generating' so an unreadable image leaves the
     // runtime cleanly 'loaded'. Only the supplied messages are used.
-    const messages = convertToQwenMessages(request.messages, {
+    const boundedMessages = trimMessagesToContext(request.messages, request.responseMode);
+    const messages = convertToQwenMessages(boundedMessages, {
       isReadableFile: this.deps.isReadableFile,
     });
 
@@ -298,7 +299,7 @@ export class QwenLlamaRuntime {
       const result = await context.completion(
         {
           messages,
-          n_predict: resolveNPredict(request.nPredict, this.config),
+          n_predict: getResponseTokenBudget(request.responseMode),
           temperature: this.config.temperature,
         },
         (data) => {
@@ -362,6 +363,7 @@ export class QwenLlamaRuntime {
     this.loadedProjectorPath = null;
     this.multimodalEnabled = false;
     this.multimodalVision = false;
+    this.projectorError = null;
     this.error = null;
     this.status = 'unloaded';
   }

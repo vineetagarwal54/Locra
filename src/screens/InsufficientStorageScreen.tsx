@@ -17,10 +17,9 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens, haptics } from '../constants/theme';
-import { createModelPresentation, formatGigabytes } from '../model/ModelPresentation';
+import { createQwenModelPresentation, formatGigabytes } from '../model/ModelPresentation';
 import { getStorageAvailability, type StorageAvailability } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { requireSelectedModel } from '../store/modelSelectionStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'InsufficientStorage'>;
 
@@ -37,7 +36,7 @@ function bytesLabel(bytes: number | null): string {
 }
 
 export function InsufficientStorageScreen({ navigation }: Props) {
-  const requiredBytes = createModelPresentation(requireSelectedModel()).storageRequiredBytes;
+  const requiredBytes = createQwenModelPresentation().storageRequiredBytes;
   const reduceMotion = useReducedMotion();
   const [availability, setAvailability] = useState<StorageAvailability | null>(null);
   const [checking, setChecking] = useState(false);

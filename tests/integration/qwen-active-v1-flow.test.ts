@@ -75,7 +75,7 @@ describe('Qwen active V1 runtime flow', () => {
     );
     expect(queue.getState().status).toBe('completed');
     expect(queue.getState().response).toContain('terracotta');
-    expect(generated.map((r) => r.kind)).toEqual(['extraction', 'answer', 'chat']);
+    expect(generated.map((r) => r.kind)).toEqual(['answer', 'chat']);
   });
 
   it('cancels an in-flight generation and returns to idle', async () => {

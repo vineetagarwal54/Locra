@@ -28,7 +28,7 @@ describe('runtime-neutral inference contracts', () => {
     await adapter.loadModel();
     await adapter.loadModel();
     const result = await adapter.generate(
-      { messages, kind: 'chat' },
+      { messages, kind: 'chat', responseMode: 'Medium' },
       (text) => streamed.push(text),
       controller.signal,
     );
@@ -68,4 +68,3 @@ describe('runtime-neutral inference contracts', () => {
     expect(clearHistory).toHaveBeenCalledTimes(1);
   });
 });
-

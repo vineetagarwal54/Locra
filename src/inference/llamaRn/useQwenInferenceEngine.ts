@@ -1,8 +1,7 @@
 import { File } from 'expo-file-system';
 import { useEffect, useRef } from 'react';
 
-import type { ModelRequestMessage } from '../ContextBuilder';
-import type { InferenceEngineHandle } from '../InferenceEngineHandle';
+import type { EngineGenerateRequest, InferenceEngineHandle } from '../InferenceEngineHandle';
 
 import { QwenLlamaRuntime, type LlamaBinding } from './QwenLlamaRuntime';
 
@@ -87,7 +86,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
   const handleRef = useRef<InferenceEngineHandle | null>(null);
   if (handleRef.current === null) {
     handleRef.current = {
-      generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+      generate: async (request: EngineGenerateRequest): Promise<string> => {
         const runtime = runtimeRef.current;
         if (runtime === null) {
           throw new Error('The Qwen runtime is not available.');
@@ -97,7 +96,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
         setState({ response: '', generating: true, error: null, generatedTokens: 0 });
         try {
           const result = await runtime.generate({
-            messages,
+            messages: request.messages,
+            responseMode: request.responseMode,
             signal: controller.signal,
             onToken: (cumulativeText, generatedTokenCount) => {
               setState({

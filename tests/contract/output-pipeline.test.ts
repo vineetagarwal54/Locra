@@ -56,13 +56,13 @@ function makeQueue(overrides: Partial<InferenceQueueDeps> = {}): InferenceQueue 
 }
 
 describe('output pipeline contract', () => {
-  it('first image turns use hidden extraction before a separate visible answer request', async () => {
+  it('normal image questions use one direct vision request', async () => {
     const seenRequests: unknown[] = [];
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
       generate: (generateRequest, onToken) => {
         seenRequests.push(generateRequest);
-        const response = seenRequests.length === 1 ? extractionJson : 'A direct answer.';
+        const response = 'A direct answer.';
         onToken(response, 4);
         return Promise.resolve({ response, tokenCount: 4 });
       },
@@ -72,8 +72,9 @@ describe('output pipeline contract', () => {
     await queue.submit(request);
 
     expect(seenRequests[0]).toMatchObject({
-      kind: 'extraction',
+      kind: 'answer',
       originalQuestion: request.question,
+      responseMode: 'Medium',
     });
     expect(seenRequests[0]).toHaveProperty(
       'messages',
@@ -84,19 +85,7 @@ describe('output pipeline contract', () => {
         }),
       ])
     );
-    expect(seenRequests[1]).toMatchObject({
-      kind: 'answer',
-      originalQuestion: request.question,
-    });
-    expect(seenRequests[1]).toHaveProperty(
-      'messages',
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: 'user',
-          content: expect.stringContaining('Image evidence: worn cooking pan'),
-        }),
-      ])
-    );
+    expect(seenRequests).toHaveLength(1);
   });
 
   it('active follow-ups send explicit bounded canonical messages through the runtime path', async () => {
@@ -122,7 +111,7 @@ describe('output pipeline contract', () => {
     });
 
     expect(preprocessSpy).not.toHaveBeenCalled();
-    expect(loadModel).not.toHaveBeenCalled();
+    expect(loadModel).toHaveBeenCalledTimes(1);
     expect(generate).toHaveBeenCalledWith(
       {
         messages: [
@@ -139,6 +128,7 @@ describe('output pipeline contract', () => {
         ],
         kind: 'chat',
         originalQuestion: request.question,
+        responseMode: 'Medium',
       },
       expect.any(Function),
       expect.any(AbortSignal),
@@ -149,7 +139,7 @@ describe('output pipeline contract', () => {
     const resumedRequest: UserFacingAnswerRequest = {
       question: 'What about the handle?',
       conversationMode: 'resumeReconstruction',
-      generationConfigId: 'lfm2-vl-preset',
+      generationConfigId: 'qwen3-vl-2b-instruct-v1',
       pipelineVariantId: 'baseline-current',
     };
 

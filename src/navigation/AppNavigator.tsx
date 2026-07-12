@@ -21,15 +21,12 @@ import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { InsufficientStorageScreen } from '../screens/InsufficientStorageScreen';
 import { ModelIntroScreen } from '../screens/ModelIntroScreen';
-import { ModelSelectionScreen } from '../screens/ModelSelectionScreen';
 import { NotificationRationaleScreen } from '../screens/NotificationRationaleScreen';
 import { PrivacyScreen } from '../screens/PrivacyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
-import { getSelectedModel, useModelSelectionStore } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
-import { commitRequestedModelSwitch } from '../store/modelSwitchCoordinator';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 
 import { ConversationDrawer } from './ConversationDrawer';
@@ -38,7 +35,6 @@ import { resolveLaunchRoute } from './LaunchRouting';
 export type RootStackParamList = {
   Welcome: undefined;
   Privacy: undefined;
-  ModelSelection: undefined;
   ModelIntro: undefined;
   NotificationRationale: undefined;
   DownloadProgress: { autoStart?: boolean } | undefined;
@@ -63,7 +59,6 @@ const Drawer = createDrawerNavigator<RootDrawerParamList>();
 // degrades to a legible fallback instead of taking down the app.
 const Welcome = withErrorBoundary(WelcomeScreen);
 const Privacy = withErrorBoundary(PrivacyScreen);
-const ModelSelection = withErrorBoundary(ModelSelectionScreen);
 const ModelIntro = withErrorBoundary(ModelIntroScreen);
 const NotificationRationale = withErrorBoundary(NotificationRationaleScreen);
 const DownloadProgress = withErrorBoundary(DownloadProgressScreen);
@@ -79,8 +74,7 @@ const Settings = withErrorBoundary(SettingsScreen);
 // Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
 // screen_map.md Welcome → Privacy → Model Setup → …):
 //   1. Never onboarded            → Welcome (starts the setup progression)
-//   2. Onboarded, no selection    → ModelSelection
-//   3. Onboarded, download live   → DownloadProgress (a reattached background
+//   2. Onboarded, download live   → DownloadProgress (a reattached background
 //                                    download resumes from persisted state)
 //   4. Onboarded, model not ready → ModelIntro (download / re-download)
 //   5. Onboarded, model ready     → Chat (new conversation)
@@ -89,8 +83,7 @@ function resolveInitialRoute(): keyof RootStackParamList {
   const modelState = useModelStore.getState();
   return resolveLaunchRoute({
     welcomeCompleted: hasCompletedWelcome(),
-    selectedModelId: useModelSelectionStore.getState().selectedModelId,
-    modelReady: modelState.isReadyForInference(),
+    modelReady: modelState.isReadyForTextInference(),
     downloadStatus: modelState.downloadStatus,
   });
 }
@@ -108,7 +101,7 @@ function foregroundDownloadRoute(): 'DownloadProgress' | null {
     return null;
   }
   const modelState = useModelStore.getState();
-  if (modelState.isReadyForInference()) {
+  if (modelState.isReadyForTextInference()) {
     return null;
   }
   const status = modelState.downloadStatus;
@@ -123,7 +116,6 @@ function RootStack() {
     <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Welcome" component={Welcome} />
       <Stack.Screen name="Privacy" component={Privacy} />
-      <Stack.Screen name="ModelSelection" component={ModelSelection} />
       <Stack.Screen name="ModelIntro" component={ModelIntro} />
       <Stack.Screen name="NotificationRationale" component={NotificationRationale} />
       <Stack.Screen name="DownloadProgress" component={DownloadProgress} />
@@ -140,11 +132,8 @@ function RootStack() {
 }
 
 export function AppNavigator() {
-  const selectedModelId = useModelSelectionStore((state) => state.selectedModelId);
-  const pendingModelId = useModelSelectionStore((state) => state.pendingModelId);
-  const selectedModel = getSelectedModel();
   const engineReady = useModelStore(
-    (s) => s.downloadStatus === 'downloaded' && s.integrityVerified
+    (s) => s.isReadyForTextInference()
   );
 
   // Reattach native background downloads before filesystem reconciliation, so
@@ -155,13 +144,8 @@ export function AppNavigator() {
   useEffect(() => {
     let active = true;
     async function bootstrapModelState(): Promise<void> {
-      useModelSelectionStore.getState().bootstrap();
-      const model = getSelectedModel();
-      if (model === null) {
-        return;
-      }
       const modelStore = useModelStore.getState();
-      modelStore.initialize(model);
+      modelStore.initializeQwenBundle();
       const reattached = await modelStore.reattachExistingDownload();
       if (!reattached) {
         await modelStore.reconcile();
@@ -202,26 +186,6 @@ export function AppNavigator() {
     return () => subscription.remove();
   }, [navigationRef]);
 
-  useEffect(() => {
-    if (pendingModelId === null) {
-      return;
-    }
-    void commitRequestedModelSwitch().then((ready) => {
-      if (ready === null || !navigationRef.isReady()) {
-        return;
-      }
-      navigationRef.navigate('Root', {
-        screen: ready ? 'Success' : 'ModelIntro',
-      });
-    }).catch(() => {
-      useModelSelectionStore.getState().cancelModelSwitch();
-      const previousModel = getSelectedModel();
-      if (previousModel !== null) {
-        useModelStore.getState().initialize(previousModel);
-      }
-    });
-  }, [navigationRef, pendingModelId]);
-
   if (!bootstrapped) {
     return (
       <ErrorBoundary>
@@ -233,9 +197,7 @@ export function AppNavigator() {
   return (
     <GestureHandlerRootView style={styles.root}>
       <NavigationContainer ref={navigationRef}>
-        {engineReady && selectedModel !== null && pendingModelId === null ? (
-          <InferenceEngineHost key={selectedModelId} />
-        ) : null}
+        {engineReady ? <InferenceEngineHost /> : null}
         <Drawer.Navigator
           screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}
           drawerContent={(props) => <ConversationDrawer {...props} />}

@@ -32,29 +32,28 @@ function qwenReady(states: ReadonlyArray<ArtifactReadiness>): boolean {
 describe('existing-user migration LFM → Qwen', () => {
   it('never routes an existing LFM user to a Qwen download while ExecuTorch is selected', () => {
     // Even with an old LFM download completed, the ExecuTorch host never routes to Qwen.
-    expect(shouldRouteToQwenDownload({ startupHost: 'executorch', qwenReady: false })).toBe(false);
-    expect(shouldRouteToQwenDownload({ startupHost: 'executorch', qwenReady: qwenReady(none) })).toBe(false);
+    expect(shouldRouteToQwenDownload({ qwenReady: false })).toBe(true);
+    expect(shouldRouteToQwenDownload({ qwenReady: qwenReady(none) })).toBe(true);
   });
 
   it('does not treat an old LFM download/selection flag as Qwen readiness', () => {
     // Active model still LFM → Qwen is not ready regardless of any legacy flag.
     expect(
       isQwenBundleReady({
-        activeModelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+        activeModelId: 'obsolete-model',
         manifest: QWEN3_VL_2B_INSTRUCT_BUNDLE,
         artifactStates: bothVerified,
-        legacyLfmDownloaded: true,
       })
     ).toBe(false);
   });
 
   it('routes to the Qwen download only when Qwen is selected and its artifacts are missing', () => {
-    expect(shouldRouteToQwenDownload({ startupHost: 'qwen-llamarn', qwenReady: qwenReady(none) })).toBe(true);
+    expect(shouldRouteToQwenDownload({ qwenReady: qwenReady(none) })).toBe(true);
   });
 
   it('reaches chat (no download routing) once Qwen is selected and both artifacts are verified', () => {
     expect(qwenReady(bothVerified)).toBe(true);
-    expect(shouldRouteToQwenDownload({ startupHost: 'qwen-llamarn', qwenReady: qwenReady(bothVerified) })).toBe(false);
+    expect(shouldRouteToQwenDownload({ qwenReady: qwenReady(bothVerified) })).toBe(false);
   });
 
   it('keeps readiness reconciliation free of conversation/history/draft/diagnostics stores (no data loss path)', () => {

@@ -29,6 +29,9 @@ jest.mock('../../../src/store/modelStore', () => ({
     getState: () => ({ selectedModelId: null, isReadyForInference: () => true }),
   }),
 }));
+jest.mock('../../../src/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ responseMode: 'Medium' }) },
+}));
 jest.mock('react-native-nitro-image', () => ({
   loadImage: jest.fn(() => Promise.resolve({ width: 512, height: 384 })),
 }));
@@ -56,7 +59,8 @@ function makeQwenLikeHandle(finalText: string) {
   };
   const handle: InferenceEngineHandle & { lastMessages: ModelRequestMessage[] | null } = {
     lastMessages: null,
-    generate: async (messages) => {
+    generate: async (request) => {
+      const messages = request.messages;
       handle.lastMessages = messages;
       cancelled = false;
       response = '';

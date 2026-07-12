@@ -53,6 +53,9 @@ jest.mock('../../src/store/modelStore', () => ({
     getState: () => ({ isReadyForInference: () => true }),
   }),
 }));
+jest.mock('../../src/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ responseMode: 'Medium' }) },
+}));
 jest.mock('react-native-nitro-image', () => ({
   loadImage: jest.fn(() => Promise.resolve({ width: 512, height: 384 })),
 }));
@@ -65,7 +68,7 @@ jest.mock('expo-image-manipulator', () => ({
 
 import { buildAnswerPrompt } from '../../src/inference/AnswerPrompt';
 import type { ModelRequestMessage } from '../../src/inference/ContextBuilder';
-import type { InferenceEngineHandle } from '../../src/inference/InferenceEngineHandle';
+import type { EngineGenerateRequest, InferenceEngineHandle } from '../../src/inference/InferenceEngineHandle';
 import type { HiddenVisualEvidence } from '../../src/inference/OutputPipelineTypes';
 import { useHistoryStore } from '../../src/store/historyStore';
 import { useInferenceStore } from '../../src/store/inferenceStore';
@@ -94,7 +97,8 @@ function makeEngineHandle(): InferenceEngineHandle & {
   const handle = {
     submissions,
     clearHistoryCalls: 0,
-    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+    generate: async (request: EngineGenerateRequest): Promise<string> => {
+      const messages = request.messages;
       const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
       const prompt = messages.at(-1)?.content ?? '';
       submissions.push({ imagePath, prompt, messages });
@@ -136,7 +140,7 @@ describe('vision-once → multi-turn → resumed-thread flow (T096)', () => {
     store.registerEngine(engine);
 
     // ── Turn 1: capture → structured extraction with the image attached ──
-    await store.submit({ imagePath: IMAGE_PATH, question: 'What is this?' });
+    await store.submit({ imagePath: IMAGE_PATH, question: 'Read the text on this label.' });
 
     expect(engine.submissions[0].imagePath).not.toBeNull();
     expect(engine.submissions[0].prompt).toMatch(/subject\/object/i);

@@ -5,7 +5,7 @@ import type { ModelRequestMessage } from './ContextBuilder';
 /** Plain runtime handle registered by the selected React host. */
 export interface InferenceEngineHandle {
   /** Stateless model request. The caller supplies the full bounded context. */
-  generate(messages: ModelRequestMessage[]): Promise<string>;
+  generate(request: EngineGenerateRequest): Promise<string>;
   /** Interrupts the in-flight generation. */
   cancel(): void;
   /** Cumulative streamed response so far. */
@@ -32,6 +32,7 @@ export interface InferenceEngineHandle {
 
 export interface EngineGenerateRequest {
   messages: ModelRequestMessage[];
+  responseMode: import('./ResponseMode').ResponseMode;
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat';
   originalQuestion?: string;
 }
@@ -54,4 +55,3 @@ export interface InferenceEngineAdapter {
     signal: AbortSignal,
   ): Promise<EngineGenerateResult>;
 }
-

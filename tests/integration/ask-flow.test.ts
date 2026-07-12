@@ -114,25 +114,19 @@ describe('offline capture to answer integration flow', () => {
     expect(state.response).toBe(visibleAnswer);
     expect(generatedRequests[0]).toEqual(
       expect.objectContaining({
-        kind: 'extraction',
+        kind: 'answer',
         originalQuestion: capturedRequest.question,
+        responseMode: 'Medium',
       })
     );
     expect(generatedRequests[0].messages[1]).toEqual(
       expect.objectContaining({
         mediaPath: '/camera/raw-capture.jpg.preprocessed',
-        content: expect.stringMatching(/subject\/object/i),
+        content: capturedRequest.question,
       })
     );
     expect(generatedRequests[0].messages[1].content).toContain(capturedRequest.question);
-    expect(generatedRequests[1]).toEqual(
-      expect.objectContaining({
-        kind: 'answer',
-        originalQuestion: capturedRequest.question,
-      })
-    );
-    expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
-    expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: coffee mug');
+    expect(generatedRequests).toHaveLength(1);
 
     const conversation: Conversation = {
       id: 'completed-flow',
@@ -171,7 +165,7 @@ describe('offline capture to answer integration flow', () => {
 
     expect(history.list()).toEqual([conversation]);
     expect(conversation.messages[1]?.text).toBe(visibleAnswer);
-    expect(state.hiddenEvidence?.subjectObject).toBe('coffee mug');
+    expect(state.hiddenEvidence).toBeNull();
     expect('hiddenEvidence' in conversation).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrSpy).not.toHaveBeenCalled();

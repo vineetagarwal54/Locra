@@ -11,6 +11,11 @@ import {
   formatMediaEvidence,
   formatMemoryFact,
 } from './ContextOrchestrator';
+import {
+  DEFAULT_RESPONSE_MODE,
+  getResponseModeInstruction,
+  type ResponseMode,
+} from './ResponseMode';
 import { LOCRA_FOLLOW_UP_INSTRUCTION, LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
 export type ContextTurn = CanonicalContextTurn;
@@ -27,6 +32,7 @@ export interface ModelRequestMessage {
 export interface BuildCanonicalContextInput {
   conversationContext: CanonicalConversationContext;
   currentQuestion: string;
+  responseMode?: ResponseMode;
 }
 
 export interface BuildConversationContextInput {
@@ -46,7 +52,7 @@ export function buildCanonicalModelMessages(
   input: BuildCanonicalContextInput
 ): ModelRequestMessage[] {
   return [
-    answerSystemMessage(input.conversationContext),
+    answerSystemMessage(input.conversationContext, input.responseMode ?? DEFAULT_RESPONSE_MODE),
     ...input.conversationContext.recentTurns.flatMap(turnToMessages),
     userMessage(input.currentQuestion),
   ];
@@ -103,14 +109,29 @@ export function buildImageAnswerModelMessages(
     ),
   ).context;
   return [
-    answerSystemMessage(conversationContext),
+    answerSystemMessage(conversationContext, DEFAULT_RESPONSE_MODE),
     ...conversationContext.recentTurns.flatMap(turnToMessages),
     userMessage(input.answerPrompt),
   ];
 }
 
 export function buildSingleUserModelMessages(content: string): ModelRequestMessage[] {
-  return [systemMessage(LOCRA_SYSTEM_PROMPT), userMessage(content)];
+  return [
+    systemMessage(`${LOCRA_SYSTEM_PROMPT}\n\n${getResponseModeInstruction(DEFAULT_RESPONSE_MODE)}`),
+    userMessage(content),
+  ];
+}
+
+export function buildDirectImageModelMessages(
+  input: BuildCanonicalContextInput,
+  imagePath: string,
+): ModelRequestMessage[] {
+  const messages = buildCanonicalModelMessages(input);
+  const current = messages.at(-1);
+  if (current === undefined) {
+    throw new Error('The current image question is missing.');
+  }
+  return [...messages.slice(0, -1), { ...current, mediaPath: imagePath }];
 }
 
 export function buildPerceptionModelMessages(
@@ -176,9 +197,13 @@ function systemMessage(content: string): ModelRequestMessage {
   return { role: 'system', content };
 }
 
-function answerSystemMessage(context: CanonicalConversationContext): ModelRequestMessage {
+function answerSystemMessage(
+  context: CanonicalConversationContext,
+  responseMode: ResponseMode,
+): ModelRequestMessage {
+  const modeInstruction = getResponseModeInstruction(responseMode);
   if (!hasConversationContext(context)) {
-    return systemMessage(LOCRA_SYSTEM_PROMPT);
+    return systemMessage(`${LOCRA_SYSTEM_PROMPT}\n\n${modeInstruction}`);
   }
 
   const derivedMemory = formatDerivedMemory(context);
@@ -186,7 +211,7 @@ function answerSystemMessage(context: CanonicalConversationContext): ModelReques
     ? ''
     : `\n\nDerived conversation memory for reference only:\n${derivedMemory}`;
   return systemMessage(
-    `${LOCRA_SYSTEM_PROMPT}\n\n${LOCRA_FOLLOW_UP_INSTRUCTION}${memorySuffix}`,
+    `${LOCRA_SYSTEM_PROMPT}\n\n${modeInstruction}\n\n${LOCRA_FOLLOW_UP_INSTRUCTION}${memorySuffix}`,
   );
 }
 
@@ -218,7 +243,7 @@ function formatDerivedMemory(context: CanonicalConversationContext): string {
   }
   if (context.importantFacts.length > 0) {
     sections.push(
-      `Relevant user-provided details:\n${context.importantFacts
+      `Important prior facts and decisions:\n${context.importantFacts
         .map((fact) => `- ${formatMemoryFact(fact)}`)
         .join('\n')}`,
     );

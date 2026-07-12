@@ -11,7 +11,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import { createCanonicalConversationContext } from '../../../src/inference/ContextBuilder';
-import { OUTPUT_TOKEN_BUDGET } from '../../../src/inference/GenerationTuning';
 import type { PreprocessedImage } from '../../../src/inference/ImagePreprocessor';
 import { InferenceMetricsRecorder } from '../../../src/inference/InferenceMetrics';
 import {
@@ -20,6 +19,7 @@ import {
   type InferenceEngineAdapter,
   type InferenceQueueDeps,
 } from '../../../src/inference/InferenceQueue';
+import { getResponseTokenBudget } from '../../../src/inference/ResponseMode';
 import type {
   CanonicalConversationContext,
   InferenceRequest,
@@ -49,7 +49,10 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
   return { promise, resolve, reject };
 }
 
-const request: InferenceRequest = { imagePath: '/tmp/capture.jpg', question: 'What is this?' };
+const request: InferenceRequest = {
+  imagePath: '/tmp/capture.jpg',
+  question: 'Read the text on this form.',
+};
 const validExtractionJson = JSON.stringify({
   subjectObject: 'ceramic mug',
   visibleFeatures: ['blue glaze', 'chipped handle'],
@@ -427,6 +430,27 @@ describe('InferenceQueue false tool-refusal recovery', () => {
 });
 
 describe('InferenceQueue two-stage first image turns', () => {
+  it('uses one direct vision call for a normal image question', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken) => {
+        generatedRequests.push(generateRequest);
+        onToken('A ceramic mug.', 4);
+        return Promise.resolve({ response: 'A ceramic mug.', tokenCount: 4 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit({ imagePath: '/tmp/mug.jpg', question: 'What is this?' });
+
+    expect(generatedRequests).toHaveLength(1);
+    expect(generatedRequests[0]).toMatchObject({ kind: 'answer', responseMode: 'Medium' });
+    expect(generatedRequests[0].messages.at(-1)).toEqual(
+      expect.objectContaining({ mediaPath: '/tmp/mug.jpg', content: 'What is this?' }),
+    );
+  });
+
   it('constructs a hidden perception request followed by a text-only answer request', async () => {
     const generatedRequests: EngineGenerateRequest[] = [];
     const engine: InferenceEngineAdapter = {
@@ -473,7 +497,7 @@ describe('InferenceQueue two-stage first image turns', () => {
       originatingUserMessageId: 'user-message-2',
       assistantMessageId: 'assistant-message-2',
       imagePath: '/tmp/follow-up.jpg',
-      question: 'Compare this new image.',
+      question: 'Read and compare the text in this new form.',
     };
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
@@ -668,7 +692,8 @@ describe('InferenceQueue two-stage first image turns', () => {
   });
 });
 
-describe('InferenceQueue output-length cap (FR-052)', () => {
+describe('runtime-owned output length', () => {
+  const OUTPUT_TOKEN_BUDGET = getResponseTokenBudget('Medium');
   // Advance the simulated token count in batches (like a real token batch) so
   // the cap trips in a few ticks regardless of how large OUTPUT_TOKEN_BUDGET is
   // tuned — the test stays fast and budget-agnostic.
@@ -688,6 +713,10 @@ describe('InferenceQueue output-length cap (FR-052)', () => {
           const interval = setInterval(() => {
             streamedTokens += TOKENS_PER_TICK;
             onToken(`streamed ${streamedTokens} tokens`, streamedTokens);
+            if (streamedTokens >= OUTPUT_TOKEN_BUDGET) {
+              clearInterval(interval);
+              resolve({ response: `streamed ${streamedTokens} tokens.`, tokenCount: streamedTokens });
+            }
           }, 1);
           signal.addEventListener('abort', () => {
             clearInterval(interval);
@@ -710,7 +739,7 @@ describe('InferenceQueue output-length cap (FR-052)', () => {
     expect(streamedTokens).toBeGreaterThanOrEqual(OUTPUT_TOKEN_BUDGET);
     expect(streamedTokens).toBeLessThan(OUTPUT_TOKEN_BUDGET + TOKENS_PER_TICK * 3);
     expect(state.response).not.toBe('');
-    expect(state.limitWarning).toMatch(/length limit/i);
+    expect(state.limitWarning).toBeNull();
   });
 
   it('does not abort or warn when generation finishes under the budget', async () => {
@@ -745,6 +774,10 @@ describe('InferenceQueue output-length cap (FR-052)', () => {
           const interval = setInterval(() => {
             streamedTokens += TOKENS_PER_TICK;
             onToken(`streamed ${streamedTokens} tokens`, streamedTokens);
+            if (streamedTokens >= OUTPUT_TOKEN_BUDGET) {
+              clearInterval(interval);
+              resolve({ response: `streamed ${streamedTokens} tokens.`, tokenCount: streamedTokens });
+            }
           }, 1);
           signal.addEventListener('abort', () => {
             clearInterval(interval);
