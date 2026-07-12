@@ -11,20 +11,20 @@ import {
   type InferenceSubmitOptions,
 } from '../inference/InferenceQueue';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
-import { getStartupRuntimeSelection } from '../inference/StartupRuntimeSelection';
-import { getModelCandidate, QWEN_V1_DESCRIPTOR, type ModelCandidateId } from '../model/ActiveModel';
+import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type { InferenceRequest, InferenceState, QASession } from '../types/models';
 
 import { useHistoryStore } from './historyStore';
 import { useModelStore } from './modelStore';
+import { useSettingsStore } from './settingsStore';
 
 let engineHandle: InferenceEngineHandle | null = null;
 let activeTurn: PendingTurn | null = null;
-let lastSavedSession: QASession | null = null;
 
 interface PendingTurn {
   readonly request: InferenceRequest;
+  readonly conversationId: string;
   readonly baseSession: QASession | null;
 }
 
@@ -86,7 +86,7 @@ const bridgeEngine: InferenceEngineAdapter = {
         throw new Error('Inference cancelled before model request was sent.');
       }
 
-      const rawResponse = await handle.generate(request.messages);
+      const rawResponse = await handle.generate(request);
       if (!signal.aborted) {
         const error = handle.getError();
         if (error !== null) {
@@ -109,23 +109,17 @@ const bridgeEngine: InferenceEngineAdapter = {
 };
 
 const queue = createInferenceQueue(bridgeEngine, {
-  isReadyForInference: () => useModelStore.getState().isReadyForInference(),
+  isReadyForInference: (requiresVision) => requiresVision
+    ? useModelStore.getState().isReadyForInference()
+    : useModelStore.getState().isReadyForTextInference?.()
+      ?? useModelStore.getState().isReadyForInference(),
+  getResponseMode: () => useSettingsStore.getState().responseMode,
   getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,
   getModelAttribution: () => {
-    // Qwen is the internal V1 runtime with no normal-user model selection; attribute
-    // to its safe aggregate descriptor rather than an ExecuTorch candidate lookup.
-    if (getStartupRuntimeSelection().selectedHost === 'qwen-llamarn') {
-      return {
-        modelId: QWEN_V1_DESCRIPTOR.id,
-        generationConfigId: QWEN_V1_DESCRIPTOR.generationConfigId,
-      };
-    }
-    const selectedModelId = useModelStore.getState().selectedModelId as ModelCandidateId | null;
-    if (selectedModelId === null) {
-      throw new Error('Inference attribution requires a selected model.');
-    }
-    const model = getModelCandidate(selectedModelId);
-    return { modelId: model.id, generationConfigId: model.generationConfigId };
+    return {
+      modelId: QWEN_V1_DESCRIPTOR.id,
+      generationConfigId: QWEN_V1_DESCRIPTOR.generationConfigId,
+    };
   },
 });
 
@@ -170,7 +164,7 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
     }
   },
   cancel: (): void => queue.cancel(),
-  flagCurrentSession: (note?: string): void => flagLastSavedSession(note),
+  flagCurrentSession: (note?: string): void => flagActiveSession(note),
   hydrateSession: (sessionId: string): QASession | null => {
     const session = useHistoryStore.getState().get(sessionId);
     if (session === null || session.status !== 'completed') {
@@ -182,7 +176,6 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
     }
     activeTurn = null;
     engineHandle?.clearHistory();
-    lastSavedSession = session;
     useInferenceStore.setState({
       activeSessionId: session.id,
       status: 'idle',
@@ -203,7 +196,6 @@ export const useInferenceStore = create<InferenceStoreState>(() => ({
       queue.cancel();
     }
     activeTurn = null;
-    lastSavedSession = null;
     engineHandle?.clearHistory();
     useInferenceStore.setState({
       activeSessionId: null,
@@ -253,40 +245,33 @@ export const inferenceQueue: IInferenceQueue = {
   getState: (): InferenceState => queue.getState(),
 };
 
-export function __getLastSavedSession(): QASession | null {
-  return lastSavedSession;
-}
-
 function createPendingTurn(request: InferenceRequest): PendingTurn {
+  const conversationId = request.conversationId
+    ?? useInferenceStore.getState().activeSessionId
+    ?? generateSessionId();
   return {
-    request,
-    baseSession: getFollowUpBaseSession(request),
+    request: { ...request, conversationId },
+    conversationId,
+    baseSession: useHistoryStore.getState().get(conversationId),
   };
-}
-
-function getFollowUpBaseSession(request: InferenceRequest): QASession | null {
-  if (
-    lastSavedSession === null ||
-    lastSavedSession.status !== 'completed' ||
-    lastSavedSession.imagePath !== request.imagePath
-  ) {
-    return null;
-  }
-  return lastSavedSession;
 }
 
 function saveCompletedTurn(turn: PendingTurn, state: InferenceState): void {
   if (turn.baseSession === null) {
-    saveFirstTurnSession(turn.request, state);
+    saveFirstTurnSession(turn.conversationId, turn.request, state);
     return;
   }
 
   saveFollowUpTurnSession(turn.baseSession, turn.request, state);
 }
 
-function saveFirstTurnSession(request: InferenceRequest, state: InferenceState): void {
+function saveFirstTurnSession(
+  conversationId: string,
+  request: InferenceRequest,
+  state: InferenceState,
+): void {
   saveToHistoryStore({
-    id: generateSessionId(),
+    id: conversationId,
     createdAt: Date.now(),
     imagePath: request.imagePath ?? '',
     question: request.question,
@@ -322,15 +307,14 @@ function saveFollowUpTurnSession(
 }
 
 function saveToHistoryStore(session: QASession): void {
-  lastSavedSession = session;
   useHistoryStore.getState().save(session);
   useInferenceStore.setState({ activeSessionId: session.id });
 }
 
-function flagLastSavedSession(note?: string): void {
-  if (lastSavedSession !== null) {
-    lastSavedSession = { ...lastSavedSession, flagged: true, flagNote: note ?? null };
-    useHistoryStore.getState().setFlag(lastSavedSession.id, true, note);
+function flagActiveSession(note?: string): void {
+  const id = useInferenceStore.getState().activeSessionId;
+  if (id !== null) {
+    useHistoryStore.getState().setFlag(id, true, note);
   }
 }
 

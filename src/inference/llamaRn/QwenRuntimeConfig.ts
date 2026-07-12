@@ -16,8 +16,6 @@ export interface QwenRuntimeConfig {
   readonly projectorUseGpu: boolean;
   readonly ctxShift: boolean;
   readonly useMlock: boolean;
-  readonly nPredictDefault: number;
-  readonly nPredictOptions: ReadonlyArray<number>;
   readonly temperature: number;
   /** Empty unless a later verification record justifies explicit stop tokens. */
   readonly stopTokens: ReadonlyArray<string>;
@@ -29,8 +27,6 @@ export const QWEN_RUNTIME_CONFIG: QwenRuntimeConfig = {
   projectorUseGpu: false,
   ctxShift: false,
   useMlock: false,
-  nPredictDefault: 512,
-  nPredictOptions: [256, 512, 1024],
   temperature: 0,
   stopTokens: [],
 };
@@ -71,15 +67,4 @@ export function buildQwenInitMultimodalParams(
     path: projectorPath,
     use_gpu: config.projectorUseGpu,
   };
-}
-
-/** Clamps a requested output budget to a validated option; falls back to the default. */
-export function resolveNPredict(
-  requested: number | undefined,
-  config: QwenRuntimeConfig = QWEN_RUNTIME_CONFIG
-): number {
-  if (requested !== undefined && config.nPredictOptions.includes(requested)) {
-    return requested;
-  }
-  return config.nPredictDefault;
 }

@@ -6,8 +6,8 @@ import {
   QWEN_RUNTIME_CONFIG,
   buildQwenInitLlamaParams,
   buildQwenInitMultimodalParams,
-  resolveNPredict,
 } from '../../../src/inference/llamaRn/QwenRuntimeConfig';
+import { getResponseTokenBudget } from '../../../src/inference/ResponseMode';
 
 // Pins the exact spike-validated CPU-only Qwen runtime config. Any drift from
 // these values must be a deliberate, separately-justified change.
@@ -34,8 +34,6 @@ describe('Qwen runtime config', () => {
     expect(QWEN_RUNTIME_CONFIG.nCtx).toBe(4096);
     expect(QWEN_RUNTIME_CONFIG.ctxShift).toBe(false);
     expect(QWEN_RUNTIME_CONFIG.useMlock).toBe(false);
-    expect(QWEN_RUNTIME_CONFIG.nPredictDefault).toBe(512);
-    expect(QWEN_RUNTIME_CONFIG.nPredictOptions).toEqual([256, 512, 1024]);
     expect(QWEN_RUNTIME_CONFIG.temperature).toBe(0);
     expect(QWEN_RUNTIME_CONFIG.stopTokens).toEqual([]);
   });
@@ -57,10 +55,9 @@ describe('Qwen runtime config', () => {
     });
   });
 
-  it('clamps n_predict to a validated option and otherwise falls back to the default', () => {
-    expect(resolveNPredict(256)).toBe(256);
-    expect(resolveNPredict(1024)).toBe(1024);
-    expect(resolveNPredict(999)).toBe(512);
-    expect(resolveNPredict(undefined)).toBe(512);
+  it('uses the response-mode budgets as the only output token limits', () => {
+    expect(getResponseTokenBudget('Low')).toBe(192);
+    expect(getResponseTokenBudget('Medium')).toBe(384);
+    expect(getResponseTokenBudget('High')).toBe(768);
   });
 });

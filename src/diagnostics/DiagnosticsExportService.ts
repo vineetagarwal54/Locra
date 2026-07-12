@@ -3,10 +3,8 @@ import * as Sharing from 'expo-sharing';
 import { strToU8, zipSync } from 'fflate';
 
 import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
-import { getStartupRuntimeSelection } from '../inference/StartupRuntimeSelection';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import { historyStore } from '../store/historyStore';
-import { requireSelectedModel } from '../store/modelSelectionStore';
 import type { Conversation } from '../types/models';
 
 import { getCurrentDeviceBuildMetadata } from './DeviceBuildMetadataProvider';
@@ -97,12 +95,8 @@ function resolveAppDiagnosticsInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): 
 // aggregate descriptor id/config rather than throwing on `requireSelectedModel()`
 // or exposing raw native internals.
 function resolveDiagnosticsModelAttribution(): { modelId: string; generationConfigId: string } {
-  if (getStartupRuntimeSelection().selectedHost === 'qwen-llamarn') {
-    return {
-      modelId: QWEN_V1_DESCRIPTOR.id,
-      generationConfigId: QWEN_V1_DESCRIPTOR.generationConfigId,
-    };
-  }
-  const selectedModel = requireSelectedModel();
-  return { modelId: selectedModel.id, generationConfigId: selectedModel.generationConfigId };
+  return {
+    modelId: QWEN_V1_DESCRIPTOR.id,
+    generationConfigId: QWEN_V1_DESCRIPTOR.generationConfigId,
+  };
 }

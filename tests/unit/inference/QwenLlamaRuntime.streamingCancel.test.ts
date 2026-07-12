@@ -50,6 +50,30 @@ function makeRuntime(completion: LlamaContextLike['completion']) {
 const MESSAGES: ModelRequestMessage[] = [{ role: 'user', content: 'Describe this.' }];
 
 describe('QwenLlamaRuntime streaming and cancellation', () => {
+  it.each([
+    ['Low', 192],
+    ['Medium', 384],
+    ['High', 768],
+  ] as const)('passes the %s response budget to llama.rn', async (responseMode, expected) => {
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({ content: 'done' }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    await runtime.generate({
+      messages: MESSAGES,
+      responseMode,
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(completion).toHaveBeenCalledWith(
+      expect.objectContaining({ n_predict: expected }),
+      expect.any(Function),
+    );
+  });
+
   it('streams cumulative text and returns metrics from native timings', async () => {
     const completion = jest.fn(
       async (
@@ -73,6 +97,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     const cumulative: string[] = [];
     const result = await runtime.generate({
       messages: MESSAGES,
+      responseMode: 'Medium',
       signal: new AbortController().signal,
       onToken: (text) => cumulative.push(text),
     });
@@ -95,6 +120,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
 
     const result = await runtime.generate({
       messages: MESSAGES,
+      responseMode: 'Medium',
       signal: new AbortController().signal,
       onToken: () => {},
     });
@@ -112,6 +138,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     const controller = new AbortController();
     const generatePromise = runtime.generate({
       messages: MESSAGES,
+      responseMode: 'Medium',
       signal: controller.signal,
       onToken: () => {},
     });
@@ -135,6 +162,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     await expect(
       runtime.generate({
         messages: MESSAGES,
+        responseMode: 'Medium',
         signal: new AbortController().signal,
         onToken: () => {},
       })

@@ -47,7 +47,7 @@ const load = { modelPath: MODEL_PATH, projectorPath: PROJECTOR_PATH };
 function generateRequest(
   messages: ModelRequestMessage[]
 ): Parameters<QwenLlamaRuntime['generate']>[0] {
-  return { messages, signal: new AbortController().signal, onToken: () => {} };
+  return { messages, responseMode: 'Medium', signal: new AbortController().signal, onToken: () => {} };
 }
 
 describe('QwenLlamaRuntime lifecycle', () => {
@@ -84,7 +84,7 @@ describe('QwenLlamaRuntime lifecycle', () => {
     expect(initLlama).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the half-initialized context when projector init fails, leaving no loaded context', async () => {
+  it('keeps text inference available when projector initialization fails', async () => {
     const context = makeContext({
       initMultimodal: jest.fn(async () => {
         throw new Error('projector mismatch');
@@ -92,20 +92,26 @@ describe('QwenLlamaRuntime lifecycle', () => {
     });
     const { runtime } = makeRuntime(context);
 
-    await expect(runtime.loadModel(load)).rejects.toBeInstanceOf(QwenProjectorInitError);
+    await runtime.loadModel(load);
     expect(context.releaseMultimodal).toHaveBeenCalled();
-    expect(context.release).toHaveBeenCalled();
-    expect(runtime.getStatus()).toBe('errored');
+    expect(context.release).not.toHaveBeenCalled();
+    expect(runtime.getStatus()).toBe('loaded');
     expect(runtime.isMultimodalVisionReady()).toBe(false);
+    await expect(runtime.generate(generateRequest([{ role: 'user', content: 'hi' }]))).resolves.toEqual(
+      expect.objectContaining({ text: 'ok' }),
+    );
   });
 
-  it('fails projector init when vision support is not confirmed', async () => {
+  it('rejects only image generation when vision support is not confirmed', async () => {
     const context = makeContext({
       getMultimodalSupport: jest.fn(async () => ({ vision: false, audio: false })),
     });
     const { runtime } = makeRuntime(context);
 
-    await expect(runtime.loadModel(load)).rejects.toBeInstanceOf(QwenProjectorInitError);
+    await runtime.loadModel(load);
+    await expect(runtime.generate(generateRequest([
+      { role: 'user', content: 'describe', mediaPath: '/image.jpg' },
+    ]))).rejects.toBeInstanceOf(QwenProjectorInitError);
   });
 
   it('rejects generate() before load (follow-up status is never proof of residency)', async () => {

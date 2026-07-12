@@ -186,6 +186,15 @@ function isQwenReady(): boolean {
   });
 }
 
+function isQwenLanguageReady(): boolean {
+  return manager?.getArtifactStates().some(
+    (artifact) =>
+      artifact.artifactId === 'qwen_language_model' &&
+      artifact.downloaded &&
+      artifact.integrityVerified,
+  ) ?? false;
+}
+
 function requireManager(): ModelDownloadManager {
   if (manager === null) {
     // The Qwen bundle is the only model; initialize it on demand.
@@ -229,6 +238,8 @@ export interface ModelStoreState extends ModelState {
   resumeDownload: () => Promise<void>;
   cancelDownload: () => Promise<void>;
   isReadyForInference: () => boolean;
+  /** Text generation needs only the verified language GGUF, not the projector. */
+  isReadyForTextInference: () => boolean;
 }
 
 export const useModelStore = create<ModelStoreState>(() => ({
@@ -243,7 +254,6 @@ export const useModelStore = create<ModelStoreState>(() => ({
     checkActiveModelCompatibility(getStartupRuntimeSelection().selectedHost),
   shouldRouteToQwenDownload: () =>
     shouldRouteToQwenDownload({
-      startupHost: getStartupRuntimeSelection().selectedHost,
       qwenReady: isQwenReady(),
     }),
   reattachExistingDownload: () => requireManager().reattachExistingDownload(),
@@ -273,6 +283,7 @@ export const useModelStore = create<ModelStoreState>(() => ({
   resumeDownload: () => requireManager().resumeDownload(),
   cancelDownload: () => requireManager().cancelDownload(),
   isReadyForInference: () => manager?.isReadyForInference() ?? false,
+  isReadyForTextInference: isQwenLanguageReady,
 }));
 
 // The imperative IModelLifecycle surface for non-React consumers, e.g. the

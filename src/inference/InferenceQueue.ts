@@ -16,20 +16,18 @@ import { postProcessAnswer } from './AnswerPostProcessor';
 import { buildAnswerPrompt } from './AnswerPrompt';
 import {
   buildCanonicalModelMessages,
+  buildDirectImageModelMessages,
   buildPerceptionModelMessages,
   buildPerceptionRetryModelMessages,
   createCanonicalConversationContext,
   type ModelRequestMessage,
 } from './ContextBuilder';
 import { parseExtractionWithRetry } from './ExtractionParser';
-import { buildStructuredExtractionPrompt } from './ExtractionPrompt';
-import { getResponseLimitWarning } from './GenerationLimits';
+import { buildStructuredExtractionPrompt, requiresStructuredVision } from './ExtractionPrompt';
 import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   LOOPING_ANSWER_NOTICE,
-  OUTPUT_LIMIT_NOTICE,
-  OUTPUT_TOKEN_BUDGET,
   TRUNCATED_ANSWER_NOTICE,
 } from './GenerationTuning';
 import { prepareImageForInference } from './ImageEnhancer';
@@ -48,6 +46,7 @@ import {
   type InferenceTraceStageKind,
 } from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
+import { DEFAULT_RESPONSE_MODE, type ResponseMode } from './ResponseMode';
 import {
   buildToolRefusalRecoveryMessages,
   shouldRetryToolRefusal,
@@ -72,8 +71,9 @@ export interface InferenceSubmitOptions {
 
 export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
-  isReadyForInference: () => boolean;
+  isReadyForInference: (requiresVision: boolean) => boolean;
   engine: InferenceEngineAdapter;
+  getResponseMode?: () => ResponseMode;
   createRecorder?: () => InferenceMetricsRecorder;
   activityLock?: ActivityLock;
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
@@ -185,7 +185,7 @@ export class InferenceQueue implements IInferenceQueue {
       request: lifecycleRequest,
     });
     const recorder = this.createRecorder();
-    const isFollowUp = options.turn === 'followUp';
+    const responseMode = this.deps.getResponseMode?.() ?? DEFAULT_RESPONSE_MODE;
 
     this.setState({
       status: 'preprocessing',
@@ -210,15 +210,13 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
 
-      if (!this.deps.isReadyForInference()) {
+      if (!this.deps.isReadyForInference(processed !== null)) {
         throw new Error('The model is not downloaded and verified yet.');
       }
 
       this.setState({ status: 'loading_model' });
       recorder.markModelLoadStart();
-      if (!isFollowUp) {
-        await this.deps.engine.loadModel();
-      }
+      await this.deps.engine.loadModel();
       lifecycleGates.loadModel.resolve(undefined);
       recorder.markModelLoadEnd();
       if (active.cancelled) return;
@@ -226,27 +224,23 @@ export class InferenceQueue implements IInferenceQueue {
       this.setState({ status: 'streaming' });
       recorder.markInferenceStart();
 
-      let budgetStopped = false;
-      const markBudgetStopped = (): void => {
-        budgetStopped = true;
-      };
       const result =
         processed === null
           ? await this.generateFollowUpAnswer(
               request,
               conversationContext,
+              responseMode,
               active,
               recorder,
-              markBudgetStopped,
               lifecycleGates,
             )
           : await this.generateFirstImageAnswer(
               request,
               processed,
               conversationContext,
+              responseMode,
               active,
               recorder,
-              markBudgetStopped,
               lifecycleGates,
             );
       if (active.cancelled) return;
@@ -256,11 +250,7 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markInferenceEnd();
       const processedAnswer = postProcessAnswer(result.response);
       this.recordFinalTraceResponse(active, processedAnswer.text);
-      const notice = resolveCompletionNotice(
-        budgetStopped,
-        processedAnswer.verdict,
-        result.tokenCount,
-      );
+      const notice = resolveCompletionNotice(processedAnswer.verdict);
       this.setState({
         status: 'completed',
         response: processedAnswer.text,
@@ -336,11 +326,26 @@ export class InferenceQueue implements IInferenceQueue {
     request: InferenceRequest,
     processed: PreprocessedImage,
     conversationContext: CanonicalConversationContext,
+    responseMode: ResponseMode,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    markBudgetStopped: () => void,
     lifecycleGates: LifecycleGates,
   ): Promise<EngineGenerateResult> {
+    if (!requiresStructuredVision(request.question)) {
+      lifecycleGates.perception.resolve({ hiddenEvidence: null, pinnedExtraction: null });
+      lifecycleGates.contextAssembly.resolve(undefined);
+      return this.generateVisibleAnswer(
+        buildDirectImageModelMessages(
+          { conversationContext, currentQuestion: request.question, responseMode },
+          processed.path,
+        ),
+        responseMode,
+        active,
+        recorder,
+        { kind: 'answer', originalQuestion: request.question },
+      );
+    }
+
     recorder.markPerceptionStart();
     const extractionRequest: EngineGenerateRequest = {
       messages: buildPerceptionModelMessages(
@@ -349,6 +354,7 @@ export class InferenceQueue implements IInferenceQueue {
       ),
       kind: 'extraction',
       originalQuestion: request.question,
+      responseMode,
     };
     const extractionResult = await this.deps.engine.generate(
       extractionRequest,
@@ -369,6 +375,7 @@ export class InferenceQueue implements IInferenceQueue {
           messages: buildPerceptionRetryModelMessages(retryPrompt),
           kind: 'extractionRetry',
           originalQuestion: request.question,
+          responseMode,
         };
         const retryResult = await this.deps.engine.generate(
           retryRequest,
@@ -421,10 +428,11 @@ export class InferenceQueue implements IInferenceQueue {
       buildCanonicalModelMessages({
         conversationContext,
         currentQuestion: answerPrompt,
+        responseMode,
       }),
+      responseMode,
       active,
       recorder,
-      markBudgetStopped,
       {
         kind: 'answer',
         originalQuestion: request.question,
@@ -441,9 +449,9 @@ export class InferenceQueue implements IInferenceQueue {
   private generateFollowUpAnswer(
     request: InferenceRequest,
     conversationContext: CanonicalConversationContext,
+    responseMode: ResponseMode,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    markBudgetStopped: () => void,
     lifecycleGates: LifecycleGates,
   ): Promise<EngineGenerateResult> {
     lifecycleGates.perception.resolve({
@@ -455,10 +463,11 @@ export class InferenceQueue implements IInferenceQueue {
       buildCanonicalModelMessages({
         conversationContext,
         currentQuestion: request.question,
+        responseMode,
       }),
+      responseMode,
       active,
       recorder,
-      markBudgetStopped,
       {
         kind: 'chat',
         originalQuestion: request.question,
@@ -468,13 +477,13 @@ export class InferenceQueue implements IInferenceQueue {
 
   private async generateVisibleAnswer(
     messages: ModelRequestMessage[],
+    responseMode: ResponseMode,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    markBudgetStopped: () => void,
     requestPatch: Partial<EngineGenerateRequest> = {}
   ): Promise<EngineGenerateResult> {
     recorder.markAnswerStart();
-    const generateRequest: EngineGenerateRequest = { messages, ...requestPatch };
+    const generateRequest: EngineGenerateRequest = { messages, responseMode, ...requestPatch };
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 
@@ -488,14 +497,6 @@ export class InferenceQueue implements IInferenceQueue {
         count: generatedTokenCount ?? 0,
       });
       this.setState({ response: cumulative });
-      if (
-        generatedTokenCount !== undefined &&
-        generatedTokenCount >= OUTPUT_TOKEN_BUDGET &&
-        !active.controller.signal.aborted
-      ) {
-        markBudgetStopped();
-        active.controller.abort();
-      }
     };
 
     const result = await this.deps.engine.generate(
@@ -557,8 +558,8 @@ export class InferenceQueue implements IInferenceQueue {
       looping: verdict === 'looping',
       timestamp: new Date().toISOString(),
       ...(this.deps.getModelAttribution?.() ?? {
-        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-        generationConfigId: 'lfm2.5-vl-official-v1',
+        modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+        generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
       }),
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
       deviceNameModel: metadata.deviceNameModel,
@@ -686,29 +687,22 @@ export function createInferenceQueue(
     preprocess: prepareImageForInference,
     isReadyForInference: () => false,
     getModelAttribution: () => ({
-      modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-      generationConfigId: 'lfm2.5-vl-official-v1',
+      modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+      generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
     }),
     engine,
     ...overrides,
   });
 }
 
-function resolveCompletionNotice(
-  budgetStopped: boolean,
-  verdict: 'complete' | 'truncated' | 'looping',
-  tokenCount: number,
-): string | null {
-  if (budgetStopped) {
-    return OUTPUT_LIMIT_NOTICE;
-  }
+function resolveCompletionNotice(verdict: 'complete' | 'truncated' | 'looping'): string | null {
   if (verdict === 'truncated') {
     return TRUNCATED_ANSWER_NOTICE;
   }
   if (verdict === 'looping') {
     return LOOPING_ANSWER_NOTICE;
   }
-  return getResponseLimitWarning(tokenCount);
+  return null;
 }
 
 function toMessage(error: unknown): string {

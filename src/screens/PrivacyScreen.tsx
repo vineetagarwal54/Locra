@@ -50,7 +50,7 @@ export function PrivacyScreen({ navigation }: Props) {
   const reduceMotion = useReducedMotion();
 
   const onContinue = useCallback((): void => {
-    navigation.replace('ModelSelection');
+    navigation.replace('ModelIntro');
   }, [navigation]);
 
   return (

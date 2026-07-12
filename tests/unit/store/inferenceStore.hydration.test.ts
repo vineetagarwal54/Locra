@@ -27,6 +27,9 @@ jest.mock('../../../src/store/modelStore', () => ({
     }),
   }),
 }));
+jest.mock('../../../src/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ responseMode: 'Medium' }) },
+}));
 // This suite validates the ExecuTorch/LFM attribution path, so pin the host to
 // ExecuTorch (Qwen is now the default V1 runtime).
 jest.mock('../../../src/inference/StartupRuntimeSelection', () => ({
@@ -50,7 +53,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
-import type { InferenceEngineHandle } from '../../../src/inference/InferenceEngineHandle';
+import type { EngineGenerateRequest, InferenceEngineHandle } from '../../../src/inference/InferenceEngineHandle';
 import { useInferenceStore } from '../../../src/store/inferenceStore';
 import type { QASession } from '../../../src/types/models';
 
@@ -116,7 +119,8 @@ function makeEngineHandle(): InferenceEngineHandle & {
   const handle = {
     submissions,
     clearHistoryCalls: 0,
-    generate: async (messages: ModelRequestMessage[]): Promise<string> => {
+    generate: async (request: EngineGenerateRequest): Promise<string> => {
+      const messages = request.messages;
       const imagePath = messages.find((message) => message.mediaPath !== undefined)?.mediaPath ?? null;
       const prompt = messages.at(-1)?.content ?? '';
       submissions.push({ imagePath, prompt, messages });
@@ -216,21 +220,21 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
 
     await useInferenceStore
       .getState()
-      .submit({ imagePath: '/photos/live.jpg', question: 'What is this?' });
+      .submit({ conversationId: 'live-chat', imagePath: '/photos/live.jpg', question: 'What is this?' });
     await useInferenceStore
       .getState()
-      .submit({ imagePath: '/photos/live.jpg', question: 'shorter' });
+      .submit({ conversationId: 'live-chat', imagePath: '/photos/live.jpg', question: 'shorter' });
 
-    expect(engine.submissions[2]).toEqual(
+    expect(engine.submissions[1]).toEqual(
       expect.objectContaining({ imagePath: null, prompt: 'shorter' })
     );
-    expect(engine.submissions[2].messages.map((message) => message.role)).toEqual([
+    expect(engine.submissions[1].messages.map((message) => message.role)).toEqual([
       'system',
       'user',
       'assistant',
       'user',
     ]);
-    expect(engine.submissions[2].messages.map((message) => message.content).join('\n')).not.toContain(
+    expect(engine.submissions[1].messages.map((message) => message.content).join('\n')).not.toContain(
       'Conversation so far'
     );
   });
@@ -285,12 +289,12 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
     ];
     useInferenceStore.getState().registerEngine(engine);
 
-    await useInferenceStore.getState().submit({ imagePath, question: 'What is this?' });
+    await useInferenceStore.getState().submit({ conversationId: 'long-chat', imagePath, question: 'What is this?' });
     for (const question of followUps) {
-      await useInferenceStore.getState().submit({ imagePath, question });
+      await useInferenceStore.getState().submit({ conversationId: 'long-chat', imagePath, question });
     }
 
-    const liveFollowUpPrompts = engine.submissions.slice(2).map((submission) => submission.prompt);
+    const liveFollowUpPrompts = engine.submissions.slice(1).map((submission) => submission.prompt);
     expect(liveFollowUpPrompts).toEqual(followUps);
     expect(liveFollowUpPrompts.join('\n')).not.toContain('Conversation so far');
     expect(liveFollowUpPrompts.join('\n')).not.toContain(PINNED);
@@ -302,7 +306,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
 
     await useInferenceStore
       .getState()
-      .submit({ imagePath: '/photos/first-turn.jpg', question: 'What is this?' });
+      .submit({ conversationId: 'first-turn', imagePath: '/photos/first-turn.jpg', question: 'Read the text on this form.' });
 
     const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
     expect(engine.submissions).toHaveLength(2);
@@ -312,7 +316,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
     expect(engine.submissions[1].prompt).toContain('Image evidence: ceramic mug');
     expect(saved.answer).toBe(FIRST_VISIBLE_ANSWER);
     expect(saved.turns).toEqual([
-      { question: 'What is this?', answer: FIRST_VISIBLE_ANSWER },
+      { question: 'Read the text on this form.', answer: FIRST_VISIBLE_ANSWER },
     ]);
     expect(saved.turns[0].answer).not.toMatch(/Subject\/object|visibleFeatures|subjectObject/i);
   });
@@ -323,7 +327,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
 
     await useInferenceStore
       .getState()
-      .submit({ imagePath: '/photos/hidden.jpg', question: 'What is this?' });
+      .submit({ conversationId: 'hidden', imagePath: '/photos/hidden.jpg', question: 'Read the text on this form.' });
 
     const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;
     expect(useInferenceStore.getState().hiddenEvidence?.subjectObject).toBe('ceramic mug');
@@ -338,7 +342,7 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
 
     await useInferenceStore
       .getState()
-      .submit({ imagePath: '/photos/objective.jpg', question: 'What is this?' });
+      .submit({ conversationId: 'objective', imagePath: '/photos/objective.jpg', question: 'Read the text on this form.' });
 
     const state = useInferenceStore.getState();
     const saved = historyMock.mockSave.mock.calls.at(-1)?.[0] as QASession;

@@ -25,10 +25,9 @@ describe('Qwen readiness reconciliation', () => {
   it('is not ready when an old LFM download flag is set but the active model is still LFM', () => {
     expect(
       isQwenBundleReady({
-        activeModelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+        activeModelId: 'obsolete-model',
         manifest: QWEN3_VL_2B_INSTRUCT_BUNDLE,
         artifactStates: [],
-        legacyLfmDownloaded: true,
       })
     ).toBe(false);
   });
@@ -39,7 +38,6 @@ describe('Qwen readiness reconciliation', () => {
         activeModelId: QWEN3_VL_2B_INSTRUCT_BUNDLE.activeModelId,
         manifest: QWEN3_VL_2B_INSTRUCT_BUNDLE,
         artifactStates: [],
-        legacyLfmDownloaded: true,
       })
     ).toBe(false);
   });
@@ -76,13 +74,13 @@ describe('Qwen readiness reconciliation', () => {
 
   describe('download routing gate', () => {
     it('never routes to a Qwen download under the ExecuTorch host', () => {
-      expect(shouldRouteToQwenDownload({ startupHost: 'executorch', qwenReady: false })).toBe(false);
-      expect(shouldRouteToQwenDownload({ startupHost: 'executorch', qwenReady: true })).toBe(false);
+      expect(shouldRouteToQwenDownload({ qwenReady: false })).toBe(true);
+      expect(shouldRouteToQwenDownload({ qwenReady: true })).toBe(false);
     });
 
     it('routes to a Qwen download only when Qwen is selected and not yet ready', () => {
-      expect(shouldRouteToQwenDownload({ startupHost: 'qwen-llamarn', qwenReady: false })).toBe(true);
-      expect(shouldRouteToQwenDownload({ startupHost: 'qwen-llamarn', qwenReady: true })).toBe(false);
+      expect(shouldRouteToQwenDownload({ qwenReady: false })).toBe(true);
+      expect(shouldRouteToQwenDownload({ qwenReady: true })).toBe(false);
     });
   });
 });

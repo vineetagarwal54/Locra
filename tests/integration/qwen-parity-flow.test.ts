@@ -56,7 +56,7 @@ describe('Qwen parity flow (runtime-neutral)', () => {
     expect(queue.getState().response).toBe('The answer');
   });
 
-  it('answers an image question through the two-stage pipeline', async () => {
+  it('answers a normal image question with one direct vision call', async () => {
     const generated: EngineGenerateRequest[] = [];
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
@@ -73,7 +73,7 @@ describe('Qwen parity flow (runtime-neutral)', () => {
 
     expect(queue.getState().status).toBe('completed');
     expect(queue.getState().response).toBe('A shiny red apple.');
-    expect(generated.map((r) => r.kind)).toEqual(['extraction', 'answer']);
+    expect(generated.map((r) => r.kind)).toEqual(['answer']);
   });
 
   it('uses supplied conversation context as authority for a follow-up turn', async () => {
