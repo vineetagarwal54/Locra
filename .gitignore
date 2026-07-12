@@ -57,6 +57,7 @@ spikes/qwen3vl-llamarn/ios/
 spikes/qwen3vl-llamarn/models/
 spikes/qwen3vl-llamarn/*.gguf
 spikes/qwen3vl-llamarn/*.log
+/spikes/qwen3vl-llamarn/
 
 # Environment files
 .env
