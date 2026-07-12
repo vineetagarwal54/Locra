@@ -1,12 +1,15 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
+# GGUF model files (never commit — they are large and downloaded separately)
+models/
+*.gguf
+
 # dependencies
 node_modules/
 
 # Expo
 .expo/
 dist/
-build/
 web-build/
 expo-env.d.ts
 
@@ -26,21 +29,13 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
-*.log
 
 # macOS
 .DS_Store
-Thumbs.db
-*.tmp
-*.swp
-.vscode/
-.idea/
 *.pem
 
 # local env files
-.env*
 .env*.local
-!.env.example
 
 # typescript
 *.tsbuildinfo
@@ -48,17 +43,3 @@ Thumbs.db
 # generated native folders
 /ios
 /android
-# Qwen spike local files
-spikes/qwen3vl-llamarn/.hf-venv/
-spikes/qwen3vl-llamarn/node_modules/
-spikes/qwen3vl-llamarn/.expo/
-spikes/qwen3vl-llamarn/android/
-spikes/qwen3vl-llamarn/ios/
-spikes/qwen3vl-llamarn/models/
-spikes/qwen3vl-llamarn/*.gguf
-spikes/qwen3vl-llamarn/*.log
-
-# Environment files
-.env
-.env.*
-!.env.example
