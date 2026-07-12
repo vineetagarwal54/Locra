@@ -5,16 +5,25 @@ import {
 } from '@kesha-antonov/react-native-background-downloader';
 import { Directory, File } from 'expo-file-system';
 import { documentDirectory } from 'expo-file-system/legacy';
-import { ResourceFetcherUtils } from 'react-native-executorch';
-import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher';
 import { create } from 'zustand';
 
+import { getStartupRuntimeSelection } from '../inference/StartupRuntimeSelection';
 import type { ModelCandidate, ModelCandidateId } from '../model/ActiveModel';
 import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
-import { checkDeviceCompatibility } from '../model/DeviceCompatibility';
-import { fetchModelConfig } from '../model/ModelConfig';
-import { ModelDownloadManager, type ResourceSource } from '../model/ModelDownloadManager';
+import { checkActiveModelCompatibility, checkDeviceCompatibility } from '../model/DeviceCompatibility';
+import {
+  QWEN3_VL_2B_INSTRUCT_BUNDLE,
+  type ModelArtifactBundleManifest,
+} from '../model/ModelArtifactManifest';
+import {
+  ModelDownloadManager,
+  type VerifiedArtifact,
+} from '../model/ModelDownloadManager';
 import { verifyModelIntegrity } from '../model/ModelIntegrity';
+import {
+  isQwenBundleReady,
+  shouldRouteToQwenDownload,
+} from '../model/ModelReadinessReconciliation';
 import { allowCellularDownload, evaluateNetworkGate } from '../model/NetworkGate';
 import { getDownloadConnectionType } from '../platform/NetworkConnection';
 import { storage } from '../storage/mmkv';
@@ -22,10 +31,10 @@ import type { IModelLifecycle } from '../types/interfaces';
 import type { DeviceCompatibilityResult, ModelState } from '../types/models';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The composition root for the model lifecycle (T025). It wires the real
-// ExpoResourceFetcher + SHA-256 verifier + pinned model sources into the
-// ModelDownloadManager, and composes that with the device-compatibility gate
-// into the full IModelLifecycle contract. Screens read from THIS store only.
+// The composition root for the Qwen V1 model lifecycle. It wires the background
+// downloader + SHA-256 verifier + exact artifact manifest into the bundle
+// ModelDownloadManager, and composes that with the device-compatibility gate into
+// the full IModelLifecycle contract. Screens read from THIS store only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const INITIAL_MODEL_STATE: ModelState = {
@@ -35,43 +44,26 @@ const INITIAL_MODEL_STATE: ModelState = {
   error: null,
 };
 
-// Development escape hatch: skip post-download AND launch-time verification
-// entirely so iterating on inference doesn't require hashing a 2.4 GB file on
-// every fetch/relaunch. `__DEV__` is `false` in a release build, so production
-// always runs the full SHA-256 + size checks below — this only affects local
-// development builds. NEVER rely on this for anything but local iteration.
-//
-// This bypass is wired here, at the composition root, rather than inside
-// ModelIntegrity.ts/ModelDownloadManager.ts, because those two modules are
-// unit-tested against real (mocked-dependency) verification logic per
-// constitution Principle VI (TDD non-negotiable for this module) — and `__DEV__`
-// is `true` inside Jest, so an in-module `if (__DEV__)` bypass would silently
-// short-circuit those tests instead of exercising the logic they assert on.
+// Development escape hatch: skip post-download AND launch-time verification so
+// iterating on inference doesn't require hashing multi-GB files on every relaunch.
+// `__DEV__` is `false` in a release build, so production always runs the full
+// SHA-256 + size checks. Wired here (not inside the unit-tested lifecycle modules)
+// because `__DEV__` is `true` under Jest.
 async function devSkipIntegrityCheck(): Promise<boolean> {
   // eslint-disable-next-line no-console
   console.warn('[Locra] DEV: skipping model integrity verification (SHA-256 + size checks).');
   return true;
 }
 
-// ── Background download (T047, FR-025) ──────────────────────────────────────
-// A true Android background download (foreground service + Android 14/16 UIDT +
-// persistent notification) via @kesha-antonov/react-native-background-downloader.
-// It writes each file to the EXACT path react-native-executorch expects
-// (`RNEDirectory + getFilenameFromUri(url)`), so `useLLM`'s ExpoResourceFetcher —
-// still the adapter registered with `initExecutorch` — finds the files already
-// present and never re-downloads them. Kept behind the `ResourceFetcherLike` seam,
-// so `ModelDownloadManager`/`IModelLifecycle` are unchanged.
-const RNE_DOWNLOAD_DIR = `${(documentDirectory ?? '').replace(/^file:\/\//, '')}react-native-executorch/`;
+// Locra's writable model directory. The Qwen bundle (language GGUF + projector)
+// is downloaded here; llama.rn loads the artifacts from these exact paths.
+const MODEL_DOWNLOAD_DIR = `${(documentDirectory ?? '').replace(/^file:\/\//, '')}locra-models/`;
 
 setConfig({
   showNotificationsEnabled: true,
   notificationsGrouping: {
     enabled: true,
     mode: 'summaryOnly',
-    // Product-identity notification copy (design.md §12 content rules: direct,
-    // calm, plain-language; never an internal model filename). The Android small
-    // icon is supplied by the app's notification icon (app.json adaptiveIcon
-    // monochrome), so tapping the notification opens Locra with its own mark.
     texts: {
       downloadTitle: 'Locra',
       downloadStarting: 'Preparing your on-device AI…',
@@ -84,10 +76,20 @@ setConfig({
   },
 });
 
-const backgroundFetcher = new BackgroundDownloadFetcher({
+/** The last path segment of a URL/path, ignoring any query string. */
+function filenameFromUri(uri: string): string {
+  const withoutQuery = uri.split('?')[0];
+  return withoutQuery.split(/[\\/]/).at(-1) ?? withoutQuery;
+}
+
+function destinationForUrl(url: string): string {
+  return `${MODEL_DOWNLOAD_DIR}${filenameFromUri(url)}`;
+}
+
+const qwenBackgroundFetcher = new BackgroundDownloadFetcher({
   createDownloadTask: (cfg) =>
     toBgDownloadTask(createDownloadTask({ id: cfg.id, url: cfg.url, destination: cfg.destination })),
-  destinationForUrl: (url) => `${RNE_DOWNLOAD_DIR}${ResourceFetcherUtils.getFilenameFromUri(url)}`,
+  destinationForUrl,
   fileExists: (absolutePath) => new File(toFileUri(absolutePath)).exists,
   deleteFileIfExists: async (absolutePath) => {
     const file = new File(toFileUri(absolutePath));
@@ -95,10 +97,19 @@ const backgroundFetcher = new BackgroundDownloadFetcher({
       file.delete();
     }
   },
-  // Reuse ExpoResourceFetcher's own listing so the directory scanned is identical.
-  listDownloadedFiles: () => ExpoResourceFetcher.listDownloadedFiles(),
+  listDownloadedFiles: () => {
+    const dir = new Directory(toFileUri(MODEL_DOWNLOAD_DIR));
+    if (!dir.exists) {
+      return Promise.resolve([]);
+    }
+    const files = dir
+      .list()
+      .filter((entry): entry is File => entry instanceof File)
+      .map((file) => file.uri.replace(/^file:\/\//, ''));
+    return Promise.resolve(files);
+  },
   ensureDownloadDir: () => {
-    const dir = new Directory(toFileUri(RNE_DOWNLOAD_DIR));
+    const dir = new Directory(toFileUri(MODEL_DOWNLOAD_DIR));
     if (!dir.exists) {
       dir.create();
     }
@@ -108,44 +119,79 @@ const backgroundFetcher = new BackgroundDownloadFetcher({
     const tasks = await getExistingDownloadTasks();
     return tasks.map(toBgDownloadTask);
   },
+  isModelArtifactFile: (absolutePath) => absolutePath.endsWith('.gguf'),
 });
 
 let manager: ModelDownloadManager | null = null;
-let managerModelId: ModelCandidateId | null = null;
+let managerModelId: string | null = null;
 let unsubscribeManager: (() => void) | null = null;
 
-function initializeManager(model: ModelCandidate): void {
-  if (manager !== null && managerModelId === model.id) {
-    return;
-  }
-
-  unsubscribeManager?.();
-  const sources: ResourceSource[] = [
-    model.modelConstant.modelSource,
-    model.modelConstant.tokenizerSource,
-    model.modelConstant.tokenizerConfigSource,
-  ];
-  manager = new ModelDownloadManager({
-    fetcher: backgroundFetcher,
+// Builds the exact-manifest Qwen bundle manager. Each pinned artifact carries its
+// own SHA-256/size (no remote config fetch), verified independently. The aggregate
+// ModelState remains product-facing; per-artifact state lives inside the manager.
+function buildQwenManager(manifest: ModelArtifactBundleManifest): ModelDownloadManager {
+  const artifacts: VerifiedArtifact[] = manifest.artifacts.map((artifact) => ({
+    artifactId: artifact.artifactId,
+    fileName: artifact.fileName,
+    getExpectedIntegrity: () =>
+      Promise.resolve({
+        expectedSha256: artifact.expectedSha256,
+        expectedSize: artifact.expectedSizeBytes,
+      }),
+  }));
+  return new ModelDownloadManager({
+    fetcher: qwenBackgroundFetcher,
     verifyIntegrity: __DEV__ ? devSkipIntegrityCheck : verifyModelIntegrity,
     getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
-    getModelConfig: () =>
-      fetchModelConfig(model.integrityConfigEndpoint, model.integrityFallback),
-    sources,
-    expectedModelFilename: ResourceFetcherUtils.getFilenameFromUri(
-      model.modelConstant.modelSource
-    ),
+    sources: manifest.artifacts.map((artifact) => artifact.sourceUri),
+    artifacts,
   });
-  managerModelId = model.id;
-  useModelStore.setState({ ...INITIAL_MODEL_STATE, selectedModelId: model.id });
+}
+
+/** Mounts the Qwen bundle as the active (and only) model lifecycle. */
+function initializeQwenBundle(): void {
+  if (manager !== null && managerModelId === QWEN3_VL_2B_INSTRUCT_BUNDLE.activeModelId) {
+    return;
+  }
+  unsubscribeManager?.();
+  manager = buildQwenManager(QWEN3_VL_2B_INSTRUCT_BUNDLE);
+  managerModelId = QWEN3_VL_2B_INSTRUCT_BUNDLE.activeModelId;
+  useModelStore.setState({
+    ...INITIAL_MODEL_STATE,
+    selectedModelId: QWEN3_VL_2B_INSTRUCT_BUNDLE.activeModelId as ModelCandidateId,
+  });
   unsubscribeManager = manager.subscribe(syncManagerState);
+}
+
+// Local on-disk paths for the Qwen artifacts, resolved to the exact destinations
+// the background fetcher writes to. Consumed by the Qwen host to load the runtime.
+export function getQwenArtifactPaths(): { modelPath: string; projectorPath: string } {
+  const [languageArtifact, projectorArtifact] = QWEN3_VL_2B_INSTRUCT_BUNDLE.artifacts;
+  return {
+    modelPath: destinationForUrl(languageArtifact.sourceUri),
+    projectorPath: destinationForUrl(projectorArtifact.sourceUri),
+  };
+}
+
+// Qwen readiness is the exact manifest verified independently — never "any GGUF
+// exists" on disk.
+function isQwenReady(): boolean {
+  if (manager === null || managerModelId !== QWEN3_VL_2B_INSTRUCT_BUNDLE.activeModelId) {
+    return false;
+  }
+  return isQwenBundleReady({
+    activeModelId: managerModelId,
+    manifest: QWEN3_VL_2B_INSTRUCT_BUNDLE,
+    artifactStates: manager.getArtifactStates(),
+  });
 }
 
 function requireManager(): ModelDownloadManager {
   if (manager === null) {
-    throw new Error('The model lifecycle is unavailable until a model is selected.');
+    // The Qwen bundle is the only model; initialize it on demand.
+    initializeQwenBundle();
   }
-  return manager;
+  return manager as ModelDownloadManager;
 }
 
 function syncManagerState(state: ModelState): void {
@@ -164,8 +210,14 @@ function toFileUri(path: string): string {
 export interface ModelStoreState extends ModelState {
   selectedModelId: ModelCandidateId | null;
   cellularDownloadWarningVisible: boolean;
-  initialize: (model: ModelCandidate) => void;
+  /** Mount the Qwen V1 artifact bundle as the active model lifecycle. */
+  initialize: (model?: ModelCandidate) => void;
+  initializeQwenBundle: () => void;
   checkDeviceCompatibility: () => DeviceCompatibilityResult;
+  /** Device compatibility for the active runtime (Qwen shares the floor). */
+  checkActiveModelCompatibility: () => DeviceCompatibilityResult;
+  /** True when the Qwen bundle is not yet ready and the user must download it. */
+  shouldRouteToQwenDownload: () => boolean;
   /** Reattach native background downloads that survived process death. */
   reattachExistingDownload: () => Promise<boolean>;
   /** Reconcile in-memory readiness against the model on disk (call once at launch). */
@@ -183,8 +235,17 @@ export const useModelStore = create<ModelStoreState>(() => ({
   ...INITIAL_MODEL_STATE,
   selectedModelId: null,
   cellularDownloadWarningVisible: false,
-  initialize: initializeManager,
+  // The single V1 model is Qwen; any `initialize()` call mounts the Qwen bundle.
+  initialize: () => initializeQwenBundle(),
+  initializeQwenBundle,
   checkDeviceCompatibility,
+  checkActiveModelCompatibility: () =>
+    checkActiveModelCompatibility(getStartupRuntimeSelection().selectedHost),
+  shouldRouteToQwenDownload: () =>
+    shouldRouteToQwenDownload({
+      startupHost: getStartupRuntimeSelection().selectedHost,
+      qwenReady: isQwenReady(),
+    }),
   reattachExistingDownload: () => requireManager().reattachExistingDownload(),
   reconcile: () => requireManager().reconcile(),
   startDownload: async () => {
@@ -214,8 +275,8 @@ export const useModelStore = create<ModelStoreState>(() => ({
   isReadyForInference: () => manager?.isReadyForInference() ?? false,
 }));
 
-// The imperative IModelLifecycle surface (contracts/model-lifecycle.contract.md)
-// for non-React consumers, e.g. the InferenceQueue's readiness gate (T027).
+// The imperative IModelLifecycle surface for non-React consumers, e.g. the
+// InferenceQueue's readiness gate.
 export const modelLifecycle: IModelLifecycle = {
   checkDeviceCompatibility,
   getState: () => manager?.getState() ?? INITIAL_MODEL_STATE,

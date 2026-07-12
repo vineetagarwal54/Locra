@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
-import { VoiceButton } from '../../components/VoiceButton';
 import { designTokens, haptics } from '../../constants/theme';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
@@ -63,14 +62,6 @@ export function ChatComposer({
       onDraftChange({ ...draft, text });
     },
     [conversationId, draft, onDraftChange]
-  );
-
-  const onVoiceTranscript = useCallback(
-    (text: string): void => {
-      const nextText = draft.text.trim() === '' ? text : `${draft.text.trim()} ${text}`;
-      onChangeText(nextText);
-    },
-    [draft.text, onChangeText]
   );
 
   const setDraftImage = useCallback(
@@ -214,8 +205,6 @@ export function ChatComposer({
           editable={!controlsDisabled}
           multiline
         />
-
-        <VoiceButton disabled={controlsDisabled} onTranscript={onVoiceTranscript} />
 
         {canCancel ? (
           <Pressable

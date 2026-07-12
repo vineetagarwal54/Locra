@@ -31,12 +31,6 @@ jest.mock('../../src/store/historyStore', () => ({
   },
 }));
 
-import type { IHistoryStore } from '../../src/types/interfaces';
-import type {
-  Conversation,
-  InferenceState,
-  MetricsSummary,
-} from '../../src/types/models';
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
 import {
   InferenceQueue,
@@ -44,6 +38,12 @@ import {
   type InferenceEngineAdapter,
 } from '../../src/inference/InferenceQueue';
 import { createConversationStore } from '../../src/store/conversationStore';
+import type { IHistoryStore } from '../../src/types/interfaces';
+import type {
+  Conversation,
+  InferenceState,
+  MetricsSummary,
+} from '../../src/types/models';
 
 class MemoryHistory implements IHistoryStore {
   private readonly conversations = new Map<string, Conversation>();

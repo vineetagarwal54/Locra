@@ -8,13 +8,18 @@ import type {
 // A `ResourceFetcherLike` (the interface ModelDownloadManager consumes) backed by
 // a true Android background download (@kesha-antonov/react-native-background-downloader:
 // DownloadManager + foreground service + Android 14/16 UIDT jobs + notification).
-// It writes each model file to the EXACT path react-native-executorch expects
-// (`RNEDirectory + getFilenameFromUri(url)`), so `useLLM`'s existing
-// ExpoResourceFetcher finds the files already present and never re-downloads them
-// (FR-025). Constitution Principle X: self-contained model-lifecycle module — no
-// imports from inference/ or screens/. All native touchpoints (the kesha task
-// factory, filesystem, and the executorch destination resolver) are INJECTED so
-// this module and its unit tests never load a native package at import time.
+// It writes each artifact to the EXACT on-disk path the runtime expects (the
+// destination resolver is INJECTED), so the runtime finds files already present
+// and never re-downloads them (FR-025). Constitution Principle X: self-contained
+// model-lifecycle module — no imports from inference/ or screens/. All native
+// touchpoints (the kesha task factory, filesystem, destination resolver, and the
+// "is this a model artifact" filter) are INJECTED so this module and its unit
+// tests never load a native package at import time.
+//
+// Runtime-neutral (Spec 005): the download directory is supplied by the injected
+// resolvers and the model-file filter is injectable, so the fetcher serves the
+// Qwen `.gguf` bundle (language model + projector) without hardcoding any
+// runtime-specific directory or file extension.
 
 /**
  * The subset of a kesha `DownloadTask` this fetcher drives. Handlers are attached
@@ -40,16 +45,22 @@ export interface BgDownloadTask {
 export interface BackgroundDownloadFetcherDeps {
   /** kesha `createDownloadTask({ id, url, destination })`. */
   createDownloadTask: (config: { id: string; url: string; destination: string }) => BgDownloadTask;
-  /** Absolute on-disk path executorch expects for a URL (RNEDirectory + filename, no file://). */
+  /** Absolute on-disk path the runtime expects for a URL (download dir + filename, no file://). */
   destinationForUrl: (url: string) => string;
   fileExists: (absolutePath: string) => boolean;
   deleteFileIfExists: (absolutePath: string) => Promise<void>;
-  /** Absolute paths of every file already in the executorch download directory. */
+  /** Absolute paths of every file already in the model download directory. */
   listDownloadedFiles: () => Promise<string[]>;
-  /** Ensure the executorch download directory exists before writing into it. */
+  /** Ensure the model download directory exists before writing into it. */
   ensureDownloadDir: () => Promise<void>;
   /** Native background tasks that survived an app/process restart. */
   getExistingDownloadTasks: () => Promise<BgDownloadTask[]>;
+  /**
+   * Predicate identifying downloaded model-artifact files among all files in the
+   * download directory. Defaults to `.gguf`; the Qwen composition root injects a
+   * `.gguf`/manifest-filename predicate for the bundle.
+   */
+  isModelArtifactFile?: (absolutePath: string) => boolean;
 }
 
 interface ActiveDownload {
@@ -71,8 +82,8 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
     const urls = sources.filter(isUrl);
     await this.deps.ensureDownloadDir();
 
-    // Unified 0..1 progress across all in-flight files, dominated by the ~2.4 GB
-    // model — matches ExpoResourceFetcher's aggregate progress behaviour.
+    // Unified 0..1 progress across all in-flight files, dominated by the
+    // ~1.1 GB language GGUF, so the aggregate bundle progress advances smoothly.
     const bytes = new Map<string, { downloaded: number; total: number }>();
     const emit = (): void => {
       if (!callback) return;
@@ -228,7 +239,7 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
       if (entry) {
         this.active.delete(url);
         await safe(() => entry.task.stop());
-        // Settle the in-flight fetch so it doesn't hang (executorch's contract:
+        // Settle the in-flight fetch so it doesn't hang (fetcher contract:
         // a cancelled download rejects the fetch with an interruption).
         entry.reject(new Error('Download cancelled.'));
       }
@@ -245,7 +256,8 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
 
   async listDownloadedModels(): Promise<string[]> {
     const files = await this.deps.listDownloadedFiles();
-    return files.filter((f) => f.endsWith('.pte'));
+    const isModelArtifact = this.deps.isModelArtifactFile ?? isGgufFile;
+    return files.filter(isModelArtifact);
   }
 
   private async forEachActive(
@@ -265,6 +277,10 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
 
 function isUrl(source: ResourceSource): source is string {
   return typeof source === 'string';
+}
+
+function isGgufFile(absolutePath: string): boolean {
+  return absolutePath.endsWith('.gguf');
 }
 
 function filenameOf(absolutePath: string): string {

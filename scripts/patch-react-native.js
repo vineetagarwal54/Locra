@@ -1,7 +1,6 @@
-// react-native's graphicsConversions.h calls std::format, which NDK 26's libc++
-// compiles out unless _LIBCPP_ENABLE_EXPERIMENTAL is defined (react-native-executorch's
-// bundled prebuilt OpenCV/kleidicv libs require NDK 26's ABI, so we can't just bump the
-// NDK instead). std::to_string is a drop-in replacement here with no format() dependency.
+// react-native's graphicsConversions.h calls std::format, which some NDK libc++
+// versions compile out unless _LIBCPP_ENABLE_EXPERIMENTAL is defined.
+// std::to_string is a drop-in replacement here with no format() dependency.
 const fs = require('fs');
 const path = require('path');
 

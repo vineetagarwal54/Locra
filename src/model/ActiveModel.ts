@@ -1,10 +1,16 @@
-type ExecuTorchModule = typeof import('react-native-executorch');
+import type { StartupRuntimeHost } from '../types/runtime';
 
-export type ModelCandidateId = 'LFM2_5_VL_1_6B_QUANTIZED' | 'GEMMA4_E2B_MM';
-export type ModelSelector = 'lfm2_5_vl_1_6b' | 'gemma4_e2b';
-export type ModelConstant =
-  | ExecuTorchModule['LFM2_5_VL_1_6B_QUANTIZED']
-  | ExecuTorchModule['GEMMA4_E2B_MM'];
+import {
+  QWEN3_VL_2B_INSTRUCT_BUNDLE,
+  QWEN3_VL_2B_INSTRUCT_MODEL_ID,
+} from './ModelArtifactManifest';
+
+// Locra V1 runs a single on-device model: Qwen3-VL-2B-Instruct through llama.rn.
+// There is no ExecuTorch runtime and no multi-model bake-off — the "candidate"
+// registry has exactly one entry so the existing onboarding/download surfaces
+// keep working against one model.
+
+export type ModelCandidateId = typeof QWEN3_VL_2B_INSTRUCT_MODEL_ID;
 
 export interface ModelIntegrityFallback {
   expectedSha256: string;
@@ -13,84 +19,74 @@ export interface ModelIntegrityFallback {
 
 export interface ModelCandidate {
   readonly id: ModelCandidateId;
-  readonly selector: ModelSelector;
-  readonly modelConstant: ModelConstant;
-  readonly modelName: ModelConstant['modelName'];
   readonly displayName: string;
   readonly description: string;
   readonly generationConfigId: string;
-  readonly integrityConfigEndpoint: string;
+  /** Aggregate download size of the Qwen bundle (language GGUF + projector). */
   readonly integrityFallback: ModelIntegrityFallback;
 }
 
-const LFM: ModelCandidate = {
-  id: 'LFM2_5_VL_1_6B_QUANTIZED',
-  selector: 'lfm2_5_vl_1_6b',
-  get modelConstant(): ModelConstant {
-    return getExecutorch().LFM2_5_VL_1_6B_QUANTIZED;
-  },
-  modelName: 'lfm2.5-vl-1.6b-quantized',
-  displayName: 'LFM2.5-VL 1.6B',
-  description: 'A compact vision-language model with a smaller device footprint.',
-  generationConfigId: 'lfm2.5-vl-official-v1',
-  integrityConfigEndpoint:
-    'https://raw.githubusercontent.com/vineetagarwal54/Locra/001-camera-vlm-qa/model-configs/lfm2.5-vl-1.6b-quantized.json',
+const QWEN_TOTAL_BYTES = QWEN3_VL_2B_INSTRUCT_BUNDLE.artifacts.reduce(
+  (sum, artifact) => sum + artifact.expectedSizeBytes,
+  0
+);
+
+const QWEN_CANDIDATE: ModelCandidate = {
+  id: QWEN3_VL_2B_INSTRUCT_MODEL_ID,
+  displayName: 'Locra V1',
+  description: 'On-device vision-language model running fully offline.',
+  generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
   integrityFallback: {
-    expectedSha256: 'd70133262bbd89e2f501380869e152252f761f6be4ccdd959fbd2305105035b4',
-    expectedSize: 2_427_656_704,
+    // Per-artifact SHA-256 is pinned in the artifact manifest and verified
+    // independently; the bundle carries no single aggregate digest.
+    expectedSha256: '',
+    expectedSize: QWEN_TOTAL_BYTES,
   },
 };
 
-const GEMMA: ModelCandidate = {
-  id: 'GEMMA4_E2B_MM',
-  selector: 'gemma4_e2b',
-  get modelConstant(): ModelConstant {
-    return getExecutorch().GEMMA4_E2B_MM;
-  },
-  modelName: 'gemma4-e2b-multimodal',
-  displayName: 'Gemma 4 E2B Multimodal',
-  description: 'A larger multimodal model with higher storage and memory requirements.',
-  generationConfigId: 'gemma4-e2b-mm-library-default',
-  integrityConfigEndpoint:
-    'https://raw.githubusercontent.com/vineetagarwal54/Locra/004-model-bake-off/model-configs/gemma-4-e2b-multimodal.json',
-  integrityFallback: {
-    expectedSha256: '56c6137e47ae5b64174259deb5d96a5d18bb86f2d992cfd96b65d869889b3fd2',
-    expectedSize: 4_371_419_520,
-  },
-};
-
-export const MODEL_CANDIDATES: ReadonlyArray<ModelCandidate> = [LFM, GEMMA];
-
-const BY_ID: Readonly<Record<ModelCandidateId, ModelCandidate>> = {
-  LFM2_5_VL_1_6B_QUANTIZED: LFM,
-  GEMMA4_E2B_MM: GEMMA,
-};
-
-const BY_SELECTOR: Readonly<Record<ModelSelector, ModelCandidate>> = {
-  lfm2_5_vl_1_6b: LFM,
-  gemma4_e2b: GEMMA,
-};
+export const MODEL_CANDIDATES: ReadonlyArray<ModelCandidate> = [QWEN_CANDIDATE];
 
 export function getModelCandidate(id: ModelCandidateId): ModelCandidate {
-  return BY_ID[id];
+  void id;
+  return QWEN_CANDIDATE;
 }
 
 export function isModelCandidateId(raw: string): raw is ModelCandidateId {
-  return raw === 'LFM2_5_VL_1_6B_QUANTIZED' || raw === 'GEMMA4_E2B_MM';
+  return raw === QWEN3_VL_2B_INSTRUCT_MODEL_ID;
 }
 
-export function resolveDeveloperModelOverride(raw: string | undefined): ModelCandidate | null {
-  if (raw === undefined || raw === '') {
-    return null;
-  }
-  if (raw === 'lfm2_5_vl_1_6b' || raw === 'gemma4_e2b') {
-    return BY_SELECTOR[raw];
-  }
+/** No developer model override exists in the single-runtime V1 build. */
+export function resolveDeveloperModelOverride(_raw: string | undefined): ModelCandidate | null {
   return null;
 }
 
-function getExecutorch(): ExecuTorchModule {
-  // Native access stays lazy so bootstrap and metadata screens do not mount the runtime.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('react-native-executorch') as ExecuTorchModule;
+// ── Qwen internal V1 descriptor ──────────────────────────────────────────────
+
+export interface QwenInternalModelDescriptor {
+  readonly id: typeof QWEN3_VL_2B_INSTRUCT_MODEL_ID;
+  readonly runtime: 'llama.rn';
+  readonly displayName: string;
+  readonly description: string;
+  /** Safe aggregate generation-config id for diagnostics; not a raw native internal. */
+  readonly generationConfigId: string;
+  readonly enabledBy: 'default_v1';
+  readonly requiredArtifactIds: ReadonlyArray<string>;
+}
+
+export const QWEN_V1_DESCRIPTOR: QwenInternalModelDescriptor = {
+  id: QWEN3_VL_2B_INSTRUCT_MODEL_ID,
+  runtime: 'llama.rn',
+  displayName: QWEN_CANDIDATE.displayName,
+  description: QWEN_CANDIDATE.description,
+  generationConfigId: QWEN_CANDIDATE.generationConfigId,
+  enabledBy: 'default_v1',
+  requiredArtifactIds: QWEN3_VL_2B_INSTRUCT_BUNDLE.artifacts.map((artifact) => artifact.artifactId),
+};
+
+/** The active V1 model id, tied to the exact Qwen artifact manifest. */
+export const ACTIVE_V1_MODEL_ID = QWEN3_VL_2B_INSTRUCT_MODEL_ID;
+
+/** The active model id for the startup-selected runtime (always Qwen in V1). */
+export function resolveActiveModelId(_host: StartupRuntimeHost): string {
+  return ACTIVE_V1_MODEL_ID;
 }

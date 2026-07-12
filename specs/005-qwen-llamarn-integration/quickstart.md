@@ -151,6 +151,50 @@ Expected outcome:
 - Any regression over 25% has a documented explanation and explicit acceptance.
 - No avoidable model reloads, duplicate preprocessing, or unnecessary generation passes are present.
 
+## Device validation results (T038–T040)
+
+These require a physical Android 13+ device and are recorded here after each run.
+Automated coverage (T030–T037) already passes via `npm test`; the items below are
+the hardware-only checks that automation cannot substitute for.
+
+### T038 — Fresh-user Qwen download and setup
+
+| Check | Result | Notes |
+|---|---|---|
+| Fresh download of both artifacts | pending | |
+| Pause / resume | pending | |
+| Cancel | pending | |
+| Background reattachment | pending | |
+| Process-restart reconciliation | pending | |
+| Zero re-download when verified | pending | |
+| Reaches chat | pending | |
+
+### T039 — Runtime behavior and Locra end-to-end vision latency
+
+| Check | Result | Notes |
+|---|---|---|
+| Text streaming | pending | |
+| Image Q&A | pending | |
+| Multi-turn follow-ups | pending | |
+| Cancellation mid-stream | pending | |
+| App backgrounding during/after generation | pending | |
+| Failure recovery (missing/corrupt/mismatch/OOM) | pending | |
+| Memory before/after load/after N requests/after release | pending | |
+| Thermal behavior | pending | |
+| Full Locra end-to-end vision latency (reported separately) | pending | |
+
+### T040 — Physical-device parity vs spike baselines
+
+| Metric | Spike baseline | Measured | Regression % | Accepted explanation (if > 25%) |
+|---|---|---|---|---|
+| Model load | ~2.34 s | pending | | |
+| Comparable runtime-level vision completion | ~5.33 s | pending | | |
+| Tokens/sec | ~35.7 | pending | | |
+
+Record the validated device id and comparable prompt/image set id alongside the
+measurements. A regression greater than 25% on any comparable runtime-level metric
+requires a documented explanation and explicit acceptance.
+
 ## Final phase validation: Qwen-only V1
 
 After parity approval and ExecuTorch removal:

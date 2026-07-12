@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import {
   CharacterContextBudgetPolicy,
   ContextOrchestrator,
@@ -420,5 +423,3 @@ describe('ContextOrchestrator', () => {
     expect(excludedForBudget?.length).toBeGreaterThan(0);
   });
 });
-import { readFileSync } from 'fs';
-import { join } from 'path';

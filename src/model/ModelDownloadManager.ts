@@ -1,13 +1,23 @@
 import type { ModelState } from '../types/models';
 
+import type { ArtifactReadiness } from './ModelArtifactManifest';
 import type { ModelConfig } from './ModelConfig';
 
 // Wraps a resource fetcher's download lifecycle and runs a SHA-256 integrity
 // check after every fetch. Constitution Principle X: self-contained model
 // lifecycle — no imports from inference or screens. Dependencies (the fetcher
 // and the integrity verifier) are INJECTED so this module never loads a native
-// package at import time; the real ExpoResourceFetcher + verifyModelIntegrity
-// are wired at the composition root (modelStore, T025).
+// package at import time; the real ExpoResourceFetcher/BackgroundDownloadFetcher
+// + verifyModelIntegrity are wired at the composition root (modelStore).
+//
+// Generalized (Spec 005, T017) from a single `.pte` model into an EXACT-manifest
+// artifact BUNDLE: one or more independently-verified artifacts (e.g. Qwen's
+// language GGUF + Q8_0 projector). Each artifact is located by its exact
+// filename and verified independently; the bundle is ready only when every
+// artifact is downloaded AND integrity-verified. Aggregate progress/status stays
+// the product-facing `ModelState`; per-artifact readiness is exposed separately
+// for the internal bundle wiring. The legacy single-artifact (LFM/ExecuTorch)
+// wiring is preserved by passing `expectedModelFilename` + `getModelConfig`.
 
 // Mirrors ExpoResourceFetcher's `ResourceSource` (string | number | object)
 // without importing the native package.
@@ -34,8 +44,18 @@ export interface ResourceFetcherLike {
   resumeFetching(...sources: ResourceSource[]): Promise<void>;
   cancelFetching(...sources: ResourceSource[]): Promise<void>;
   deleteResources(...sources: ResourceSource[]): Promise<void>;
-  /** Local paths of already-downloaded model (`.pte`) files. */
+  /** Local paths of already-downloaded model artifact files. */
   listDownloadedModels(): Promise<string[]>;
+}
+
+/** One independently-verified artifact in the bundle. */
+export interface VerifiedArtifact {
+  /** Stable internal id (mirrors the manifest descriptor). */
+  readonly artifactId: string;
+  /** Exact expected filename, used to locate the file among fetch results / on disk. */
+  readonly fileName: string;
+  /** Fetches (or returns pinned) expected SHA-256 + size for this artifact. */
+  getExpectedIntegrity: () => Promise<ModelConfig>;
 }
 
 export interface ModelDownloadManagerDeps {
@@ -43,12 +63,23 @@ export interface ModelDownloadManagerDeps {
   verifyIntegrity: (fileUri: string, expectedSha256: string) => Promise<boolean>;
   /** Bytes on disk for a given path (injected so this module stays native-free). */
   getFileSize: (fileUri: string) => Promise<number>;
-  /** Fetches fresh expected hash/size at the start of each download attempt. */
-  getModelConfig: () => Promise<ModelConfig>;
-  /** Model + tokenizer + config sources, in order; `sources[0]` is the `.pte`. */
+  /** All download sources for the bundle, in order (verified artifacts + auxiliary files). */
   sources: ResourceSource[];
-  /** Exact `.pte` filename for the selected model. */
-  expectedModelFilename: string;
+  /**
+   * The independently-verified artifacts in this bundle. When omitted, a single
+   * artifact is derived from `expectedModelFilename` + `getModelConfig` (the
+   * legacy LFM/ExecuTorch wiring).
+   */
+  artifacts?: VerifiedArtifact[];
+  /** Legacy single-artifact expected hash/size fetcher. Ignored when `artifacts` is set. */
+  getModelConfig?: () => Promise<ModelConfig>;
+  /** Legacy single-artifact filename. Ignored when `artifacts` is set. */
+  expectedModelFilename?: string;
+}
+
+interface ArtifactProgress {
+  downloaded: boolean;
+  verified: boolean;
 }
 
 const INITIAL_STATE: ModelState = {
@@ -61,14 +92,33 @@ const INITIAL_STATE: ModelState = {
 export class ModelDownloadManager {
   private state: ModelState = { ...INITIAL_STATE };
   private readonly listeners = new Set<(state: ModelState) => void>();
-  private lastModelConfig: ModelConfig | null = null;
+  private readonly artifacts: VerifiedArtifact[];
+  private readonly artifactProgress = new Map<string, ArtifactProgress>();
+  private readonly expectedCache = new Map<string, ModelConfig>();
   private activeDownloadPromise: Promise<void> | null = null;
   private downloadRunId = 0;
 
-  constructor(private readonly deps: ModelDownloadManagerDeps) {}
+  constructor(private readonly deps: ModelDownloadManagerDeps) {
+    this.artifacts = normalizeArtifacts(deps);
+    for (const artifact of this.artifacts) {
+      this.artifactProgress.set(artifact.artifactId, { downloaded: false, verified: false });
+    }
+  }
 
   getState(): ModelState {
     return this.state;
+  }
+
+  /** Internal per-artifact readiness for the bundle wiring (not product-facing). */
+  getArtifactStates(): ArtifactReadiness[] {
+    return this.artifacts.map((artifact) => {
+      const progress = this.artifactProgress.get(artifact.artifactId);
+      return {
+        artifactId: artifact.artifactId,
+        downloaded: progress?.downloaded ?? false,
+        integrityVerified: progress?.verified ?? false,
+      };
+    });
   }
 
   subscribe(listener: (state: ModelState) => void): () => void {
@@ -79,7 +129,9 @@ export class ModelDownloadManager {
   }
 
   isReadyForInference(): boolean {
-    return this.state.downloadStatus === 'downloaded' && this.state.integrityVerified;
+    return this.artifacts.every(
+      (artifact) => this.artifactProgress.get(artifact.artifactId)?.verified === true
+    );
   }
 
   startDownload(): Promise<void> {
@@ -101,39 +153,28 @@ export class ModelDownloadManager {
   }
 
   private async runDownload(runId: number): Promise<void> {
+    this.resetArtifactProgress();
     this.setState({
       downloadStatus: 'downloading',
       downloadProgress: 0,
       integrityVerified: false,
       error: null,
     });
-    let didStartFetch = false;
     try {
-      const config = await this.deps.getModelConfig();
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
-      this.lastModelConfig = config;
-      didStartFetch = true;
-      await this.finishDownload(
-        this.deps.fetcher.fetch(
-          (progress) => {
-            if (this.isCurrentRun(runId)) {
-              this.setState({ downloadProgress: progress });
-            }
-          },
-          ...this.deps.sources
-        ),
-        config,
-        runId
+      const downloadPromise = this.deps.fetcher.fetch(
+        (progress) => {
+          if (this.isCurrentRun(runId)) {
+            this.setState({ downloadProgress: progress });
+          }
+        },
+        ...this.deps.sources
       );
+      await this.finishDownload(downloadPromise, runId);
     } catch (error) {
       if (!this.isCurrentRun(runId)) {
         return;
       }
-      if (didStartFetch) {
-        await this.safeDelete();
-      }
+      await this.safeDelete();
       this.setState({
         downloadStatus: 'failed',
         integrityVerified: false,
@@ -164,6 +205,7 @@ export class ModelDownloadManager {
         return false;
       }
 
+      this.resetArtifactProgress();
       this.setState({
         downloadStatus: reattached.status,
         downloadProgress: reattached.progress,
@@ -184,33 +226,31 @@ export class ModelDownloadManager {
   }
 
   /**
-   * Launch-time reconciliation against the real filesystem (data-model.md:
-   * `OnDeviceModel` is "reconciled each launch"). A model file is only ever left
-   * on disk AFTER it passed its SHA-256 check at download time (startDownload
-   * deletes anything that fails), so presence is a trustworthy cached result:
-   * present ⇒ ready, absent ⇒ not ready. This deliberately does NOT re-hash the
-   * file — loading a multi-GB model into memory on every cold start would
-   * violate the memory-safety budget on 6–8 GB devices (Principle IV;
-   * data-model.md's `lastVerifiedAt` "trust the cached result" path). Never
-   * downloads; never throws.
+   * Launch-time reconciliation against the real filesystem. Each artifact left on
+   * disk was only ever kept AFTER passing its SHA-256 check at download time
+   * (startDownload deletes anything that fails), so presence + a cheap size check
+   * is a trustworthy cached result: present & big enough ⇒ ready, otherwise not
+   * ready. This deliberately does NOT re-hash multi-GB files on every cold start
+   * (Principle IV). Every manifest artifact must reconcile as ready for the
+   * bundle to be ready. Never downloads; never throws.
    */
   async reconcile(): Promise<void> {
     try {
-      const models = await this.deps.fetcher.listDownloadedModels();
-      const activeModelPath = models.find(
-        (modelPath) => getFilename(modelPath) === this.deps.expectedModelFilename
-      );
-      if (activeModelPath === undefined) {
-        this.setState({ ...INITIAL_STATE });
-        return;
-      }
-      const config = this.lastModelConfig ?? await this.deps.getModelConfig();
-      this.lastModelConfig = config;
-      const size = await this.deps.getFileSize(activeModelPath);
-      if (size < config.expectedSize) {
-        await this.safeDelete();
-        this.setState({ ...INITIAL_STATE });
-        return;
+      const files = await this.deps.fetcher.listDownloadedModels();
+      for (const artifact of this.artifacts) {
+        const path = files.find((file) => getFilename(file) === artifact.fileName);
+        if (path === undefined) {
+          await this.markNotReady();
+          return;
+        }
+        const expected = await this.resolveExpected(artifact);
+        const size = await this.deps.getFileSize(path);
+        if (size < expected.expectedSize) {
+          await this.safeDelete();
+          await this.markNotReady();
+          return;
+        }
+        this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
       }
       this.setState({
         downloadStatus: 'downloaded',
@@ -219,7 +259,7 @@ export class ModelDownloadManager {
         error: null,
       });
     } catch {
-      this.setState({ ...INITIAL_STATE });
+      await this.markNotReady();
     }
   }
 
@@ -271,6 +311,7 @@ export class ModelDownloadManager {
     if (this.activeDownloadPromise === cancelledPromise) {
       this.activeDownloadPromise = null;
     }
+    this.resetArtifactProgress();
     this.setState({ ...INITIAL_STATE });
   }
 
@@ -287,12 +328,7 @@ export class ModelDownloadManager {
     runId: number
   ): Promise<void> {
     try {
-      const config = await this.deps.getModelConfig();
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
-      this.lastModelConfig = config;
-      await this.finishDownload(downloadPromise, config, runId);
+      await this.finishDownload(downloadPromise, runId);
     } catch (error) {
       if (!this.isCurrentRun(runId)) {
         return;
@@ -313,35 +349,68 @@ export class ModelDownloadManager {
 
   private async finishDownload(
     downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
-    config: ModelConfig,
     runId: number
   ): Promise<void> {
     const { paths } = await downloadPromise;
     if (!this.isCurrentRun(runId)) {
       return;
     }
-    const verified = await this.deps.verifyIntegrity(paths[0], config.expectedSha256);
-    if (!this.isCurrentRun(runId)) {
-      return;
+
+    // Verify each artifact independently — a match on one artifact never implies
+    // verification of another.
+    for (const artifact of this.artifacts) {
+      const expected = await this.resolveExpected(artifact);
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
+      const path = paths.find((candidate) => getFilename(candidate) === artifact.fileName);
+      const verified =
+        path !== undefined && (await this.deps.verifyIntegrity(path, expected.expectedSha256));
+      if (!this.isCurrentRun(runId)) {
+        return;
+      }
+      if (!verified) {
+        this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: false });
+        // Corrupt/missing bytes: clear the partial files BEFORE reporting 'failed'
+        // so the next startDownload() is always a clean re-download.
+        await this.safeDelete();
+        this.setState({
+          downloadStatus: 'failed',
+          integrityVerified: false,
+          error: 'The downloaded model failed its integrity check.',
+        });
+        return;
+      }
+      this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
     }
-    if (verified) {
-      this.setState({
-        downloadStatus: 'downloaded',
-        downloadProgress: 1,
-        integrityVerified: true,
-        error: null,
-      });
-      return;
-    }
-    // Corrupt bytes: clear the partial file BEFORE reporting 'failed' so the
-    // next startDownload() is always a clean re-download, never a resume of
-    // corrupt bytes (model-lifecycle.contract.md postconditions).
-    await this.safeDelete();
+
     this.setState({
-      downloadStatus: 'failed',
-      integrityVerified: false,
-      error: 'The downloaded model failed its integrity check.',
+      downloadStatus: 'downloaded',
+      downloadProgress: 1,
+      integrityVerified: true,
+      error: null,
     });
+  }
+
+  private async resolveExpected(artifact: VerifiedArtifact): Promise<ModelConfig> {
+    const cached = this.expectedCache.get(artifact.artifactId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const expected = await artifact.getExpectedIntegrity();
+    this.expectedCache.set(artifact.artifactId, expected);
+    return expected;
+  }
+
+  private resetArtifactProgress(): void {
+    for (const artifact of this.artifacts) {
+      this.artifactProgress.set(artifact.artifactId, { downloaded: false, verified: false });
+    }
+  }
+
+  private async markNotReady(): Promise<void> {
+    this.resetArtifactProgress();
+    this.setState({ ...INITIAL_STATE });
   }
 
   private setState(patch: Partial<ModelState>): void {
@@ -359,6 +428,25 @@ export class ModelDownloadManager {
   private isCurrentRun(runId: number): boolean {
     return runId === this.downloadRunId;
   }
+}
+
+function normalizeArtifacts(deps: ModelDownloadManagerDeps): VerifiedArtifact[] {
+  if (deps.artifacts !== undefined && deps.artifacts.length > 0) {
+    return deps.artifacts;
+  }
+  if (deps.expectedModelFilename !== undefined && deps.getModelConfig !== undefined) {
+    const getModelConfig = deps.getModelConfig;
+    return [
+      {
+        artifactId: deps.expectedModelFilename,
+        fileName: deps.expectedModelFilename,
+        getExpectedIntegrity: getModelConfig,
+      },
+    ];
+  }
+  throw new Error(
+    'ModelDownloadManager requires either `artifacts` or `expectedModelFilename` + `getModelConfig`.'
+  );
 }
 
 function toMessage(error: unknown): string {

@@ -23,8 +23,7 @@
       "package": "com.locra.app",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -39,13 +38,14 @@
           "skipMmkvDependency": true
         }
       ],
+      "expo-sharing",
       [
-        "expo-audio",
+        "llama.rn",
         {
-          "microphonePermission": "Locra uses the microphone only to turn your spoken question into text, entirely on this device."
+          "forceCxx20": true,
+          "enableOpenCLAndHexagon": true
         }
-      ],
-      "expo-sharing"
+      ]
     ],
     "extra": {
       "eas": {

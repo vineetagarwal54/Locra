@@ -27,6 +27,15 @@ jest.mock('../../../src/store/modelStore', () => ({
     }),
   }),
 }));
+// This suite validates the ExecuTorch/LFM attribution path, so pin the host to
+// ExecuTorch (Qwen is now the default V1 runtime).
+jest.mock('../../../src/inference/StartupRuntimeSelection', () => ({
+  getStartupRuntimeSelection: () => ({
+    selectedHost: 'executorch',
+    source: 'internal_startup_config',
+    processLocked: true,
+  }),
+}));
 jest.mock('react-native-nitro-image', () => ({
   loadImage: jest.fn(() => Promise.resolve({ width: 512, height: 384 })),
 }));
@@ -41,7 +50,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
-import type { InferenceEngineHandle } from '../../../src/inference/useInferenceEngine';
+import type { InferenceEngineHandle } from '../../../src/inference/InferenceEngineHandle';
 import { useInferenceStore } from '../../../src/store/inferenceStore';
 import type { QASession } from '../../../src/types/models';
 
@@ -337,8 +346,8 @@ describe('chat-thread hydration and reset (FR-045, FR-046, FR-047)', () => {
       expect.objectContaining({
         answerText: FIRST_VISIBLE_ANSWER,
         pipelineVariantId: 'recommended-sampling-v1',
-        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
-        generationConfigId: 'lfm2.5-vl-official-v1',
+        modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+        generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
       }),
     );
     expect(saved).not.toHaveProperty('currentObjectiveResult');

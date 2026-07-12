@@ -4,7 +4,6 @@
 
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
-import type { ModelCandidateId } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -36,6 +35,11 @@ import {
 import { prepareImageForInference } from './ImageEnhancer';
 import { type PreprocessedImage } from './ImagePreprocessor';
 import { inferenceActivityLock, type ActivityLock } from './InferenceActivityLock';
+import type {
+  EngineGenerateRequest,
+  EngineGenerateResult,
+  InferenceEngineAdapter,
+} from './InferenceEngineHandle';
 import { InferenceMetricsRecorder } from './InferenceMetrics';
 import {
   createInferenceTrace,
@@ -55,29 +59,11 @@ import {
   type TurnLifecycleRequest,
 } from './turnLifecycleMachine';
 
-export interface EngineGenerateRequest {
-  messages: ModelRequestMessage[];
-  kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat';
-  originalQuestion?: string;
-}
-
-export interface EngineGenerateResult {
-  response: string;
-  tokenCount: number;
-  promptTokenCount?: number;
-  totalTokenCount?: number;
-  pinnedExtraction?: string | null;
-  hiddenEvidence?: InferenceState['hiddenEvidence'];
-}
-
-export interface InferenceEngineAdapter {
-  loadModel(): Promise<void>;
-  generate(
-    request: EngineGenerateRequest,
-    onToken: (cumulativeResponse: string, generatedTokenCount?: number) => void,
-    signal: AbortSignal,
-  ): Promise<EngineGenerateResult>;
-}
+export type {
+  EngineGenerateRequest,
+  EngineGenerateResult,
+  InferenceEngineAdapter,
+} from './InferenceEngineHandle';
 
 export interface InferenceSubmitOptions {
   turn?: 'first' | 'followUp';
@@ -93,7 +79,8 @@ export interface InferenceQueueDeps {
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
   isTraceEnabled?: () => boolean;
   getModelAttribution?: () => {
-    modelId: ModelCandidateId;
+    /** Aggregate model id (ExecuTorch candidate id or the internal Qwen V1 id). */
+    modelId: string;
     generationConfigId: string;
   };
 }

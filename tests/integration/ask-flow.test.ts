@@ -12,11 +12,8 @@ jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
 
 import { HistoryStore, type HistoryStorage } from '../../src/history/HistoryStore';
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
-import {
-  InferenceQueue,
-  type EngineGenerateRequest,
-  type InferenceEngineAdapter,
-} from '../../src/inference/InferenceQueue';
+import type { EngineGenerateRequest, InferenceEngineAdapter } from '../../src/inference/InferenceEngineHandle';
+import { InferenceQueue } from '../../src/inference/InferenceQueue';
 import type { Conversation, InferenceRequest } from '../../src/types/models';
 
 class MemoryHistoryStorage implements HistoryStorage {

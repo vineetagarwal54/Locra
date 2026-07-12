@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { getTotalMemorySync } from 'react-native-device-info';
 
 import type { DeviceCompatibilityResult } from '../types/models';
+import type { StartupRuntimeHost } from '../types/runtime';
 
 // plan.md's 6-8GB RAM target device floor; matches the illustrative reason
 // string in data-model.md ("Locra requires at least 6GB").
@@ -60,4 +61,18 @@ export function checkDeviceCompatibility(): DeviceCompatibilityResult {
       reason: 'Unable to determine device compatibility.',
     };
   }
+}
+
+/**
+ * Compatibility-before-load for the runtime selected at startup (Spec 005, T020).
+ * The Qwen V1 runtime shares the existing Android 13+/API 33, 6 GB RAM floor
+ * (CPU-only, `n_gpu_layers: 0`), so both hosts reuse the same gate; this wrapper
+ * makes the active-model check explicit rather than adding a Qwen-only subsystem.
+ */
+export function checkActiveModelCompatibility(
+  runtimeHost: StartupRuntimeHost
+): DeviceCompatibilityResult {
+  // Both the ExecuTorch and Qwen hosts share the same Android 13+/6 GB floor.
+  void runtimeHost;
+  return checkDeviceCompatibility();
 }
