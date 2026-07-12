@@ -16,9 +16,10 @@ import {
   SetupStateIcon,
 } from '../components/onboarding/OnboardingKit';
 import { designTokens } from '../constants/theme';
-import { MODEL_DISPLAY_NAME, formatDownloadedOfTotal } from '../model/ModelPresentation';
+import { createModelPresentation } from '../model/ModelPresentation';
 import { getStorageAvailability, isStorageError } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { requireSelectedModel } from '../store/modelSelectionStore';
 import { useModelStore } from '../store/modelStore';
 import type { ModelDownloadStatus } from '../types/models';
 
@@ -28,6 +29,7 @@ const PROGRESS_MIN_PERCENT = 2;
 const PROGRESS_ANIM_MS = 250;
 
 export function DownloadProgressScreen({ navigation, route }: Props) {
+  const presentation = createModelPresentation(requireSelectedModel());
   const autoStart = route.params?.autoStart ?? false;
 
   const downloadStatus = useModelStore((s) => s.downloadStatus);
@@ -79,7 +81,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
         // spending bandwidth on a download that cannot fit (design.md §7.7).
         // If free space can't be read, getStorageAvailability reports
         // `sufficient: true` so a real ENOSPC still surfaces via the download.
-        const availability = await getStorageAvailability();
+        const availability = await getStorageAvailability(presentation.storageRequiredBytes);
         if (!availability.sufficient) {
           navigation.replace('InsufficientStorage');
           return;
@@ -87,7 +89,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
         void store.startDownload();
       })();
     }
-  }, [autoStart, navigation]);
+  }, [autoStart, navigation, presentation.storageRequiredBytes]);
 
   // Setup completed and verified → confirm with the Success screen (design.md §7.6).
   useEffect(() => {
@@ -166,14 +168,14 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
           size={designTokens.type.supporting.fontSize}
           color={designTokens.color.primary}
         />
-        <Text style={styles.chipText}>{MODEL_DISPLAY_NAME}</Text>
+        <Text style={styles.chipText}>{presentation.displayName}</Text>
       </View>
 
       {cellularWarningVisible ? (
         <View style={styles.warningCard}>
           <Text style={styles.warningTitle}>This looks like mobile data</Text>
           <Text style={styles.warningText}>
-            {`The model is about ${formatDownloadedOfTotal(1).split(' / ')[1]}. Wait for Wi-Fi, or continue now on mobile data.`}
+            {`The model is about ${presentation.downloadSizeLabel}. Wait for Wi-Fi, or continue now on mobile data.`}
           </Text>
           <View style={styles.warningActions}>
             <View style={styles.warningActionLeft}>
@@ -197,7 +199,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
           <View style={styles.progressCard}>
             <View style={styles.progressHeader}>
               <Text style={styles.progressPercent}>{progressPercent}%</Text>
-              <Text style={styles.progressBytes}>{formatDownloadedOfTotal(progress)}</Text>
+              <Text style={styles.progressBytes}>{presentation.formatDownloadedOfTotal(progress)}</Text>
             </View>
             <View style={styles.progressTrack}>
               <Animated.View style={[styles.progressFill, progressFillStyle]} />

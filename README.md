@@ -133,18 +133,19 @@ For current manual validation, prefer one fresh development build if you need
 Metro/dev inspection, or `production-apk` if you are validating the exact release
 experience without dev tooling.
 
-### Model bake-off selector
+### Model selection
 
-`EXPO_PUBLIC_LOCRA_VLM` selects the vision-language model at build time. Supported
-values are:
+On first launch, Locra asks the user to choose one of the two supported on-device
+models. The choice is stored in MMKV and can later be changed from Settings. One
+APK supports both models; separate LFM and Gemma builds are not required.
+
+`EXPO_PUBLIC_LOCRA_VLM` remains available only as an optional developer override:
 
 - `lfm2_5_vl_1_6b` for the default LFM2.5-VL-1.6B model.
 - `gemma4_e2b` for the Gemma 4 E2B multimodal model.
 
-Leaving the variable unset also selects LFM. Any other non-empty value is invalid
-and stops application initialization with a configuration error instead of silently
-falling back to a different model. Start from `.env.example` for local configuration;
-EAS profiles set the variable in `eas.json` when a non-default model is required.
+Leave it unset for normal onboarding and testing. An invalid value is ignored, so
+it never bypasses the persisted user selection or prevents first-launch selection.
 
 ## Specs
 

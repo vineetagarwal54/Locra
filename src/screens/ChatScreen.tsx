@@ -198,7 +198,8 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const onOpenSettings = useCallback((): void => {
     void haptics.tap();
-  }, []);
+    navigation.navigate('Settings');
+  }, [navigation]);
 
   const onOpenCamera = useCallback((): void => {
     navigation.navigate('Capture', { conversationId });

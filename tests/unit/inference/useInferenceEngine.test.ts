@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import type { ModelCandidate } from '../../../src/model/ActiveModel';
 
 const LFM_MODEL = { modelName: 'lfm2.5-vl-1.6b-quantized' };
 const GEMMA_MODEL = { modelName: 'gemma4-e2b-multimodal' };
@@ -56,12 +57,8 @@ function callUseInferenceEngineWithActiveModel(modelConstant: { modelName: strin
     LFM2_5_VL_1_6B_QUANTIZED: LFM_MODEL,
     useLLM,
   }));
-  jest.doMock('../../../src/model/ActiveModel', () => ({
-    activeModel: { modelConstant },
-  }));
-
   const { useInferenceEngine } = require('../../../src/inference/useInferenceEngine') as typeof import('../../../src/inference/useInferenceEngine');
-  useInferenceEngine();
+  useInferenceEngine({ modelConstant } as ModelCandidate);
   return useLLM;
 }
 

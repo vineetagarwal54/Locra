@@ -71,6 +71,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
   const onSettings = (): void => {
     void haptics.tap();
     navigation.closeDrawer();
+    navigation.navigate('Root', { screen: 'Settings' });
   };
 
   return (

@@ -1,7 +1,5 @@
 import { getFreeDiskStorage } from 'react-native-device-info';
 
-import { MODEL_STORAGE_REQUIRED_BYTES } from './ModelPresentation';
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Free-space check for the model-setup flow (design.md §7.7 Insufficient
 // Storage). This is presentation/recovery support only — it reads real device
@@ -22,8 +20,7 @@ export interface StorageAvailability {
 
 // Reads real device free space via react-native-device-info (the same native
 // module DeviceCompatibility already uses for total memory).
-export async function getStorageAvailability(): Promise<StorageAvailability> {
-  const requiredBytes = MODEL_STORAGE_REQUIRED_BYTES;
+export async function getStorageAvailability(requiredBytes: number): Promise<StorageAvailability> {
   try {
     const availableBytes = await getFreeDiskStorage();
     if (typeof availableBytes !== 'number' || !Number.isFinite(availableBytes) || availableBytes < 0) {

@@ -4,7 +4,7 @@
 
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
-import { activeModel } from '../model/ActiveModel';
+import type { ModelCandidateId } from '../model/ActiveModel';
 import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -92,6 +92,10 @@ export interface InferenceQueueDeps {
   activityLock?: ActivityLock;
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
   isTraceEnabled?: () => boolean;
+  getModelAttribution?: () => {
+    modelId: ModelCandidateId;
+    generationConfigId: string;
+  };
 }
 
 export interface DeviceBuildMetadata {
@@ -565,8 +569,10 @@ export class InferenceQueue implements IInferenceQueue {
       truncated: verdict === 'truncated',
       looping: verdict === 'looping',
       timestamp: new Date().toISOString(),
-      modelId: activeModel.id,
-      generationConfigId: activeModel.generationConfigId,
+      ...(this.deps.getModelAttribution?.() ?? {
+        modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+        generationConfigId: 'lfm2.5-vl-official-v1',
+      }),
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
       deviceNameModel: metadata.deviceNameModel,
       appBuildId: metadata.appBuildId,
@@ -692,6 +698,10 @@ export function createInferenceQueue(
   return new InferenceQueue({
     preprocess: prepareImageForInference,
     isReadyForInference: () => false,
+    getModelAttribution: () => ({
+      modelId: 'LFM2_5_VL_1_6B_QUANTIZED',
+      generationConfigId: 'lfm2.5-vl-official-v1',
+    }),
     engine,
     ...overrides,
   });

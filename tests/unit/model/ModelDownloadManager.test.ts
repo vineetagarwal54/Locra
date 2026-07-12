@@ -92,12 +92,12 @@ function makeHarness() {
 }
 
 describe('ModelDownloadManager', () => {
-  it('receives model sources derived from the active model at the composition root', () => {
+  it('receives model sources derived from the selected model at the composition root', () => {
     const source = readFileSync(join(process.cwd(), 'src/store/modelStore.ts'), 'utf8');
 
-    expect(source).toContain('activeModel.modelConstant.modelSource');
-    expect(source).toContain('activeModel.modelConstant.tokenizerSource');
-    expect(source).toContain('activeModel.modelConstant.tokenizerConfigSource');
+    expect(source).toContain('model.modelConstant.modelSource');
+    expect(source).toContain('model.modelConstant.tokenizerSource');
+    expect(source).toContain('model.modelConstant.tokenizerConfigSource');
   });
 
   it('resolves to downloaded with a true integrity check on success', async () => {
@@ -304,6 +304,18 @@ describe('ModelDownloadManager', () => {
 
       expect(getFileSize).toHaveBeenCalledWith(LOCAL_MODEL_PATH);
       expect(deleteResources).not.toHaveBeenCalled();
+      expect(manager.isReadyForInference()).toBe(true);
+    });
+
+    it('does not redownload when the newly selected model is already verified on disk', async () => {
+      const { manager, listDownloadedModels, getFileSize, fetch } = makeHarness();
+      listDownloadedModels.mockResolvedValue([OTHER_MODEL_PATH, LOCAL_MODEL_PATH]);
+      getFileSize.mockResolvedValue(EXPECTED_SIZE);
+
+      await manager.reconcile();
+      await manager.startDownload();
+
+      expect(fetch).not.toHaveBeenCalled();
       expect(manager.isReadyForInference()).toBe(true);
     });
 
