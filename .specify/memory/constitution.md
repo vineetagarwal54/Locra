@@ -207,6 +207,55 @@ Templates requiring updates:
 Follow-up TODOs:
   - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md still does not exist; carried
     forward unresolved from the 1.0.0 report.
+
+------------------------------------------------------------------------------
+
+Version change: 2.1.0 → 3.0.0
+
+Modified principles:
+  - VIII. Single Local Store → VIII. Canonical SQL Store with Settings-Only
+    MMKV (principle REDEFINED, backward-incompatible): the Phase-1 "MMKV is
+    the only persistence mechanism / SQLite MUST NOT be introduced until
+    Phase 2" rule is replaced by a declaration that Locra has entered Phase 2
+    and that a local SQLite database is the canonical store for conversations
+    and derived context data, with MMKV retained only for small settings and
+    lifecycle flags. Driven by spec 006-hybrid-context-response-voice, whose
+    indexed pagination, relational cascade cleanup, and bounded retrieval over
+    200+ conversations cannot be supported safely by MMKV.
+  - VII. New Architecture Only (reworded, not redefined): the New Architecture
+    requirement is preserved, but its justification no longer treats React
+    Native ExecuTorch as the active inference runtime (removed in Spec 005);
+    it now references the current `llama.rn`/Qwen native stack.
+  - IX. Verify Before Assuming (reworded, not redefined): generalized from
+    "React Native ExecuTorch's API surface" to any on-device runtime
+    (inference, embedding, transcription) and native dependency.
+
+Added sections: none (principle count remains eleven).
+
+Removed sections:
+  - Prior wording of Principle VIII (MMKV-only, SQLite gated to Phase 2) is
+    superseded.
+  - ExecuTorch-as-active-runtime language in Principles VII and IX and in the
+    Technology Constraints section is removed; the New Architecture and NDK
+    pin remain in force for the current stack.
+
+Rationale for MAJOR bump: Principle VIII is redefined in a
+backward-incompatible way — persistence guidance that previously forbade
+SQLite now mandates it as canonical — so prior plans/tasks asserting
+"MMKV only" no longer hold. Per the versioning policy this is MAJOR.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — Constitution Check gate is
+    generic and defers to this file; future runs evaluate Principle VIII under
+    its new wording.
+  - ✅ .specify/templates/spec-template.md / tasks-template.md — no
+    constitution-specific references; compatible as-is.
+  - ⚠ AGENTS.md — references to ExecuTorch/MMKV-only persistence should be
+    refreshed to the Qwen/llama.rn + SQL-canonical stack when next touched.
+
+Follow-up TODOs:
+  - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md still does not exist; carried
+    forward unresolved from the 1.0.0 report.
 -->
 
 # Locra Constitution
@@ -284,35 +333,51 @@ tests written first are the primary defense.
 
 ### VII. New Architecture Only
 
-React Native's New Architecture MUST remain enabled at all times, because
-React Native ExecuTorch requires it. No dependency that disables the New
-Architecture, requires it be disabled, or is incompatible with it may be
+React Native's New Architecture MUST remain enabled at all times. The current
+on-device inference stack (`llama.rn` running the quantized Qwen model) and
+the other native dependencies target the New Architecture, and no dependency
+that disables it, requires it be disabled, or is incompatible with it may be
 introduced.
 
-**Rationale**: ExecuTorch is a hard dependency for on-device inference;
-anything that conflicts with it undermines the app's core function.
+**Rationale**: The New Architecture is required by the current native
+inference and persistence stack; anything that conflicts with it undermines
+the app's core function. (React Native ExecuTorch was the original driver of
+this requirement but was removed in Spec 005; the requirement now stands on
+its own for the current stack.)
 
-### VIII. Single Local Store
+### VIII. Canonical SQL Store with Settings-Only MMKV
 
-MMKV is the only persistence mechanism for Phase 1. AsyncStorage MUST NOT be
-introduced. SQLite MUST NOT be introduced until Phase 2, and only if MMKV
-proves insufficient at that time.
+Locra has entered **Phase 2 persistence**. A local SQLite database is the
+canonical store for conversations, messages, and all derived context data
+(chunks, embeddings, evidence, summaries, durable facts), because indexed
+pagination, relational cascade cleanup, and bounded retrieval over 200+
+conversations and long individual chats cannot be supported safely by MMKV —
+a key-value store that cannot index, page, or scope-filter without loading and
+sorting large values in memory. MMKV remains permitted ONLY for small settings
+and lifecycle flags (for example the global default response mode and voice
+model state). AsyncStorage MUST NOT be introduced. SQLite MUST be accessed
+through a single persistence boundary module; no other module may open the
+database directly.
 
-**Rationale**: One storage engine keeps the local-only architecture auditable
-and avoids reconciling two sources of truth on a device that already has no
-server to reconcile against.
+**Rationale**: MMKV was sufficient for Phase 1's single-session key-value
+needs but is structurally incapable of the bounded, indexed, relational access
+the conversation architecture now requires. Confining SQLite behind one
+boundary and keeping MMKV to small settings preserves the auditable,
+local-only, single-source-of-truth property while enabling safe access at
+scale.
 
 ### IX. Verify Before Assuming
 
-React Native ExecuTorch's API surface and supported model constants change
+On-device runtime API surfaces and supported model constants change
 frequently between releases. Implementation MUST verify current behavior
-against upstream documentation before writing code against it. The newest
-model checkpoint available upstream MUST NOT be assumed to be available in
-the React Native ExecuTorch library without verification.
+against upstream documentation before writing code against it, and MUST NOT
+assume that a model checkpoint, embedding runtime, or transcription runtime is
+available or API-compatible without verification. Native dependencies added
+for persistence, embeddings, or voice MUST pass an explicit
+build / API / New-Architecture / NDK verification before adoption.
 
 **Rationale**: Building against a remembered or assumed API is a common
-source of silent breakage when the underlying dependency moves as fast as
-ExecuTorch does.
+source of silent breakage when the underlying dependencies move quickly.
 
 ### X. Hard Architecture Boundaries
 
@@ -392,23 +457,28 @@ authority; the module must track `design/design.md`, not drift from it.
 
 - React Native 0.76+ with the New Architecture enabled, targeting Android
   only (min API 26, target API 35).
-- React Native ExecuTorch is the sole on-device inference runtime; model
-  assets are quantized and loaded from local storage only.
+- The on-device inference runtime is `llama.rn` running the quantized Qwen
+  model; model assets are quantized and loaded from local storage only.
+  (React Native ExecuTorch was removed in Spec 005.)
 - TypeScript strict mode is enabled repository-wide; see Principle V for the
   `any` / `@ts-ignore` policy.
-- MMKV is the sole persistence layer for Phase 1 (Principle VIII).
+- SQLite is the canonical persistence layer for conversations and derived
+  context data (Phase 2); MMKV is retained only for small settings and
+  lifecycle flags (Principle VIII).
 - A physical Android device with 6GB+ RAM is required for meaningful
   inference testing; emulator results are not authoritative for latency or
   memory behavior.
-- The Android NDK version is pinned project-wide to **26.3.11579264**.
-  `react-native-executorch`'s prebuilt native libraries require NDK 26's
-  libc++ ABI and fail to link under NDK 27; conversely, NDK 26's libc++
-  cannot compile some C++20 features present in React Native's own core
-  Fabric headers and in other native dependencies without a patch. This is
-  a real, load-bearing constraint discovered by direct build investigation
-  (`specs/001-camera-vlm-qa/research.md`, "Phase 1 Setup Findings"), not an
-  arbitrary preference — do not bump this version to resolve an unrelated
-  build issue without re-verifying both sides of this conflict.
+- The Android NDK version is pinned project-wide to **26.3.11579264**. This
+  pin was originally discovered because `react-native-executorch`'s prebuilt
+  native libraries required NDK 26's libc++ ABI and failed to link under NDK
+  27 (`specs/001-camera-vlm-qa/research.md`, "Phase 1 Setup Findings").
+  ExecuTorch has since been removed (Spec 005), but the pin remains
+  load-bearing: NDK 26's libc++ cannot compile some C++20 features present in
+  React Native's own core Fabric headers and in other native dependencies
+  without a patch, and every current and newly added native dependency
+  (`llama.rn`, and any embedding / SQLite / voice native module) MUST be
+  verified to build under NDK 26 before adoption. Do not bump this version to
+  resolve an unrelated build issue without re-verifying.
 
 ## Development Workflow
 
@@ -463,4 +533,4 @@ constitution via the Constitution Check gate. Use `CLAUDE.md` and
 `AGENTS.md` for day-to-day runtime development guidance derived from these
 principles.
 
-**Version**: 2.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-09
+**Version**: 3.0.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-13
