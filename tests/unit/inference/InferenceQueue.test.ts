@@ -427,6 +427,25 @@ describe('InferenceQueue false tool-refusal recovery', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(queue.getState().response).toMatch(/cannot access/i);
   });
+
+  it('uses the response mode captured for this request instead of the global default', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest) => {
+        generatedRequests.push(generateRequest);
+        return Promise.resolve({ response: 'Detailed answer.', tokenCount: 3 });
+      },
+    };
+    const queue = makeQueue({ engine, getResponseMode: () => 'Low' });
+
+    await queue.submit(
+      { imagePath: null, question: 'Explain this.' },
+      { responseMode: 'High' },
+    );
+
+    expect(generatedRequests[0]).toMatchObject({ responseMode: 'High' });
+  });
 });
 
 describe('InferenceQueue two-stage first image turns', () => {

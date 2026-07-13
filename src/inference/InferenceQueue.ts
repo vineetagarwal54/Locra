@@ -67,6 +67,8 @@ export type {
 export interface InferenceSubmitOptions {
   turn?: 'first' | 'followUp';
   conversationContext?: CanonicalConversationContext;
+  /** Captured from the conversation immediately before submit/retry. */
+  responseMode?: ResponseMode;
 }
 
 export interface InferenceQueueDeps {
@@ -185,7 +187,9 @@ export class InferenceQueue implements IInferenceQueue {
       request: lifecycleRequest,
     });
     const recorder = this.createRecorder();
-    const responseMode = this.deps.getResponseMode?.() ?? DEFAULT_RESPONSE_MODE;
+    const responseMode = options.responseMode
+      ?? this.deps.getResponseMode?.()
+      ?? DEFAULT_RESPONSE_MODE;
 
     this.setState({
       status: 'preprocessing',

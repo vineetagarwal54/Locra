@@ -12,6 +12,7 @@ interface ConversationListItemProps {
   conversation: Conversation;
   selected?: boolean;
   onPress: (conversationId: string) => void;
+  onDelete?: (conversationId: string) => void;
 }
 
 // Shared row for the Conversation Drawer (T045) and Full History (T047).
@@ -21,6 +22,7 @@ export function ConversationListItem({
   conversation,
   selected = false,
   onPress,
+  onDelete,
 }: ConversationListItemProps) {
   const title = deriveConversationTitle(conversation);
   const preview = deriveConversationPreview(conversation);
@@ -67,6 +69,20 @@ export function ConversationListItem({
           {preview}
         </Text>
       </View>
+      {onDelete !== undefined ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Delete conversation: ${title}`}
+          hitSlop={designTokens.spacing.space8}
+          style={styles.deleteButton}
+          onPress={(event) => {
+            event.stopPropagation();
+            onDelete(conversation.id);
+          }}
+        >
+          <MaterialCommunityIcons name="trash-can-outline" size={18} color={designTokens.color.textSecondary} />
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }
@@ -114,6 +130,13 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
+  },
+  deleteButton: {
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: designTokens.spacing.space8,
   },
   titleRow: {
     flexDirection: 'row',

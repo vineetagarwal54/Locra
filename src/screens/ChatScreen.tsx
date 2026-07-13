@@ -24,6 +24,7 @@ import { ImagePromptCard } from '../components/chat/ImagePromptCard';
 import { MessageBubble } from '../components/chat/MessageBubble';
 import { OfflineIndicator } from '../components/OfflineIndicator';
 import { designTokens, haptics } from '../constants/theme';
+import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
 import { useHistoryStore } from '../store/historyStore';
@@ -63,6 +64,9 @@ export function ChatScreen({ navigation, route }: Props) {
   );
   const [draft, setDraft] = useState<Draft>(() => conversationStore.getDraft(conversationId));
   const [screenError, setScreenError] = useState<string | null>(null);
+  const [responseMode, setResponseMode] = useState<ResponseMode>(() =>
+    conversationStore.getResponseMode(conversationId)
+  );
 
   const conversation = useMemo(
     () =>
@@ -79,6 +83,7 @@ export function ChatScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     setDraft(conversationStore.getDraft(conversationId));
+    setResponseMode(conversationStore.getResponseMode(conversationId));
   }, [conversationId, historyRevision]);
 
   // FR-031: switching away from and back to a conversation (including the
@@ -237,7 +242,10 @@ export function ChatScreen({ navigation, route }: Props) {
     const distanceFromBottom =
       contentSize.height - (contentOffset.y + layoutMeasurement.height);
     isNearBottomRef.current = distanceFromBottom <= AUTO_FOLLOW_THRESHOLD;
-  }, []);
+    if (contentOffset.y <= designTokens.spacing.space24 * 2 && conversationId !== 'new') {
+      useHistoryStore.getState().loadOlderMessages(conversationId);
+    }
+  }, [conversationId]);
 
   const onContentSizeChange = useCallback((): void => {
     if (isNearBottomRef.current) {
@@ -323,6 +331,11 @@ export function ChatScreen({ navigation, route }: Props) {
         onOpenCamera={onOpenCamera}
         onDraftChange={setDraft}
         onConversationResolved={onConversationResolved}
+        responseMode={responseMode}
+        onResponseModeChange={(mode) => {
+          conversationStore.setResponseMode(conversationId, mode);
+          setResponseMode(mode);
+        }}
       />
     </SafeAreaView>
   );

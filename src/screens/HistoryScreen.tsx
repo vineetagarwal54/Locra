@@ -3,6 +3,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Pressable,
+  Alert,
   SectionList,
   StyleSheet,
   Text,
@@ -44,6 +45,8 @@ interface HistorySection {
 export function HistoryScreen({ navigation }: Props) {
   const revision = useHistoryStore((s) => s.conversations);
   const refresh = useHistoryStore((s) => s.refresh);
+  const loadMore = useHistoryStore((s) => s.loadMore);
+  const deleteConversation = useHistoryStore((s) => s.delete);
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -86,6 +89,13 @@ export function HistoryScreen({ navigation }: Props) {
     },
     [navigation]
   );
+
+  const onDelete = useCallback((conversationId: string): void => {
+    Alert.alert('Delete conversation?', 'This removes its messages and local images from this phone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteConversation(conversationId) },
+    ]);
+  }, [deleteConversation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -166,7 +176,7 @@ export function HistoryScreen({ navigation }: Props) {
         sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <ConversationListItem conversation={item} onPress={onResume} />
+          <ConversationListItem conversation={item} onPress={onResume} onDelete={onDelete} />
         )}
         renderSectionHeader={({ section }) => (
           <Text style={styles.sectionHeader}>{section.title}</Text>
@@ -177,6 +187,8 @@ export function HistoryScreen({ navigation }: Props) {
         }
         ListEmptyComponent={<HistoryEmptyState searching={query !== '' && hasAnyConversation} />}
         keyboardShouldPersistTaps="handled"
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
       />
     </SafeAreaView>
   );
