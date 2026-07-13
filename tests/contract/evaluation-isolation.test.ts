@@ -12,7 +12,7 @@ describe('evaluation isolation', () => {
   it('keeps production inference and store modules free of evaluation imports', () => {
     const productionFiles = [
       'src/inference/InferenceQueue.ts',
-      'src/store/inferenceStore.ts',
+      'src/inference/InferenceService.ts',
       'src/history/HistoryStore.ts',
     ];
 

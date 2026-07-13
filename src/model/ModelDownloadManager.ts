@@ -1,7 +1,10 @@
 import type { ModelState } from '../types/models';
 
 import type { ArtifactReadiness } from './ModelArtifactManifest';
-import type { ModelConfig } from './ModelConfig';
+export interface ArtifactIntegrity {
+  expectedSha256: string;
+  expectedSize: number;
+}
 
 // Wraps a resource fetcher's download lifecycle and runs a SHA-256 integrity
 // check after every fetch. Constitution Principle X: self-contained model
@@ -10,14 +13,12 @@ import type { ModelConfig } from './ModelConfig';
 // package at import time; the real ExpoResourceFetcher/BackgroundDownloadFetcher
 // + verifyModelIntegrity are wired at the composition root (modelStore).
 //
-// Generalized (Spec 005, T017) from a single `.pte` model into an EXACT-manifest
-// artifact BUNDLE: one or more independently-verified artifacts (e.g. Qwen's
-// language GGUF + Q8_0 projector). Each artifact is located by its exact
+// Generalized (Spec 005, T017) into an exact-manifest artifact bundle. Each
+// artifact is located by its exact
 // filename and verified independently; the bundle is ready only when every
 // artifact is downloaded AND integrity-verified. Aggregate progress/status stays
 // the product-facing `ModelState`; per-artifact readiness is exposed separately
-// for the internal bundle wiring. The legacy single-artifact (LFM/ExecuTorch)
-// wiring is preserved by passing `expectedModelFilename` + `getModelConfig`.
+// for internal bundle wiring.
 
 // Mirrors ExpoResourceFetcher's `ResourceSource` (string | number | object)
 // without importing the native package.
@@ -55,7 +56,7 @@ export interface VerifiedArtifact {
   /** Exact expected filename, used to locate the file among fetch results / on disk. */
   readonly fileName: string;
   /** Fetches (or returns pinned) expected SHA-256 + size for this artifact. */
-  getExpectedIntegrity: () => Promise<ModelConfig>;
+  getExpectedIntegrity: () => Promise<ArtifactIntegrity>;
 }
 
 export interface ModelDownloadManagerDeps {
@@ -65,16 +66,8 @@ export interface ModelDownloadManagerDeps {
   getFileSize: (fileUri: string) => Promise<number>;
   /** All download sources for the bundle, in order (verified artifacts + auxiliary files). */
   sources: ResourceSource[];
-  /**
-   * The independently-verified artifacts in this bundle. When omitted, a single
-   * artifact is derived from `expectedModelFilename` + `getModelConfig` (the
-   * legacy LFM/ExecuTorch wiring).
-   */
-  artifacts?: VerifiedArtifact[];
-  /** Legacy single-artifact expected hash/size fetcher. Ignored when `artifacts` is set. */
-  getModelConfig?: () => Promise<ModelConfig>;
-  /** Legacy single-artifact filename. Ignored when `artifacts` is set. */
-  expectedModelFilename?: string;
+  /** Independently verified artifacts in this exact bundle. */
+  artifacts: VerifiedArtifact[];
 }
 
 interface ArtifactProgress {
@@ -94,12 +87,15 @@ export class ModelDownloadManager {
   private readonly listeners = new Set<(state: ModelState) => void>();
   private readonly artifacts: VerifiedArtifact[];
   private readonly artifactProgress = new Map<string, ArtifactProgress>();
-  private readonly expectedCache = new Map<string, ModelConfig>();
+  private readonly expectedCache = new Map<string, ArtifactIntegrity>();
   private activeDownloadPromise: Promise<void> | null = null;
   private downloadRunId = 0;
 
   constructor(private readonly deps: ModelDownloadManagerDeps) {
-    this.artifacts = normalizeArtifacts(deps);
+    if (deps.artifacts.length === 0) {
+      throw new Error('ModelDownloadManager requires at least one artifact.');
+    }
+    this.artifacts = deps.artifacts;
     for (const artifact of this.artifacts) {
       this.artifactProgress.set(artifact.artifactId, { downloaded: false, verified: false });
     }
@@ -392,7 +388,7 @@ export class ModelDownloadManager {
     });
   }
 
-  private async resolveExpected(artifact: VerifiedArtifact): Promise<ModelConfig> {
+  private async resolveExpected(artifact: VerifiedArtifact): Promise<ArtifactIntegrity> {
     const cached = this.expectedCache.get(artifact.artifactId);
     if (cached !== undefined) {
       return cached;
@@ -428,25 +424,6 @@ export class ModelDownloadManager {
   private isCurrentRun(runId: number): boolean {
     return runId === this.downloadRunId;
   }
-}
-
-function normalizeArtifacts(deps: ModelDownloadManagerDeps): VerifiedArtifact[] {
-  if (deps.artifacts !== undefined && deps.artifacts.length > 0) {
-    return deps.artifacts;
-  }
-  if (deps.expectedModelFilename !== undefined && deps.getModelConfig !== undefined) {
-    const getModelConfig = deps.getModelConfig;
-    return [
-      {
-        artifactId: deps.expectedModelFilename,
-        fileName: deps.expectedModelFilename,
-        getExpectedIntegrity: getModelConfig,
-      },
-    ];
-  }
-  throw new Error(
-    'ModelDownloadManager requires either `artifacts` or `expectedModelFilename` + `getModelConfig`.'
-  );
 }
 
 function toMessage(error: unknown): string {

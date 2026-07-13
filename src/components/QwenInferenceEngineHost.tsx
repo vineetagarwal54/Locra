@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
+import { registerInferenceEngine } from '../inference/InferenceEngineRegistry';
 import { useQwenInferenceEngine } from '../inference/llamaRn/useQwenInferenceEngine';
-import { useInferenceStore } from '../store/inferenceStore';
 import { getQwenArtifactPaths } from '../store/modelStore';
 
 /**
@@ -10,13 +10,12 @@ import { getQwenArtifactPaths } from '../store/modelStore';
  * never conditionally calls a different runtime hook.
  */
 export function QwenInferenceEngineHost() {
-  const registerEngine = useInferenceStore((state) => state.registerEngine);
   const engine = useQwenInferenceEngine(getQwenArtifactPaths());
 
   useEffect(() => {
-    registerEngine(engine);
-    return () => registerEngine(null);
-  }, [engine, registerEngine]);
+    registerInferenceEngine(engine);
+    return () => registerInferenceEngine(null);
+  }, [engine]);
 
   return null;
 }

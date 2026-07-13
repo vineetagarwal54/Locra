@@ -1,25 +1,18 @@
 import { create } from 'zustand';
 
-import { conversationToSession, HistoryStore } from '../history/HistoryStore';
+import { HistoryStore } from '../history/HistoryStore';
 import type { IHistoryStore } from '../types/interfaces';
-import type { Conversation, MetricsSummary, QASession } from '../types/models';
+import type { Conversation, MetricsSummary } from '../types/models';
 
 const history = new HistoryStore();
 
 export interface HistoryStoreState {
-  // Feature 003: the canonical persisted state is Conversation/ConversationMessage[]
-  // (T010/T050). The QASession-typed methods below remain only as compatibility
-  // shims for the frozen Phase-002 Answer-flow store (src/store/inferenceStore.ts),
-  // which the SC-014 regression gate still exercises unmodified.
   conversations: Conversation[];
   metricsSummary: MetricsSummary;
   refresh: () => void;
-  save: (session: QASession) => void;
-  get: (id: string) => QASession | null;
   delete: (id: string) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
-  list: (limit?: number, offset?: number) => QASession[];
   getMetricsSummary: () => MetricsSummary;
   saveConversation: (conversation: Conversation) => void;
   getConversation: (id: string) => Conversation | null;
@@ -31,14 +24,6 @@ export const useHistoryStore = create<HistoryStoreState>((set) => ({
   metricsSummary: history.getMetricsSummary(),
   refresh: (): void => {
     set(snapshot());
-  },
-  save: (session: QASession): void => {
-    history.save(session);
-    set(snapshot());
-  },
-  get: (id: string): QASession | null => {
-    const conversation = history.get(id);
-    return conversation === null ? null : conversationToSession(conversation);
   },
   delete: (id: string): void => {
     history.delete(id);
@@ -52,8 +37,6 @@ export const useHistoryStore = create<HistoryStoreState>((set) => ({
     history.setFlag(id, flagged, note);
     set(snapshot());
   },
-  list: (limit?: number, offset?: number): QASession[] =>
-    history.list(limit, offset).map(conversationToSession),
   getMetricsSummary: (): MetricsSummary => history.getMetricsSummary(),
   saveConversation: (conversation: Conversation): void => {
     history.save(conversation);

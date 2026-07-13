@@ -7,7 +7,6 @@ import { Directory, File } from 'expo-file-system';
 import { documentDirectory } from 'expo-file-system/legacy';
 import { create } from 'zustand';
 
-import { getStartupRuntimeSelection } from '../inference/StartupRuntimeSelection';
 import type { ModelCandidate, ModelCandidateId } from '../model/ActiveModel';
 import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
 import { checkActiveModelCompatibility, checkDeviceCompatibility } from '../model/DeviceCompatibility';
@@ -251,7 +250,7 @@ export const useModelStore = create<ModelStoreState>(() => ({
   initializeQwenBundle,
   checkDeviceCompatibility,
   checkActiveModelCompatibility: () =>
-    checkActiveModelCompatibility(getStartupRuntimeSelection().selectedHost),
+    checkActiveModelCompatibility(),
   shouldRouteToQwenDownload: () =>
     shouldRouteToQwenDownload({
       qwenReady: isQwenReady(),

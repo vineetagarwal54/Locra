@@ -8,6 +8,7 @@ import {
   mergeVisualEvidenceIntoMemory,
   type ContextSelectionDiagnostics,
 } from '../inference/ContextOrchestrator';
+import { inferenceQueue } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
@@ -21,7 +22,6 @@ import type {
 } from '../types/models';
 
 import { historyStore } from './historyStore';
-import { inferenceQueue } from './inferenceStore';
 
 export interface ConversationStoreDependencies {
   inferenceQueue: IInferenceQueue;

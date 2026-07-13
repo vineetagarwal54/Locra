@@ -35,8 +35,11 @@ const EMPTY_METRICS_SUMMARY: MetricsSummary = {
 export class HistoryStore implements IHistoryStore {
   constructor(private readonly store: HistoryStorage = storage) {}
 
-  save(conversation: Conversation | QASession): void {
-    const normalized = normalizeConversationInput(conversation);
+  save(conversation: Conversation): void {
+    const normalized = normalizeConversation(conversation);
+    if (normalized === null) {
+      return;
+    }
     this.store.set(toSessionKey(normalized.id), JSON.stringify(normalized));
     this.writeIds(this.mergeIds(normalized.id));
   }
@@ -181,9 +184,8 @@ function normalizeConversation(value: unknown): Conversation | null {
   return null;
 }
 
-function normalizeConversationInput(conversation: Conversation | QASession): Conversation {
-  if ('messages' in conversation) {
-    const normalized: Conversation = {
+function normalizeConversationInput(conversation: Conversation): Conversation {
+  const normalized: Conversation = {
       id: conversation.id,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
@@ -199,12 +201,9 @@ function normalizeConversationInput(conversation: Conversation | QASession): Con
       flagNote: conversation.flagNote ?? null,
     };
     const contextMemory = normalizeContextMemory(conversation.contextMemory);
-    return contextMemory === undefined
-      ? normalized
-      : { ...normalized, contextMemory };
-  }
-
-  return sessionToConversation(conversation);
+  return contextMemory === undefined
+    ? normalized
+    : { ...normalized, contextMemory };
 }
 
 function normalizeContextMemory(
@@ -384,61 +383,14 @@ export function sessionToConversation(session: QASession): Conversation {
   };
 }
 
-export function conversationToSession(conversation: Conversation): QASession {
-  const firstUser = conversation.messages.find((message) => message.role === 'user');
-  const lastAssistant = [...conversation.messages]
-    .reverse()
-    .find((message) => message.role === 'assistant');
-  const turns = toLegacyTurns(conversation.messages);
-
-  return {
-    id: conversation.id,
-    createdAt: conversation.createdAt,
-    imagePath: firstUser?.attachments.find((attachment) => attachment.kind === 'image')?.path ?? '',
-    question: firstUser?.text ?? '',
-    answer: lastAssistant?.text ?? '',
-    turns,
-    pinnedExtraction: null,
-    hiddenEvidence: null,
-    status: conversationStatusToSessionStatus(conversation.status),
-    errorMessage: conversation.errorMessage,
-    metrics: conversation.metrics,
-    flagged: conversation.flagged,
-    flagNote: conversation.flagNote ?? null,
-  };
-}
-
 function normalizedTurns(session: QASession): Array<{ question: string; answer: string }> {
   return session.turns.length > 0
     ? session.turns
     : [{ question: session.question, answer: session.answer }];
 }
 
-function toLegacyTurns(messages: ConversationMessage[]): Array<{ question: string; answer: string }> {
-  const turns: Array<{ question: string; answer: string }> = [];
-  let pendingQuestion: string | null = null;
-
-  for (const message of messages) {
-    if (message.role === 'user') {
-      pendingQuestion = message.text;
-      continue;
-    }
-
-    if (pendingQuestion !== null) {
-      turns.push({ question: pendingQuestion, answer: message.text });
-      pendingQuestion = null;
-    }
-  }
-
-  return turns;
-}
-
 function sessionStatusToConversationStatus(status: QASession['status']): ConversationStatus {
   return status;
-}
-
-function conversationStatusToSessionStatus(status: ConversationStatus): QASession['status'] {
-  return status === 'idle' ? 'completed' : status;
 }
 
 function messageStatusFromSessionStatus(status: QASession['status']): ConversationMessage['status'] {

@@ -79,7 +79,7 @@ export interface InferenceQueueDeps {
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
   isTraceEnabled?: () => boolean;
   getModelAttribution?: () => {
-    /** Aggregate model id (ExecuTorch candidate id or the internal Qwen V1 id). */
+    /** Aggregate model id used for diagnostics attribution. */
     modelId: string;
     generationConfigId: string;
   };
