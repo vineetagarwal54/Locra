@@ -1,14 +1,10 @@
-import type { StartupRuntimeHost } from '../types/runtime';
-
 import {
   QWEN3_VL_2B_INSTRUCT_BUNDLE,
   QWEN3_VL_2B_INSTRUCT_MODEL_ID,
 } from './ModelArtifactManifest';
 
 // Locra V1 runs a single on-device model: Qwen3-VL-2B-Instruct through llama.rn.
-// There is no ExecuTorch runtime and no multi-model bake-off — the "candidate"
-// registry has exactly one entry so the existing onboarding/download surfaces
-// keep working against one model.
+
 
 export type ModelCandidateId = typeof QWEN3_VL_2B_INSTRUCT_MODEL_ID;
 
@@ -87,6 +83,7 @@ export const QWEN_V1_DESCRIPTOR: QwenInternalModelDescriptor = {
 export const ACTIVE_V1_MODEL_ID = QWEN3_VL_2B_INSTRUCT_MODEL_ID;
 
 /** The active model id for the startup-selected runtime (always Qwen in V1). */
-export function resolveActiveModelId(_host: StartupRuntimeHost): string {
+export function resolveActiveModelId(): string {
   return ACTIVE_V1_MODEL_ID;
 }
+

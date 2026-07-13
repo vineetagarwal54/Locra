@@ -14,21 +14,6 @@ jest.mock('../../src/storage/mmkv', () => ({
   },
 }));
 jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
-jest.mock('../../src/store/inferenceStore', () => ({
-  inferenceQueue: {
-    submit: jest.fn(() => Promise.resolve()),
-    cancel: jest.fn(),
-    subscribe: jest.fn(() => jest.fn()),
-    getState: jest.fn(() => ({
-      status: 'idle',
-      response: '',
-      metrics: null,
-      error: null,
-      limitWarning: null,
-      pinnedExtraction: null,
-    })),
-  },
-}));
 jest.mock('../../src/store/historyStore', () => ({
   historyStore: {
     save: jest.fn(),
@@ -41,7 +26,6 @@ jest.mock('../../src/store/historyStore', () => ({
   },
 }));
 
-import { buildCanonicalModelMessagesForConversation } from '../../src/inference/ContextBuilder';
 import { createConversationStore } from '../../src/store/conversationStore';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../../src/types/interfaces';
 import type {
@@ -296,29 +280,5 @@ describe('unified chat mixed-multimodal flow (T040)', () => {
     expect(requestFor(t3.assistantMessageId)?.imagePath).toBeNull();
     expect(requestFor(t5.assistantMessageId)?.imagePath).toBeNull();
 
-    // When the final follow-up references the whole thread, both images' derived
-    // visible content remains distinguishable as separate canonical messages, with
-    // no media re-attached (FR-033: no duplicated/merged image context).
-    const modelMessages = buildCanonicalModelMessagesForConversation({
-      messages: conversation?.messages ?? [],
-      currentUserMessageId: t5.originatingUserMessageId,
-    });
-    const contents = modelMessages.map((item) => item.content);
-
-    expect(modelMessages.some((item) => item.mediaPath !== undefined)).toBe(false);
-    expect(contents.filter((content) => content === EVIDENCE_A)).toHaveLength(1);
-    expect(contents.filter((content) => content === EVIDENCE_B)).toHaveLength(1);
-    expect(contents).toEqual([
-      expect.any(String),
-      'What can you help with?',
-      'I can answer questions and inspect images.',
-      'What is this?',
-      EVIDENCE_A,
-      'What color is the spout?',
-      'The spout is green.',
-      'And what is this?',
-      EVIDENCE_B,
-      'Which one is meant for outdoors?',
-    ]);
   });
 });

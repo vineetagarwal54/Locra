@@ -11,14 +11,6 @@ jest.mock('../../src/storage/mmkv', () => ({
     remove: jest.fn(() => false),
   },
 }));
-jest.mock('../../src/store/inferenceStore', () => ({
-  inferenceQueue: {
-    submit: jest.fn(() => Promise.resolve()),
-    cancel: jest.fn(),
-    subscribe: jest.fn(() => jest.fn()),
-    getState: jest.fn(() => ({ status: 'idle' })),
-  },
-}));
 jest.mock('../../src/store/historyStore', () => ({
   historyStore: {
     save: jest.fn(),

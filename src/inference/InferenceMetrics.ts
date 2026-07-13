@@ -84,7 +84,7 @@ export class InferenceMetricsRecorder {
     this.answerEnd = this.now();
   }
 
-  /** The moment the generation request is dispatched to ExecuTorch. */
+  /** The moment the generation request is dispatched to the runtime. */
   markInferenceStart(): void {
     this.inferenceStart = this.now();
   }
@@ -96,7 +96,7 @@ export class InferenceMetricsRecorder {
     }
   }
 
-  /** Generation complete (ExecuTorch `isGenerating` flips back to `false`). */
+  /** Generation complete. */
   markInferenceEnd(): void {
     this.inferenceEnd = this.now();
   }
@@ -156,3 +156,4 @@ export class InferenceMetricsRecorder {
     return value;
   }
 }
+

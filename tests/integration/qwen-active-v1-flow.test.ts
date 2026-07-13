@@ -6,7 +6,6 @@ import type {
   InferenceEngineAdapter,
 } from '../../src/inference/InferenceEngineHandle';
 import { InferenceQueue } from '../../src/inference/InferenceQueue';
-import { getStartupRuntimeSelection } from '../../src/inference/StartupRuntimeSelection';
 
 jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
 
@@ -40,10 +39,6 @@ function defer<T>(): Deferred<T> {
 }
 
 describe('Qwen active V1 runtime flow', () => {
-  it('selects the Qwen host by default at startup', () => {
-    expect(getStartupRuntimeSelection().selectedHost).toBe('qwen-llamarn');
-  });
-
   it('answers an image question then a grounded follow-up through the neutral queue', async () => {
     const generated: EngineGenerateRequest[] = [];
     const engine: InferenceEngineAdapter = {

@@ -7,21 +7,6 @@ jest.mock('../../src/storage/mmkv', () => ({
   },
 }));
 jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
-jest.mock('../../src/store/inferenceStore', () => ({
-  inferenceQueue: {
-    submit: jest.fn(() => Promise.resolve()),
-    cancel: jest.fn(),
-    subscribe: jest.fn(() => jest.fn()),
-    getState: jest.fn(() => ({
-      status: 'idle',
-      response: '',
-      metrics: null,
-      error: null,
-      limitWarning: null,
-      pinnedExtraction: null,
-    })),
-  },
-}));
 jest.mock('../../src/store/historyStore', () => ({
   historyStore: {
     save: jest.fn(),

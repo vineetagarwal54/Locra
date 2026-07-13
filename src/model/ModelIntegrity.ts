@@ -1,8 +1,7 @@
 import { File, FileMode } from 'expo-file-system';
 import { sha256 } from 'js-sha256';
 
-// The app verifies the model's integrity itself — ExecuTorch does not (research.md,
-// data-model.md `OnDeviceModel`).
+// The app verifies artifact integrity itself at the model boundary.
 //
 // Memory safety (constitution Principle IV): the `.pte` is ~2.4 GB, and
 // expo-crypto has no incremental/streaming digest, so a one-shot hash would pull
