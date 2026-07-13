@@ -12,12 +12,9 @@ jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
 
 import { HistoryStore, type HistoryStorage } from '../../src/history/HistoryStore';
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
-import {
-  InferenceQueue,
-  type EngineGenerateRequest,
-  type InferenceEngineAdapter,
-} from '../../src/inference/InferenceQueue';
-import type { InferenceRequest, QASession } from '../../src/types/models';
+import type { EngineGenerateRequest, InferenceEngineAdapter } from '../../src/inference/InferenceEngineHandle';
+import { InferenceQueue } from '../../src/inference/InferenceQueue';
+import type { Conversation, InferenceRequest } from '../../src/types/models';
 
 class MemoryHistoryStorage implements HistoryStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -49,6 +46,14 @@ const capturedRequest: InferenceRequest = {
   imagePath: '/camera/raw-capture.jpg',
   question: 'What object is on the table?',
 };
+const extractionJson = JSON.stringify({
+  subjectObject: 'coffee mug',
+  visibleFeatures: ['white ceramic', 'on a table'],
+  visibleText: [],
+  visibleCondition: 'upright and intact',
+  uncertainty: [],
+});
+const visibleAnswer = 'It looks like a white ceramic coffee mug on the table.';
 
 function makePreprocess(): (imagePath: string) => Promise<PreprocessedImage> {
   return (imagePath) =>
@@ -90,9 +95,9 @@ describe('offline capture to answer integration flow', () => {
       loadModel: () => Promise.resolve(),
       generate: (request, onToken) => {
         generatedRequests.push(request);
-        onToken('It looks like');
-        onToken('It looks like a coffee mug.');
-        return Promise.resolve({ response: 'It looks like a coffee mug.', tokenCount: 7 });
+        const response = request.kind === 'extraction' ? extractionJson : visibleAnswer;
+        onToken(response);
+        return Promise.resolve({ response, tokenCount: 7 });
       },
     };
     const queue = new InferenceQueue({
@@ -106,29 +111,62 @@ describe('offline capture to answer integration flow', () => {
 
     const state = queue.getState();
     expect(state.status).toBe('completed');
-    expect(generatedRequests).toEqual([
-      {
-        imagePath: '/camera/raw-capture.jpg.preprocessed',
-        question: capturedRequest.question,
-      },
-    ]);
+    expect(state.response).toBe(visibleAnswer);
+    expect(generatedRequests[0]).toEqual(
+      expect.objectContaining({
+        kind: 'answer',
+        originalQuestion: capturedRequest.question,
+        responseMode: 'Medium',
+      })
+    );
+    expect(generatedRequests[0].messages[1]).toEqual(
+      expect.objectContaining({
+        mediaPath: '/camera/raw-capture.jpg.preprocessed',
+        content: capturedRequest.question,
+      })
+    );
+    expect(generatedRequests[0].messages[1].content).toContain(capturedRequest.question);
+    expect(generatedRequests).toHaveLength(1);
 
-    const session: QASession = {
+    const conversation: Conversation = {
       id: 'completed-flow',
       createdAt: 1_700_000_000_000,
-      imagePath: capturedRequest.imagePath,
-      question: capturedRequest.question,
-      answer: state.response,
-      turns: [{ question: capturedRequest.question, answer: state.response }],
+      updatedAt: 1_700_000_000_001,
+      messages: [
+        {
+          id: 'completed-flow:user',
+          role: 'user',
+          text: capturedRequest.question,
+          attachments:
+            capturedRequest.imagePath === null
+              ? []
+              : [{ kind: 'image', path: capturedRequest.imagePath }],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1_700_000_000_000,
+        },
+        {
+          id: 'completed-flow:assistant',
+          role: 'assistant',
+          text: state.response,
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1_700_000_000_001,
+        },
+      ],
       status: 'completed',
       errorMessage: null,
       metrics: state.metrics,
       flagged: false,
       flagNote: null,
     };
-    history.save(session);
+    history.save(conversation);
 
-    expect(history.list()).toEqual([session]);
+    expect(history.list()).toEqual([conversation]);
+    expect(conversation.messages[1]?.text).toBe(visibleAnswer);
+    expect(state.hiddenEvidence).toBeNull();
+    expect('hiddenEvidence' in conversation).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(xhrSpy).not.toHaveBeenCalled();
     expect(webSocketSpy).not.toHaveBeenCalled();

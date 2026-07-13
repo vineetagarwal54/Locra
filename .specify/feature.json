@@ -1,1 +1,3 @@
-{"feature_directory":"specs\\001-camera-vlm-qa"}
+{
+  "feature_directory": "specs/005-qwen-llamarn-integration"
+}

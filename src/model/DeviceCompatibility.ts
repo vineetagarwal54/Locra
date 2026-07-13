@@ -61,3 +61,11 @@ export function checkDeviceCompatibility(): DeviceCompatibilityResult {
     };
   }
 }
+
+/**
+ * Compatibility-before-load for the runtime selected at startup (Spec 005, T020).
+ * The Qwen V1 runtime shares the existing Android 13+/API 33, 6 GB RAM floor
+ * (CPU-only, `n_gpu_layers: 0`), so both hosts reuse the same gate; this wrapper
+ * makes the active-model check explicit rather than adding a Qwen-only subsystem.
+ */
+export const checkActiveModelCompatibility = checkDeviceCompatibility;

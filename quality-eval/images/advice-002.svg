@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f5f5f0"/>
+  <path d="M166 134h180l52 84-50 34-28-44v198H192V208l-28 44-50-34z" fill="#e9eef6" stroke="#333" stroke-width="6"/>
+  <ellipse cx="250" cy="292" rx="44" ry="30" fill="#8b4a22" opacity="0.85"/>
+  <text x="164" y="96" font-family="Arial" font-size="28" fill="#222">brown stain</text>
+</svg>

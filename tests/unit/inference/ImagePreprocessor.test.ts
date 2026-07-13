@@ -61,6 +61,24 @@ describe('preprocessImage', () => {
     expect(result.height).toBe(256);
   });
 
+  it.each([
+    { label: 'wide', width: 8000, height: 1000, targetWidth: 512, targetHeight: 64 },
+    { label: 'tall', width: 1000, height: 8000, targetWidth: 64, targetHeight: 512 },
+  ])(
+    'fits the complete $label image within the 512 ceiling without changing its aspect ratio',
+    async ({ width, height, targetWidth, targetHeight }) => {
+      const source = fakeImage(width, height);
+      mockLoadImage.mockReturnValue(source);
+
+      const result = await preprocessImage(`/tmp/${width}x${height}.jpg`);
+
+      expect(source.resizeAsync).toHaveBeenCalledWith(targetWidth, targetHeight);
+      expect(result).toMatchObject({ width: targetWidth, height: targetHeight });
+      expect(result.width).toBeLessThanOrEqual(MAX_IMAGE_DIMENSION);
+      expect(result.height).toBeLessThanOrEqual(MAX_IMAGE_DIMENSION);
+    }
+  );
+
   it('passes through input already <= 512x512 unchanged', async () => {
     const source = fakeImage(400, 300);
     mockLoadImage.mockReturnValue(source);

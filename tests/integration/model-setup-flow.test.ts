@@ -47,7 +47,7 @@ describe('model setup integration flow', () => {
     const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
     const verifyIntegrity = jest.fn(async () => true);
     const getFileSize = jest.fn(async () => EXPECTED_SIZE);
-    const getModelConfig = jest.fn(async () => ({
+    const getExpectedIntegrity = jest.fn(async () => ({
       expectedSha256: EXPECTED_HASH,
       expectedSize: EXPECTED_SIZE,
     }));
@@ -62,8 +62,8 @@ describe('model setup integration flow', () => {
       },
       verifyIntegrity,
       getFileSize,
-      getModelConfig,
       sources: SOURCES,
+      artifacts: [{ artifactId: 'model', fileName: 'model.pte', getExpectedIntegrity }],
     });
 
     await manager.reconcile();
@@ -86,7 +86,7 @@ describe('model setup integration flow', () => {
     fetchDeferred.resolve(fetchResult());
     await download;
 
-    expect(getModelConfig).toHaveBeenCalledTimes(1);
+    expect(getExpectedIntegrity).toHaveBeenCalledTimes(1);
     expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH);
     expect(deleteResources).not.toHaveBeenCalled();
     expect(manager.getState().downloadStatus).toBe('downloaded');

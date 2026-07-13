@@ -48,18 +48,40 @@ data is ever sent to a server. This constraint is architectural, not a setting.
 
 ## Design system
 
-All colors, spacing, and radius values come from `src/constants/theme.ts`.
-No hardcoded hex values anywhere in src/screens/ or src/components/.
-Every StyleSheet.create() call imports from theme.ts.
-To retheme the app, change theme.ts only — nowhere else.
+The authoritative design sources are `design/design.md`, `design/motion.md`,
+`design/screen_map.md`, and the approved references under
+`design/references/`. Follow them instead of inventing a parallel design
+system — do not restate their tokens, colors, or timings here or anywhere
+else in code comments.
 
-Current design language:
-- Canvas: #0f0f0f (near black)
-- Accent: #7C5CFC (electric violet)
-- Surface: #1a1a1a
-- Text primary: #F0EDE8
-- Spacing base unit: 4px (all multiples of 4)
-- Radius: 14px cards, 10px elements, 999px pills
+- The centralized runtime theme module (`src/constants/theme.ts`)
+  implements the approved tokens — it does not originate them. It MUST be
+  derived from and stay consistent with `design/design.md`.
+- Screens/components MUST consume the centralized theme tokens and shared
+  components, not hardcode competing colors, spacing, typography, radius,
+  or visual patterns.
+- If the runtime theme or existing implementation conflicts with
+  `design/`, `design/` wins — update the theme module/components to
+  match. Old styling (including prior dark/purple styling) already
+  present in `theme.ts` or existing screens has no authority just because
+  it predates the current design sources.
+- Do not redesign an existing screen as a side effect of unrelated work.
+  A feature explicitly scoped to implement the approved design system may
+  update existing screens and shared theme tokens.
+- New screens/components extend the tokens, components, interaction
+  patterns, navigation model, and motion language already defined in
+  `design/`, not competing ones.
+- Accessibility, responsive layout, keyboard-safe layouts, reduced-motion
+  support, and minimum touch targets from the design system are product
+  requirements.
+- Motion stays lightweight and never competes with model loading, image
+  processing, inference, streaming, or local speech processing.
+- Never expose hidden inference stages, internal prompts, intermediate
+  perception output, raw model identifiers, or developer diagnostics in
+  product UI unless a spec explicitly requires it.
+- If `design/` conflicts with older styling guidance in a spec, `design/`
+  wins for visual presentation; functional requirements in specs still
+  stand unless a newer spec supersedes them.
 
 ---
 

@@ -103,6 +103,110 @@ Templates requiring updates:
     compatible as-is. Screen/component tasks must reference `theme.*` per XI.
 
 Follow-up TODOs: none new.
+
+------------------------------------------------------------------------------
+
+Version change: 1.2.0 → 2.0.0
+
+Modified principles:
+  - XI. Single Theme Source → XI. Design Source of Truth (principle
+    redefined, not merely extended: hardcoded design-token enforcement
+    against `src/constants/theme.ts` is replaced by a pointer-based rule
+    directing all UI work to `design/design.md`, `design/motion.md`,
+    `design/screen_map.md`, and `design/references/`).
+
+Added sections: none new (principle XI replaced in place; principle count
+remains eleven).
+
+Removed sections:
+  - Prior wording of Principle XI (hardcoded accent `#7C5CFC`, canvas
+    `#0f0f0f`, spacing/radius scale requirements) is superseded by the
+    design folder; those concrete values now live in `design/design.md`
+    and are no longer duplicated in the constitution.
+
+Rationale for MAJOR bump (not MINOR): Principle XI is redefined, not
+additively extended — the compliance bar for "what UI code must reference"
+changes from `theme.ts` to the `design/` folder, and code-review criteria
+tied to the old wording (no hardcoded colors/magic numbers in
+`StyleSheet.create()`, `theme.*`-only references) no longer apply as
+stated. This is a backward-incompatible principle redefinition per the
+versioning policy in Governance.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — Constitution Check gate is
+    generic and defers to this file; no structural edit required, but
+    future /speckit-plan runs must enumerate all eleven principles under
+    their current definitions, including the new Design Source of Truth
+    wording.
+  - ✅ .specify/templates/spec-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ .specify/templates/tasks-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ AGENTS.md — "Design system" section (previously listing hardcoded
+    hex values and a spacing/radius scale) rewritten to point at
+    `design/design.md`, `design/motion.md`, `design/screen_map.md`, and
+    `design/references/` instead of restating token values.
+  - ⚠ CLAUDE.md — still does not exist in the repository; AGENTS.md states
+    "CLAUDE.md points here," so there is no separate file to update, but
+    this gap is carried forward from the 1.0.0 report and remains
+    unresolved.
+
+Follow-up TODOs:
+  - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md still does not exist; carried
+    forward unresolved from the 1.0.0 report.
+
+------------------------------------------------------------------------------
+
+Version change: 2.0.0 → 2.1.0
+
+Modified principles:
+  - XI. Design Source of Truth (clarified, not redefined: the design
+    folder remains the sole authoritative source of visual/interaction
+    decisions; this amendment adds an explicit relationship between that
+    authority and a centralized runtime theme module such as
+    `src/constants/theme.ts`, a conflict-resolution rule when the runtime
+    diverges from `design/`, an explicit statement that pre-existing
+    theme/screen styling has no grandfathered authority, and a narrow
+    exception allowing a feature explicitly scoped to implement the
+    approved design system to update existing screens and shared theme
+    tokens).
+
+Added sections: none new (Principle XI amended in place; principle count
+remains eleven).
+
+Removed sections: none.
+
+Rationale for MINOR bump (not MAJOR, not PATCH): the core rule from
+v2.0.0 — the `design/` folder is the sole design authority and UI code
+must not invent a parallel design system — is unchanged and not
+redefined, so this is not backward-incompatible. The amendment is more
+than a wording/typo fix: it adds materially new, testable guidance (the
+theme-module-as-implementation-detail rule, the conflict-resolution
+direction, the no-grandfathering rule for old styling, and the
+design-scoped-feature exception to the no-redesign rule), so PATCH does
+not fit either. MINOR — materially expanded guidance on an existing
+principle — is the correct classification.
+
+Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md — Constitution Check gate is
+    generic and defers to this file; no structural edit required, but
+    future /speckit-plan runs must evaluate Principle XI under its
+    current wording, including the theme-module/design-folder
+    relationship.
+  - ✅ .specify/templates/spec-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ .specify/templates/tasks-template.md — no constitution-specific
+    references; compatible as-is.
+  - ✅ AGENTS.md — "Design system" section updated to state that a
+    centralized runtime theme module implements (but does not originate)
+    the design sources, that the design folder wins on conflict, and that
+    pre-existing theme/screen styling is not grandfathered in.
+  - ⚠ CLAUDE.md — still does not exist in the repository; carried forward
+    unresolved from prior reports.
+
+Follow-up TODOs:
+  - TODO(RUNTIME_GUIDANCE_FILES): CLAUDE.md still does not exist; carried
+    forward unresolved from the 1.0.0 report.
 -->
 
 # Locra Constitution
@@ -222,20 +326,67 @@ independently testable and the UI safely replaceable; violating them under
 time pressure compounds technical debt in the most safety-critical part of
 the app.
 
-### XI. Single Theme Source
+### XI. Design Source of Truth
 
-All color, spacing, radius, and typography-scale values MUST be imported from
-`src/constants/theme.ts`. Hardcoded hex values are not permitted anywhere in the
-UI, and magic numbers MUST NOT appear inside `StyleSheet.create()` calls for any
-value the theme defines (colors, spacing, radii, font sizes). Every screen and
-component MUST reference `theme.*` only, so that changing a value in
-`theme.ts` — for example the current accent `#7C5CFC` (electric violet) —
-propagates everywhere automatically with no per-file edits.
+The authoritative product design sources are `design/design.md`,
+`design/motion.md`, `design/screen_map.md`, and the approved visual
+references under `design/references/`. These sources define the
+authoritative visual and interaction decisions for the app; UI
+implementation MUST follow them instead of inventing a parallel design
+system, and the constitution does not restate their tokens, layouts, or
+timings.
 
-**Rationale**: A single source of design tokens makes retheming a one-line
-change, keeps the app visually consistent by construction, and makes drift
-(a stray hex, an off-scale margin) mechanically detectable in review rather
-than a matter of taste.
+Runtime implementation MAY represent the approved design tokens in a
+centralized, code-level theme module (e.g. `src/constants/theme.ts`).
+That module is an implementation representation of the design system, not
+an independent design authority: it MUST be derived from and remain
+consistent with `design/design.md`, and MUST NOT introduce colors,
+spacing, typography, radii, or other visual values that do not trace back
+to the design sources. Screens and components MUST consume the
+centralized runtime design tokens and shared components rather than
+independently hardcoding competing colors, spacing, typography, radius,
+or other visual patterns.
+
+When the runtime theme module or existing implementation conflicts with
+the current `design/` folder, the design folder is authoritative and the
+runtime theme module and/or affected components MUST be updated to match
+it. Styling that already exists in the runtime theme module or in
+existing screens — including prior dark/purple styling — carries no
+authority merely because it predates the current design sources; it MUST
+be brought into conformance when touched under a design-scoped feature.
+
+Existing screens MUST NOT be redesigned during unrelated feature work. A
+feature explicitly scoped to implement the approved design system MAY
+update existing screens and the shared runtime theme tokens according to
+the design sources. New screens and components MUST extend the
+established tokens, reusable components, interaction patterns, navigation
+model, and motion language already defined in the design sources, not
+introduce competing ones. Accessibility, responsive behavior,
+keyboard-safe layouts, reduced-motion support, and minimum touch targets
+defined by the design system are product requirements, not optional
+polish.
+
+Motion MUST remain lightweight and MUST NOT compete with local model
+loading, image processing, inference, streaming, or local speech
+processing for device resources. Product UI MUST NOT expose hidden
+inference stages, internal prompts, intermediate perception output, raw
+model identifiers, or developer diagnostics, unless a future
+specification explicitly requires them.
+
+When design documents conflict with older styling guidance in earlier
+specifications, the current `design/` folder is authoritative for visual
+presentation. Functional requirements from existing specifications remain
+authoritative unless explicitly superseded by a new feature specification.
+
+**Rationale**: A single, versioned design source keeps the UI coherent as
+the app grows past Phase 1, prevents each feature from drifting into its
+own visual language, and keeps design changes auditable — without
+hardcoding specific colors or tokens into the constitution itself, which
+would go stale the moment the design system evolves. Allowing a
+centralized runtime theme module to implement — but never originate —
+design decisions gives engineering a single code-level place to consume
+tokens without turning that module into a second, competing design
+authority; the module must track `design/design.md`, not drift from it.
 
 ## Technology Constraints
 
@@ -272,9 +423,17 @@ than a matter of taste.
 - Code review MUST confirm: no network calls were added to the inference
   path, the single-flight lock is respected end-to-end, tests precede
   implementation for inference/model-lifecycle code, the architecture
-  boundaries in Principle X are intact, and no hardcoded colors or magic
-  numbers were introduced in `StyleSheet.create()` calls — every screen and
-  component references `theme.*` only (Principle XI).
+  boundaries in Principle X are intact, and any UI change conforms to the
+  design sources in `design/` rather than inventing new tokens, components,
+  or visual patterns ad hoc. Code review MUST also confirm that the
+  centralized runtime theme module (e.g. `src/constants/theme.ts`)
+  implements, and does not diverge from, `design/design.md`; that screens
+  and components consume the centralized runtime tokens and shared
+  components rather than hardcoding competing colors, spacing, typography,
+  radius, or visual patterns; and that the change does not redesign an
+  existing screen as a side effect of unrelated feature work unless the
+  feature is explicitly scoped to implement the approved design system
+  (Principle XI).
 - Before installing any new native dependency (any package whose `android/`
   directory contains a `CMakeLists.txt` or its own native `build.gradle`),
   verify it does not hard-require NDK 27+ by inspecting those files for an
@@ -304,4 +463,4 @@ constitution via the Constitution Check gate. Use `CLAUDE.md` and
 `AGENTS.md` for day-to-day runtime development guidance derived from these
 principles.
 
-**Version**: 1.2.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-04
+**Version**: 2.1.0 | **Ratified**: 2026-07-03 | **Last Amended**: 2026-07-09

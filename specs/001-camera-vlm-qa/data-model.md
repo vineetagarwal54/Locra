@@ -24,6 +24,7 @@ Session"; drives User Stories 1, 3, 4).
 | `flagged` | `boolean` | Set by User Story 4's report action; defaults to `false` |
 | `flagNote` | `string \| null` | Optional free-text note captured with the flag; capped at 120 characters as of FR-035 (Phase 2) |
 | `turns` | `Array<{ question: string; answer: string }>` | **Phase 2 (FR-030)**. The full ordered multi-turn exchange about this session's single image. `turns[0]` mirrors the top-level `question`/`answer` fields (the image-attached first turn); each subsequent element is a text-only follow-up. A Phase 1 (single-exchange) session has exactly one element in `turns`, keeping it fully backward-compatible with code that only reads the top-level `question`/`answer` fields. |
+| `pinnedExtraction` | `string \| null` | **Phase 3 (FR-041/FR-044)**. The structured-extraction result produced from the captured image on turn 1 (subject, visible features, visible text, condition — parsed JSON if FR-053's parse succeeded, otherwise the raw extraction text as a fallback). `null` until the first turn completes. Every turn 2+ context build (FR-042/FR-044) MUST include this value verbatim and MUST NOT evict it under any context-window pressure. |
 
 **Validation rules**:
 - `question` MUST be non-empty and `imagePath` MUST reference an existing
@@ -41,6 +42,18 @@ Session"; drives User Stories 1, 3, 4).
 - Deletion (FR-017/FR-018) removes the MMKV entry entirely; there is no
   soft-delete/tombstone, since FR-018 requires deleted entries be
   unrecoverable through the app.
+- **Phase 3 (FR-041/FR-044)**: `pinnedExtraction` is set exactly once, when
+  `turns[0]`'s generation completes, and is never overwritten by a later
+  turn (the deferred "Look again" action, FR-043, is the only specified way
+  it would ever be recomputed — and that action is out of scope for this
+  batch per the Phase 3 Scope Note in spec.md). A session whose
+  `turns.length > 1` MUST have a non-null `pinnedExtraction`.
+- **Phase 3 (FR-045–FR-047)**: a session is the canonical resumable-thread
+  record — there is no separate "chat thread" entity. Reopening a session
+  from history and appending a further turn follows the same
+  `completed → streaming → completed` re-entry the Phase 2 addendum below
+  already describes; FR-047 additionally requires that starting a *new*
+  capture never reuses or mutates a previous session's id.
 
 **State transitions**:
 

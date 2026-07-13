@@ -9,7 +9,7 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Benchmark'>;
-type HistorySession = ReturnType<typeof useHistoryStore.getState>['sessions'][number];
+type HistorySession = ReturnType<typeof useHistoryStore.getState>['conversations'][number];
 type SessionWithMetrics = HistorySession & { metrics: NonNullable<HistorySession['metrics']> };
 type PerformanceMetrics = NonNullable<HistorySession['metrics']>;
 type MetricKey = keyof PerformanceMetrics;
@@ -64,7 +64,7 @@ const METRICS: MetricDefinition[] = [
 ];
 
 export function BenchmarkScreen({ navigation }: Props): ReactElement {
-  const sessions = useHistoryStore((s) => s.sessions);
+  const sessions = useHistoryStore((s) => s.conversations);
   const refresh = useHistoryStore((s) => s.refresh);
 
   useEffect(() => {
