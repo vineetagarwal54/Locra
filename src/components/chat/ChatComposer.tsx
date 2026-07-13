@@ -11,9 +11,12 @@ import {
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { designTokens, haptics } from '../../constants/theme';
+import type { ResponseMode } from '../../inference/ResponseMode';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
+
+import { ResponseModeSelector } from './ResponseModeSelector';
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -31,6 +34,8 @@ interface ChatComposerProps {
   onOpenCamera: () => void;
   onDraftChange: (draft: Draft) => void;
   onConversationResolved: (conversationId: string) => void;
+  responseMode: ResponseMode;
+  onResponseModeChange: (mode: ResponseMode) => void;
 }
 
 export function ChatComposer({
@@ -45,6 +50,8 @@ export function ChatComposer({
   onOpenCamera,
   onDraftChange,
   onConversationResolved,
+  responseMode,
+  onResponseModeChange,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
@@ -130,6 +137,11 @@ export function ChatComposer({
       offset={{ closed: 0, opened: designTokens.spacing.space8 }}
       style={styles.dock}
     >
+      <ResponseModeSelector
+        value={responseMode}
+        disabled={controlsDisabled}
+        onChange={onResponseModeChange}
+      />
       {draft.imagePath !== null ? (
         <View style={styles.attachmentPill}>
           <MaterialCommunityIcons

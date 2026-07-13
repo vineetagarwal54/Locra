@@ -174,7 +174,7 @@ describe('conversation ownership contract', () => {
     expect(history.get('conversation-b')).toBeNull();
   });
 
-  it('keeps retry identity stable for the targeted failed assistant message', async () => {
+  it('keeps the targeted user identity stable while appending a retry attempt', async () => {
     const { store, queue, history } = makeSubject();
     await store.submit('conversation-a', { question: 'A', imagePath: null });
     queue.emit(makeState('errored'));
@@ -182,16 +182,19 @@ describe('conversation ownership contract', () => {
     await store.retryFailedMessage('conversation-a', 'assistant-a');
 
     const conversation = history.get('conversation-a');
-    expect(conversation?.messages).toHaveLength(2);
+    expect(conversation?.messages).toHaveLength(3);
     expect(conversation?.messages[0]?.id).toBe('user-a');
     expect(conversation?.messages[1]?.id).toBe('assistant-a');
-    expect(conversation?.messages[1]?.status).toBe('generating');
+    expect(conversation?.messages[1]?.status).toBe('failed');
+    expect(conversation?.messages[2]).toEqual(
+      expect.objectContaining({ id: 'request-b', status: 'generating' })
+    );
     expect(queue.submitted.at(-1)).toEqual(
       expect.objectContaining({
-        requestId: 'request-b',
+        requestId: 'user-b',
         conversationId: 'conversation-a',
         originatingUserMessageId: 'user-a',
-        assistantMessageId: 'assistant-a',
+        assistantMessageId: 'request-b',
       })
     );
   });

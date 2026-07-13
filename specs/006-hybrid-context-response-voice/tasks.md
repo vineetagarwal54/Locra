@@ -28,8 +28,8 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **Purpose**: Dependency verification, module scaffolding, evaluation baseline, spike gates.
 
-- [ ] T001 Create feature module directories: `src/persistence/sqlite/`, `src/persistence/`, `src/retrieval/`, `src/voice/`, and confirm `src/inference/`, `src/store/`, `src/components/chat/`, `src/evaluation/` exist.
-- [ ] T002 Verify and install `expo-sqlite` for SDK 56: inspect its `android/` for any `ndkVersion`/NDK-27 requirement (must build on pinned NDK 26.3.11579264), confirm New Architecture compatibility, add to `package.json`, and run a dev-client build to prove it links. (research R1)
+- [X] T001 Create feature module directories: `src/persistence/sqlite/`, `src/persistence/`, `src/retrieval/`, `src/voice/`, and confirm `src/inference/`, `src/store/`, `src/components/chat/`, `src/evaluation/` exist.
+- [X] T002 Verify and install `expo-sqlite` for SDK 56: inspect its `android/` for any `ndkVersion`/NDK-27 requirement (must build on pinned NDK 26.3.11579264), confirm New Architecture compatibility, add to `package.json`, and run a dev-client build to prove it links. (research R1)
 - [ ] T003 [P] Run `npm run type-check`, `npm run lint`, and `npm test` on the unchanged branch and record the baseline result before implementation.
 - [ ] T004 [P] Record reusable pre-feature evaluation fixtures and a manual scoring rubric (short chat, long chat, image answers, retries, latency, memory) in `src/evaluation/baselines/`; do not assert exact model wording in Jest. (FR-047)
 - [ ] T005 **⛔ GATE** Run a `llama.rn` embedding spike on a physical 6–8GB device and approve one exact embedding artifact manifest (model id, license, URL, filename, bytes, SHA-256, dimensions, runtime call shape, peak memory, latency) in `research.md`; embedding-runtime implementation (T056/T057) is blocked until approval. (FR-021)
@@ -43,14 +43,14 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T007 Implement the SQLite database boundary in `src/persistence/sqlite/Database.ts`: open the DB, enable `PRAGMA foreign_keys = ON` and WAL; the ONLY file permitted to import `expo-sqlite` (Principle VIII / X).
-- [ ] T008 [P] Write one focused failing schema-contract suite in `tests/unit/persistence/Schema.test.ts` covering required tables, indexes, CHECK constraints, foreign keys, and partial unique indexes (deletion/orphan behavior is tested once in Polish, not duplicated here).
-- [ ] T009 Implement the full schema + `PRAGMA user_version` initialization in `src/persistence/sqlite/Schema.ts` for ALL tables/indexes/constraints in data-model.md (make T008 pass).
-- [ ] T010 [P] Implement a development-only explicit destructive reset helper in `src/persistence/sqlite/DevSchemaReset.ts`; bootstrap may invoke it only under a development flag and MUST never silently reset a production build. (FR-006)
-- [ ] T011 [P] Implement a transaction helper (run/rollback-on-throw) in `src/persistence/sqlite/Transactions.ts`.
-- [ ] T012 [P] Add shared persistence types in `src/persistence/types.ts` (Page<T>, keyset cursors, row shapes); extend `src/types/models.ts` with new entity types (attempt, image asset/link, evidence, chunk, embedding, summary, durable fact) without breaking existing exports.
-- [ ] T013 [P] Write failing tests for the device resource policy in `tests/unit/inference/DeviceResourcePolicy.test.ts`: only one protected op (qwen-answer, qwen-compaction, embedding, record, transcribe) may hold the lease; acquire waits/blocks; release on success/cancel/failure. (FR-045)
-- [ ] T014 Implement `src/inference/DeviceResourcePolicy.ts` extending the existing single-flight `InferenceQueue`/`InferenceActivityLock` into one mutual-exclusion gate (make T013 pass). (Constitution II/IV, FR-045)
+- [X] T007 Implement the SQLite database boundary in `src/persistence/sqlite/Database.ts`: open the DB, enable `PRAGMA foreign_keys = ON` and WAL; the ONLY file permitted to import `expo-sqlite` (Principle VIII / X).
+- [X] T008 [P] Write one focused failing schema-contract suite in `tests/unit/persistence/Schema.test.ts` covering required tables, indexes, CHECK constraints, foreign keys, and partial unique indexes (deletion/orphan behavior is tested once in Polish, not duplicated here).
+- [X] T009 Implement the full schema + `PRAGMA user_version` initialization in `src/persistence/sqlite/Schema.ts` for ALL tables/indexes/constraints in data-model.md (make T008 pass).
+- [X] T010 [P] Implement a development-only explicit destructive reset helper in `src/persistence/sqlite/DevSchemaReset.ts`; bootstrap may invoke it only under a development flag and MUST never silently reset a production build. (FR-006)
+- [X] T011 [P] Implement a transaction helper (run/rollback-on-throw) in `src/persistence/sqlite/Transactions.ts`.
+- [X] T012 [P] Add shared persistence types in `src/persistence/types.ts` (Page<T>, keyset cursors, row shapes); extend `src/types/models.ts` with new entity types (attempt, image asset/link, evidence, chunk, embedding, summary, durable fact) without breaking existing exports.
+- [X] T013 [P] Write failing tests for the device resource policy in `tests/unit/inference/DeviceResourcePolicy.test.ts`: only one protected op (qwen-answer, qwen-compaction, embedding, record, transcribe) may hold the lease; acquire waits/blocks; release on success/cancel/failure. (FR-045)
+- [X] T014 Implement `src/inference/DeviceResourcePolicy.ts` extending the existing single-flight `InferenceQueue`/`InferenceActivityLock` into one mutual-exclusion gate (make T013 pass). (Constitution II/IV, FR-045)
 
 **Checkpoint**: Database + schema + resource policy ready — user stories can begin.
 
@@ -64,18 +64,18 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 1 ⚠️ (write first, must fail)
 
-- [ ] T015 [P] [US1] Failing `tests/unit/persistence/ConversationRepository.test.ts`: keyset list by `(updated_at DESC, id DESC)`, page size ≤50, `nextCursor` correctness, create (mode copied from global default), and `deleteConversation` cascade leaves zero child rows.
-- [ ] T016 [P] [US1] Failing `tests/unit/persistence/MessageRepository.test.ts`: `(conversation_id, created_at DESC, id DESC)` keyset, ≤50 per page, newest-first, no full-history load.
-- [ ] T017 [P] [US1] Failing `tests/unit/store/conversationStore.pagination.test.ts`: at most 2 list pages + 3 message pages per active conversation; eviction preserves anchors and re-fetches by cursor. (FR-005, research R12)
+- [X] T015 [P] [US1] Failing `tests/unit/persistence/ConversationRepository.test.ts`: keyset list by `(updated_at DESC, id DESC)`, page size ≤50, `nextCursor` correctness, create (mode copied from global default), and `deleteConversation` cascade leaves zero child rows.
+- [X] T016 [P] [US1] Failing `tests/unit/persistence/MessageRepository.test.ts`: `(conversation_id, created_at DESC, id DESC)` keyset, ≤50 per page, newest-first, no full-history load.
+- [X] T017 [P] [US1] Failing `tests/unit/store/conversationStore.pagination.test.ts`: at most 2 list pages + 3 message pages per active conversation; eviction preserves anchors and re-fetches by cursor. (FR-005, research R12)
 
 ### Implementation for User Story 1
 
-- [ ] T018 [P] [US1] Implement `src/persistence/ConversationRepository.ts`: `listConversations` (keyset), `getConversation`, `createConversation` (copies global default mode, stored lowercase), `updateConversation`, `deleteConversation` (single transaction, cascade + image-file unlink hook). (FR-001/003/004, SC-014)
-- [ ] T019 [P] [US1] Implement `src/persistence/MessageRepository.ts` read/paginate surface: `listMessages` (keyset window), `countMessages`, `appendUserMessage`, `updateAssistantStreamingText`, `finalizeAttempt`. (FR-002/003)
-- [ ] T020 [US1] Refactor `src/store/conversationStore.ts` and `src/store/historyStore.ts` to read via repositories with a bounded page cache + anchor-preserving eviction, replacing `HistoryStore.list()` full loads. (FR-005; make T017 pass)
-- [ ] T021 [US1] Update `src/screens/HistoryScreen.tsx`, `src/navigation/ConversationDrawer.tsx`, `src/components/ConversationListItem.tsx` to consume paginated conversation pages (infinite scroll, ≤50 per page).
-- [ ] T022 [US1] Update `src/screens/ChatScreen.tsx` to load the newest message page first and fetch older pages on demand (bounded cache).
-- [ ] T023 [P] [US1] Add a seed/dev fixture `src/evaluation/fixtures/seedConversations.ts` generating ≥200 conversations incl. several with ~500 messages.
+- [X] T018 [P] [US1] Implement `src/persistence/ConversationRepository.ts`: `listConversations` (keyset), `getConversation`, `createConversation` (copies global default mode, stored lowercase), `updateConversation`, `deleteConversation` (single transaction, cascade + image-file unlink hook). (FR-001/003/004, SC-014)
+- [X] T019 [P] [US1] Implement `src/persistence/MessageRepository.ts` read/paginate surface: `listMessages` (keyset window), `countMessages`, `appendUserMessage`, `updateAssistantStreamingText`, `finalizeAttempt`. (FR-002/003)
+- [X] T020 [US1] Refactor `src/store/conversationStore.ts` and `src/store/historyStore.ts` to read via repositories with a bounded page cache + anchor-preserving eviction, replacing `HistoryStore.list()` full loads. (FR-005; make T017 pass)
+- [X] T021 [US1] Update `src/screens/HistoryScreen.tsx`, `src/navigation/ConversationDrawer.tsx`, `src/components/ConversationListItem.tsx` to consume paginated conversation pages (infinite scroll, ≤50 per page).
+- [X] T022 [US1] Update `src/screens/ChatScreen.tsx` to load the newest message page first and fetch older pages on demand (bounded cache).
+- [X] T023 [P] [US1] Add a seed/dev fixture `src/evaluation/fixtures/seedConversations.ts` generating ≥200 conversations incl. several with ~500 messages.
 - [ ] T024 [US1] Implement conversation deletion in the UI flow (drawer/history) calling `deleteConversation`; verify cascade + image-file cleanup end to end.
 
 **Checkpoint**: History scales and pages independently; MVP demonstrable.
@@ -90,15 +90,15 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 2 ⚠️ (write first, must fail)
 
-- [ ] T025 [P] [US2] Write one failing `tests/unit/persistence/MessageRepository.attempts.test.ts` covering submitted-user immutability, generating-only assistant updates, terminal immutability, retry insertion with incremented attempt number, one-active-attempt enforcement, selection-only switching, and canonical projection of user messages plus active completed attempts. (FR-008..014)
+- [X] T025 [P] [US2] Write one failing `tests/unit/persistence/MessageRepository.attempts.test.ts` covering submitted-user immutability, generating-only assistant updates, terminal immutability, retry insertion with incremented attempt number, one-active-attempt enforcement, selection-only switching, and canonical projection of user messages plus active completed attempts. (FR-008..014)
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Extend `src/persistence/MessageRepository.ts` with attempt lifecycle: `createAssistantAttempt(replyToUserMessageId)`, `setActiveAttempt` (one-transaction 1→0/0→1), immutability guards for user + terminal assistant rows. (FR-008/009/010/011/012; make T025 pass)
-- [ ] T027 [US2] Implement `getCanonicalProjection(conversationId)` (active completed attempts only) + `listAllAttempts` for diagnostics in `src/persistence/MessageRepository.ts`. (FR-013/014; make T025 pass)
-- [ ] T028 [US2] Rework `submit` and `retryFailedMessage` in `src/store/conversationStore.ts` to persist immutable user rows + streaming assistant attempts and to make retry insert a new attempt (not overwrite). (FR-011)
-- [ ] T029 [US2] Update `src/components/chat/MessageBubble.tsx` and `src/components/chat/StreamingMessage.tsx` to render the active attempt and expose retry without mutating prior attempts. (FR-011/014)
-- [ ] T030 [P] [US2] Update `src/diagnostics/DiagnosticsTraceStore.ts` consumers so diagnostics can list non-active attempts without polluting normal context.
+- [X] T026 [US2] Extend `src/persistence/MessageRepository.ts` with attempt lifecycle: `createAssistantAttempt(replyToUserMessageId)`, `setActiveAttempt` (one-transaction 1→0/0→1), immutability guards for user + terminal assistant rows. (FR-008/009/010/011/012; make T025 pass)
+- [X] T027 [US2] Implement `getCanonicalProjection(conversationId)` (active completed attempts only) + `listAllAttempts` for diagnostics in `src/persistence/MessageRepository.ts`. (FR-013/014; make T025 pass)
+- [X] T028 [US2] Rework `submit` and `retryFailedMessage` in `src/store/conversationStore.ts` to persist immutable user rows + streaming assistant attempts and to make retry insert a new attempt (not overwrite). (FR-011)
+- [X] T029 [US2] Update `src/components/chat/MessageBubble.tsx` and `src/components/chat/StreamingMessage.tsx` to render the active attempt and expose retry without mutating prior attempts. (FR-011/014)
+- [X] T030 [P] [US2] Update `src/diagnostics/DiagnosticsTraceStore.ts` consumers so diagnostics can list non-active attempts without polluting normal context.
 
 **Checkpoint**: Retries are auditable; completed content never rewritten.
 
@@ -112,14 +112,14 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 6 ⚠️ (write first, must fail)
 
-- [ ] T031 [P] [US6] Write one failing `tests/unit/inference/ResponseMode.test.ts` covering the pinned monotonic profiles, character-based `contextBudgetUnits`, the tested lowercase↔runtime conversion (`toStoredMode`/`fromStoredMode`, unknown→Medium), new-conversation initialization from the global default, per-conversation updates, future-request-only effect, and preservation of messages/drafts/images/summaries/embeddings. (FR-033/034/035/036, SC-011)
+- [X] T031 [P] [US6] Write one failing `tests/unit/inference/ResponseMode.test.ts` covering the pinned monotonic profiles, character-based `contextBudgetUnits`, the tested lowercase↔runtime conversion (`toStoredMode`/`fromStoredMode`, unknown→Medium), new-conversation initialization from the global default, per-conversation updates, future-request-only effect, and preservation of messages/drafts/images/summaries/embeddings. (FR-033/034/035/036, SC-011)
 
 ### Implementation for User Story 6
 
-- [ ] T032 [US6] Extend `src/inference/ResponseMode.ts` with `getResponseModeConfig(mode)` (full bounded profile; char-based budget units) and the single tested `toStoredMode`/`fromStoredMode` conversion function (make T031 pass). (FR-036)
-- [ ] T033 [US6] Add `setResponseMode` + lowercase `conversation.response_mode` reads/writes in `ConversationRepository.ts`; keep the global default in `settingsStore.ts` used only when a new conversation is created. (FR-033/034)
-- [ ] T034 [US6] Resolve the effective mode from the active conversation (via `fromStoredMode`) before each submit/retry in `src/store/conversationStore.ts` and pass generation limits through. **Orchestrator/retriever wiring of the mode config is deferred to T054 (hybrid-context phase).** (FR-035; make T031 pass)
-- [ ] T035 [US6] Implement `src/components/chat/ResponseModeSelector.tsx` (visible + changeable in chat UI) using existing design tokens/components per `design/design.md`; wire into `src/screens/ChatScreen.tsx` / `ChatComposer.tsx`. (US6 AS6, Principle XI)
+- [X] T032 [US6] Extend `src/inference/ResponseMode.ts` with `getResponseModeConfig(mode)` (full bounded profile; char-based budget units) and the single tested `toStoredMode`/`fromStoredMode` conversion function (make T031 pass). (FR-036)
+- [X] T033 [US6] Add `setResponseMode` + lowercase `conversation.response_mode` reads/writes in `ConversationRepository.ts`; keep the global default in `settingsStore.ts` used only when a new conversation is created. (FR-033/034)
+- [X] T034 [US6] Resolve the effective mode from the active conversation (via `fromStoredMode`) before each submit/retry in `src/store/conversationStore.ts` and pass generation limits through. **Orchestrator/retriever wiring of the mode config is deferred to T054 (hybrid-context phase).** (FR-035; make T031 pass)
+- [X] T035 [US6] Implement `src/components/chat/ResponseModeSelector.tsx` (visible + changeable in chat UI) using existing design tokens/components per `design/design.md`; wire into `src/screens/ChatScreen.tsx` / `ChatComposer.tsx`. (US6 AS6, Principle XI)
 
 **Checkpoint**: Per-conversation depth control works without state loss.
 
@@ -133,16 +133,16 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 5 ⚠️ (write first, must fail)
 
-- [ ] T036 [P] [US5] Write one failing `tests/unit/persistence/ImagePersistence.test.ts` covering asset reuse, message links, physical deletion only when unreferenced, missing-file state, evidence source/version references, and compatible-evidence reuse without regeneration. (FR-022/023/024/025)
+- [X] T036 [P] [US5] Write one failing `tests/unit/persistence/ImagePersistence.test.ts` covering asset reuse, message links, physical deletion only when unreferenced, missing-file state, evidence source/version references, and compatible-evidence reuse without regeneration. (FR-022/023/024/025)
 
 ### Implementation for User Story 5
 
-- [ ] T037 [P] [US5] Implement `src/persistence/ImageRepository.ts` (`image_asset` + `message_image`): create/link, `unlinkForMessage`, reference-existence-based file deletion, missing-file state. (FR-022/025; make T036 pass)
-- [ ] T038 [P] [US5] Implement `src/persistence/EvidenceRepository.ts`: `saveEvidence(HiddenVisualEvidence → row)`, `getEvidenceForMessage`, `getActiveImageEvidence(conversationId)`, `resolveReferencedImageEvidence`. (FR-023/024; make T036 pass)
-- [ ] T039 [US5] Persist `HiddenVisualEvidence` from the existing vision pipeline into SQL on turn completion in `src/store/conversationStore.ts` (replace ephemeral `contextMemory.mediaEvidence`). (FR-023)
-- [ ] T040 [US5] Implement active-vs-referenced image-evidence resolution **helpers in `EvidenceRepository`** (`getActiveImageEvidence` / `resolveReferencedImageEvidence`); reuse without reprocessing. **Wiring these helpers into `ContextOrchestrator` is deferred to T054 (hybrid-context phase).** (FR-024, US5 AS3/AS4)
-- [ ] T041 [US5] Implement missing-file behavior in the `src/inference/` image path: non-pixel follow-ups may use evidence; pixel-dependent requests report the original image unavailable and never substitute another image. (FR + Edge Cases)
-- [ ] T042 [US5] Expose persisted visual evidence as deterministic retrieval source units carrying conversation/message/image-asset IDs (chunked/embedded in T048/T049). (FR-023)
+- [X] T037 [P] [US5] Implement `src/persistence/ImageRepository.ts` (`image_asset` + `message_image`): create/link, `unlinkForMessage`, reference-existence-based file deletion, missing-file state. (FR-022/025; make T036 pass)
+- [X] T038 [P] [US5] Implement `src/persistence/EvidenceRepository.ts`: `saveEvidence(HiddenVisualEvidence → row)`, `getEvidenceForMessage`, `getActiveImageEvidence(conversationId)`, `resolveReferencedImageEvidence`. (FR-023/024; make T036 pass)
+- [X] T039 [US5] Persist `HiddenVisualEvidence` from the existing vision pipeline into SQL on turn completion in `src/store/conversationStore.ts` (replace ephemeral `contextMemory.mediaEvidence`). (FR-023)
+- [X] T040 [US5] Implement active-vs-referenced image-evidence resolution **helpers in `EvidenceRepository`** (`getActiveImageEvidence` / `resolveReferencedImageEvidence`); reuse without reprocessing. **Wiring these helpers into `ContextOrchestrator` is deferred to T054 (hybrid-context phase).** (FR-024, US5 AS3/AS4)
+- [X] T041 [US5] Implement missing-file behavior in the `src/inference/` image path: non-pixel follow-ups may use evidence; pixel-dependent requests report the original image unavailable and never substitute another image. (FR + Edge Cases)
+- [X] T042 [US5] Expose persisted visual evidence as deterministic retrieval source units carrying conversation/message/image-asset IDs (chunked/embedded in T048/T049). (FR-023)
 
 **Checkpoint**: Image follow-ups reuse evidence with correct lifecycle.
 

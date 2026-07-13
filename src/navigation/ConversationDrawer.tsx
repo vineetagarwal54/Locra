@@ -5,7 +5,7 @@ import {
 } from '@react-navigation/drawer';
 import type { NavigationState, PartialState } from '@react-navigation/native';
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationListItem } from '../components/ConversationListItem';
 import { designTokens, haptics } from '../constants/theme';
@@ -62,6 +62,13 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
     navigateToChat(conversationId);
   };
 
+  const onDelete = (conversationId: string): void => {
+    Alert.alert('Delete conversation?', 'This removes its messages and local images from this phone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => useHistoryStore.getState().delete(conversationId) },
+    ]);
+  };
+
   const onViewAllHistory = (): void => {
     void haptics.tap();
     navigation.closeDrawer();
@@ -116,6 +123,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
                   conversation={conversation}
                   selected={conversation.id === activeConversationId}
                   onPress={onResume}
+                  onDelete={onDelete}
                 />
               ))}
             </View>

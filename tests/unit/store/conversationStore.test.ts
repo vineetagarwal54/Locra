@@ -326,7 +326,7 @@ describe('conversationStore', () => {
     expect(store.getConversationRuntimeState('conversation-b')).toBeNull();
   });
 
-  it('retryFailedMessage resets the identified assistant message in place', async () => {
+  it('retryFailedMessage preserves the failed attempt and appends a new active attempt', async () => {
     const { store, queue, history } = makeStore();
     await store.submit('new', { question: 'A question', imagePath: null });
     queue.emit(makeInferenceState('errored'));
@@ -334,20 +334,25 @@ describe('conversationStore', () => {
     await store.retryFailedMessage('conversation-a', 'assistant-a');
 
     const conversation = history.get('conversation-a');
-    expect(conversation?.messages.map((message) => message.id)).toEqual(['user-a', 'assistant-a']);
+    expect(conversation?.messages.map((message) => message.id)).toEqual([
+      'user-a', 'assistant-a', 'request-b',
+    ]);
     expect(conversation?.messages[1]).toEqual(
+      expect.objectContaining({ id: 'assistant-a', status: 'failed' })
+    );
+    expect(conversation?.messages[2]).toEqual(
       expect.objectContaining({
-        id: 'assistant-a',
+        id: 'request-b',
         status: 'generating',
         errorMessage: null,
       })
     );
     expect(queue.submitted.at(-1)).toEqual(
       expect.objectContaining({
-        requestId: 'request-b',
+        requestId: 'user-b',
         conversationId: 'conversation-a',
         originatingUserMessageId: 'user-a',
-        assistantMessageId: 'assistant-a',
+        assistantMessageId: 'request-b',
       })
     );
   });

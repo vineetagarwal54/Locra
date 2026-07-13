@@ -1,15 +1,46 @@
+import { File } from 'expo-file-system';
 import { create } from 'zustand';
 
-import { HistoryStore } from '../history/HistoryStore';
+import { fromStoredMode, toStoredMode } from '../inference/ResponseMode';
+import { ConversationRepository } from '../persistence/ConversationRepository';
+import { EvidenceRepository } from '../persistence/EvidenceRepository';
+import { ImageRepository } from '../persistence/ImageRepository';
+import { MessageRepository } from '../persistence/MessageRepository';
+import { getDatabase } from '../persistence/sqlite/Database';
 import type { IHistoryStore } from '../types/interfaces';
-import type { Conversation, MetricsSummary } from '../types/models';
+import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
-const history = new HistoryStore();
+import { createConversationListCache, createMessageHistoryCache, loadMoreConversations, loadOlderMessages } from './conversationHistoryCache';
+import { useSettingsStore } from './settingsStore';
+
+const EMPTY_METRICS: MetricsSummary = {
+  count: 0,
+  averageModelLoadTimeMs: 0,
+  averagePreprocessingTimeMs: 0,
+  averageFirstTokenLatencyMs: 0,
+  averageTokensPerSecond: 0,
+  averageTotalWallTimeMs: 0,
+};
+
+const driver = getDatabase();
+export const conversationRepository = new ConversationRepository(driver, {
+  getDefaultResponseMode: () => toStoredMode(useSettingsStore.getState().defaultResponseMode),
+  onUnlinkImageFiles: unlinkFiles,
+});
+export const messageRepository = new MessageRepository(driver);
+export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
+export const evidenceRepository = new EvidenceRepository(driver);
+
+let conversationCache = createConversationListCache(conversationRepository);
+const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();
 
 export interface HistoryStoreState {
   conversations: Conversation[];
   metricsSummary: MetricsSummary;
+  hasMoreConversations: boolean;
   refresh: () => void;
+  loadMore: () => void;
+  loadOlderMessages: (conversationId: string) => void;
   delete: (id: string) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
@@ -19,50 +50,186 @@ export interface HistoryStoreState {
   listConversations: (limit?: number, offset?: number) => Conversation[];
 }
 
-export const useHistoryStore = create<HistoryStoreState>((set) => ({
-  conversations: history.list(),
-  metricsSummary: history.getMetricsSummary(),
+export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
+  conversations: rowsToConversationHeaders(conversationCache.items()),
+  metricsSummary: EMPTY_METRICS,
+  hasMoreConversations: conversationCache.hasMore(),
   refresh: (): void => {
-    set(snapshot());
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
+  },
+  loadMore: (): void => {
+    loadMoreConversations(conversationCache, conversationRepository);
+    set(listSnapshot());
+  },
+  loadOlderMessages: (conversationId: string): void => {
+    const cache = getMessageCache(conversationId);
+    loadOlderMessages(cache, messageRepository, conversationId);
+    set({ conversations: [...get().conversations] });
   },
   delete: (id: string): void => {
-    history.delete(id);
-    set(snapshot());
+    conversationRepository.deleteConversation(id);
+    messageCaches.delete(id);
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
   },
   clear: (): void => {
-    history.clear();
-    set(snapshot());
+    let page = conversationRepository.listConversations({ limit: 50 });
+    while (page.items.length > 0) {
+      for (const row of page.items) {
+        conversationRepository.deleteConversation(row.id);
+      }
+      page = conversationRepository.listConversations({ limit: 50 });
+    }
+    messageCaches.clear();
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
   },
-  setFlag: (id: string, flagged: boolean, note?: string): void => {
-    history.setFlag(id, flagged, note);
-    set(snapshot());
+  setFlag: (): void => {
+    // Flags remain a diagnostics concern until their SQL schema lands.
   },
-  getMetricsSummary: (): MetricsSummary => history.getMetricsSummary(),
+  getMetricsSummary: (): MetricsSummary => EMPTY_METRICS,
   saveConversation: (conversation: Conversation): void => {
-    history.save(conversation);
-    set(snapshot());
+    persistConversationSnapshot(conversation);
+    messageCaches.delete(conversation.id);
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
   },
-  getConversation: (id: string): Conversation | null => history.get(id),
-  listConversations: (limit?: number, offset?: number): Conversation[] =>
-    history.list(limit, offset),
+  getConversation: (id: string): Conversation | null => materializeConversation(id),
+  listConversations: (limit = 50, offset = 0): Conversation[] =>
+    get().conversations.slice(offset, offset + Math.min(limit, 50)),
 }));
 
 export const historyStore: IHistoryStore = {
-  save: (conversation: Conversation): void =>
-    useHistoryStore.getState().saveConversation(conversation),
-  get: (id: string): Conversation | null => useHistoryStore.getState().getConversation(id),
-  list: (limit?: number, offset?: number): Conversation[] =>
-    useHistoryStore.getState().listConversations(limit, offset),
-  delete: (id: string): void => useHistoryStore.getState().delete(id),
-  clear: (): void => useHistoryStore.getState().clear(),
-  setFlag: (id: string, flagged: boolean, note?: string): void =>
-    useHistoryStore.getState().setFlag(id, flagged, note),
-  getMetricsSummary: (): MetricsSummary => useHistoryStore.getState().getMetricsSummary(),
+  save: (conversation) => useHistoryStore.getState().saveConversation(conversation),
+  get: (id) => useHistoryStore.getState().getConversation(id),
+  list: (limit, offset) => useHistoryStore.getState().listConversations(limit, offset),
+  delete: (id) => useHistoryStore.getState().delete(id),
+  clear: () => useHistoryStore.getState().clear(),
+  setFlag: (id, flagged, note) => useHistoryStore.getState().setFlag(id, flagged, note),
+  getMetricsSummary: () => EMPTY_METRICS,
 };
 
-function snapshot(): Pick<HistoryStoreState, 'conversations' | 'metricsSummary'> {
+function listSnapshot(): Pick<HistoryStoreState, 'conversations' | 'metricsSummary' | 'hasMoreConversations'> {
   return {
-    conversations: history.list(),
-    metricsSummary: history.getMetricsSummary(),
+    conversations: rowsToConversationHeaders(conversationCache.items()),
+    metricsSummary: EMPTY_METRICS,
+    hasMoreConversations: conversationCache.hasMore(),
   };
+}
+
+function rowsToConversationHeaders(rows: ConversationRow[]): Conversation[] {
+  return rows.map((row) => ({
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    messages: [],
+    status: 'idle',
+    errorMessage: null,
+    metrics: null,
+    flagged: false,
+    flagNote: null,
+    contextMemory: null,
+    responseMode: fromStoredMode(row.response_mode),
+  }));
+}
+
+function getMessageCache(conversationId: string): ReturnType<typeof createMessageHistoryCache> {
+  const existing = messageCaches.get(conversationId);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = createMessageHistoryCache(messageRepository, conversationId);
+  messageCaches.set(conversationId, created);
+  return created;
+}
+
+function materializeConversation(id: string): Conversation | null {
+  const row = conversationRepository.getConversation(id);
+  if (row === null) {
+    return null;
+  }
+  const cachedRows = getMessageCache(id).items();
+  const activeRows = activeProjection(cachedRows).sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+  const messages = activeRows.map(toConversationMessage);
+  const last = messages.at(-1);
+  return {
+    ...rowsToConversationHeaders([row])[0],
+    messages,
+    status: last?.status === 'generating' ? 'streaming'
+      : last?.status === 'failed' ? 'errored'
+        : last?.status === 'interrupted' ? 'cancelled'
+          : messages.length === 0 ? 'idle' : 'completed',
+    errorMessage: last?.errorMessage ?? null,
+  };
+}
+
+function activeProjection(rows: MessageRow[]): MessageRow[] {
+  return rows.filter((row) => row.role === 'user' || row.is_active_attempt === 1);
+}
+
+function toConversationMessage(row: MessageRow): ConversationMessage {
+  return {
+    id: row.id,
+    role: row.role,
+    text: row.text,
+    attachments: row.role === 'user'
+      ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({ kind: 'image' as const, path: asset.local_path }))
+      : [],
+    status: row.role === 'user' ? 'completed' : row.status === 'submitted' ? 'completed' : row.status,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+  };
+}
+
+function persistConversationSnapshot(conversation: Conversation): void {
+  if (conversationRepository.getConversation(conversation.id) === null) {
+    conversationRepository.createConversation({ id: conversation.id, responseMode: toStoredMode(conversation.responseMode ?? useSettingsStore.getState().defaultResponseMode) });
+  }
+  for (const message of conversation.messages) {
+    const existing = messageRepository.getMessage(message.id);
+    if (message.role === 'user') {
+      if (existing === null) {
+        messageRepository.appendUserMessage({ id: message.id, conversationId: conversation.id, text: message.text, createdAt: message.createdAt });
+        message.attachments.forEach((attachment, ordinal) => {
+          const asset = imageRepository.createOrReuseAsset({ conversationId: conversation.id, localPath: attachment.path });
+          imageRepository.linkToMessage(message.id, asset.id, ordinal);
+        });
+      }
+      continue;
+    }
+    if (existing === null) {
+      const source = findPreviousUser(conversation.messages, message.id);
+      if (source !== null) {
+        messageRepository.createAssistantAttempt(source.id, { id: message.id, createdAt: message.createdAt });
+      }
+    }
+    messageRepository.updateAssistantStreamingText(message.id, message.text);
+    if (message.status !== 'generating') {
+      messageRepository.finalizeAttempt(message.id, message.status, message.errorMessage);
+    }
+  }
+  conversationRepository.updateConversation(conversation.id, { touch: true });
+}
+
+function findPreviousUser(messages: ConversationMessage[], assistantId: string): ConversationMessage | null {
+  const index = messages.findIndex((message) => message.id === assistantId);
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const candidate = messages[cursor];
+    if (candidate?.role === 'user') {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function unlinkFiles(paths: ReadonlyArray<string>): void {
+  paths.forEach(unlinkFile);
+}
+
+function unlinkFile(path: string): void {
+  const file = new File(path.startsWith('file://') ? path : `file://${path}`);
+  if (file.exists) {
+    file.delete();
+  }
 }

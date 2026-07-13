@@ -59,6 +59,7 @@ export interface Conversation {
   flagged: boolean;
   flagNote: string | null;
   contextMemory?: ConversationContextMemory | null;
+  responseMode?: import('../inference/ResponseMode').ResponseMode;
 }
 
 export interface CanonicalContextTurn {
@@ -210,4 +211,148 @@ export interface MetricsSummary {
   averageFirstTokenLatencyMs: number;
   averageTokensPerSecond: number;
   averageTotalWallTimeMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Spec 006 — SQL canonical store entity types (data-model.md).
+// These describe rows in the SQLite store; they are separate from the legacy
+// MMKV in-memory shapes above, which remain for the existing pipeline.
+// ---------------------------------------------------------------------------
+
+/** Response mode as stored in SQL (lowercase). Runtime union is `ResponseMode`. */
+export type StoredResponseMode = 'low' | 'medium' | 'high';
+
+export type MessageRole = 'user' | 'assistant';
+
+/** Lifecycle status of a message row: 'submitted' for user rows; the rest for assistant attempts. */
+export type AttemptStatus = 'submitted' | 'generating' | 'completed' | 'failed' | 'interrupted';
+
+export interface ConversationRow {
+  id: string;
+  title: string | null;
+  normalized_title: string | null;
+  response_mode: StoredResponseMode;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+export interface MessageRow {
+  id: string;
+  conversation_id: string;
+  role: MessageRole;
+  /** Assistant attempt → source user message; NULL for user rows. */
+  reply_to_message_id: string | null;
+  /** Assistant only; 1-based per source user message. */
+  attempt_number: number | null;
+  /** Assistant only; 1 = canonical visible attempt. */
+  is_active_attempt: number;
+  text: string;
+  status: AttemptStatus;
+  error_message: string | null;
+  finalized_at: number | null;
+  created_at: number;
+}
+
+export interface ImageAssetRow {
+  id: string;
+  conversation_id: string;
+  local_path: string;
+  available: number;
+  content_hash: string | null;
+  created_at: number;
+}
+
+export interface MessageImageRow {
+  message_id: string;
+  image_asset_id: string;
+  ordinal: number;
+  created_at: number;
+}
+
+export interface VisualEvidenceRow {
+  id: string;
+  conversation_id: string;
+  source_message_id: string;
+  image_asset_id: string;
+  evidence_version: string;
+  subject_object: string;
+  visible_features_json: string;
+  visible_text_json: string;
+  visible_condition: string;
+  uncertainty_json: string;
+  source_revision: string;
+  created_at: number;
+}
+
+export interface ChunkRow {
+  id: string;
+  conversation_id: string;
+  source_message_id: string;
+  image_asset_id: string | null;
+  chunk_version: string;
+  ordinal: number;
+  start_offset: number;
+  end_offset: number;
+  text: string;
+  source_revision: string;
+  created_at: number;
+}
+
+export type EmbeddingState = 'pending' | 'ready' | 'stale' | 'failed' | 'rebuilding';
+
+export interface EmbeddingRow {
+  id: string;
+  conversation_id: string;
+  chunk_id: string | null;
+  message_id: string | null;
+  evidence_id: string | null;
+  fact_id: string | null;
+  model_id: string;
+  model_artifact_hash: string;
+  embedding_version: string;
+  dimensions: number;
+  source_revision: string;
+  vector: Uint8Array;
+  state: EmbeddingState;
+  created_at: number;
+  updated_at: number;
+}
+
+export type SummaryStatus = 'ready' | 'stale' | 'superseded' | 'failed';
+
+export interface SummaryRow {
+  id: string;
+  conversation_id: string;
+  first_source_message_id: string;
+  last_source_message_id: string;
+  source_view_hash: string;
+  summarizer_version: string;
+  text: string;
+  status: SummaryStatus;
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export type DurableFactStatus = 'ready' | 'stale' | 'superseded' | 'failed';
+export type DurableFactType = 'fact' | 'decision';
+
+export interface DurableFactRow {
+  id: string;
+  conversation_id: string;
+  normalized_key: string;
+  value_text: string;
+  fact_type: DurableFactType;
+  extraction_version: string;
+  status: DurableFactStatus;
+  supersedes_fact_id: string | null;
+  source_view_hash: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DurableFactSourceRow {
+  fact_id: string;
+  message_id: string;
 }

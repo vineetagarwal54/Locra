@@ -10,6 +10,8 @@ import {
 } from '../inference/ContextOrchestrator';
 import { inferenceQueue } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
+import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
+import { DEFAULT_RESPONSE_MODE, type ResponseMode, toStoredMode } from '../inference/ResponseMode';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -21,7 +23,8 @@ import type {
   MessageStatus,
 } from '../types/models';
 
-import { historyStore } from './historyStore';
+import { conversationRepository, evidenceRepository, historyStore, imageRepository, useHistoryStore } from './historyStore';
+import { useSettingsStore } from './settingsStore';
 
 export interface ConversationStoreDependencies {
   inferenceQueue: IInferenceQueue;
@@ -29,6 +32,9 @@ export interface ConversationStoreDependencies {
   contextOrchestrator?: ContextOrchestrator;
   now?: () => number;
   createId?: (prefix: string) => string;
+  getDefaultResponseMode?: () => ResponseMode;
+  setPersistedResponseMode?: (conversationId: string, mode: ResponseMode) => void;
+  persistEvidence?: (conversationId: string, sourceMessageId: string, evidence: HiddenVisualEvidence) => void;
 }
 
 interface ActiveGeneration {
@@ -36,6 +42,7 @@ interface ActiveGeneration {
   originatingUserMessageId: string;
   assistantMessageId: string;
   contextDiagnostics?: ContextSelectionDiagnostics;
+  responseMode: ResponseMode;
 }
 
 interface SubmitResult {
@@ -47,6 +54,7 @@ interface SubmitResult {
 export class ConversationStore implements IConversationStore {
   private readonly runtimeStates = new Map<string, ConversationRuntimeState>();
   private readonly drafts = new Map<string, Draft>();
+  private readonly responseModes = new Map<string, ResponseMode>();
   private readonly listeners = new Map<
     string,
     Set<(state: ConversationRuntimeState | null) => void>
@@ -89,6 +97,9 @@ export class ConversationStore implements IConversationStore {
     const baseConversation =
       previousConversation ?? this.createEmptyConversation(resolvedConversationId);
     const timestamp = this.dependencies.now();
+    const effectiveResponseMode = conversationId === 'new'
+      ? this.getResponseMode('new')
+      : baseConversation.responseMode ?? this.getResponseMode(resolvedConversationId);
     const requestId = this.dependencies.createId('request');
     const originatingUserMessageId = this.dependencies.createId('user-message');
     const assistantMessageId = this.dependencies.createId('assistant-message');
@@ -119,11 +130,13 @@ export class ConversationStore implements IConversationStore {
           createdAt: timestamp + 1,
         },
       ],
+      responseMode: effectiveResponseMode,
     };
     const activeGeneration: ActiveGeneration = {
       conversationId: resolvedConversationId,
       originatingUserMessageId,
       assistantMessageId,
+      responseMode: effectiveResponseMode,
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
@@ -175,22 +188,26 @@ export class ConversationStore implements IConversationStore {
       throw new Error(`Assistant message ${assistantMessageId} cannot be retried.`);
     }
 
+    const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
     const activeGeneration: ActiveGeneration = {
       conversationId,
       originatingUserMessageId: userMessage.id,
-      assistantMessageId,
+      assistantMessageId: replacementAssistantMessageId,
+      responseMode: conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
     };
     const requestId = this.dependencies.createId('request');
-    const messages = conversation.messages.map((message) =>
-      message.id === assistantMessageId
-        ? {
-            ...message,
-            text: '',
-            status: 'generating' as MessageStatus,
-            errorMessage: null,
-          }
-        : message
-    );
+    const messages: ConversationMessage[] = [
+      ...conversation.messages,
+      {
+        id: replacementAssistantMessageId,
+        role: 'assistant',
+        text: '',
+        attachments: [],
+        status: 'generating',
+        errorMessage: null,
+        createdAt: this.dependencies.now(),
+      },
+    ];
     const updatedConversationWithoutMemory: Conversation = {
       ...conversation,
       updatedAt: this.dependencies.now(),
@@ -212,7 +229,7 @@ export class ConversationStore implements IConversationStore {
     this.setRuntimeState({
       conversationId,
       originatingUserMessageId: userMessage.id,
-      assistantMessageId,
+      assistantMessageId: replacementAssistantMessageId,
       streamingText: '',
       isOwnerOfActiveInference: true,
     });
@@ -267,6 +284,24 @@ export class ConversationStore implements IConversationStore {
 
   startNewConversation(): void {
     this.clearDraft('new');
+    this.responseModes.delete('new');
+  }
+
+  getResponseMode(conversationId: string | 'new'): ResponseMode {
+    if (conversationId === 'new') {
+      return this.responseModes.get('new') ?? this.dependencies.getDefaultResponseMode();
+    }
+    return this.responseModes.get(conversationId)
+      ?? this.dependencies.historyStore.get(conversationId)?.responseMode
+      ?? this.dependencies.getDefaultResponseMode();
+  }
+
+  setResponseMode(conversationId: string | 'new', mode: ResponseMode): void {
+    this.responseModes.set(conversationId, mode);
+    if (conversationId === 'new') {
+      return;
+    }
+    this.dependencies.setPersistedResponseMode(conversationId, mode);
   }
 
   private handleInferenceState(state: InferenceState): void {
@@ -332,6 +367,13 @@ export class ConversationStore implements IConversationStore {
             : message
         ),
       });
+      if (state.status === 'completed' && state.hiddenEvidence != null) {
+        this.dependencies.persistEvidence(
+          activeGeneration.conversationId,
+          activeGeneration.originatingUserMessageId,
+          state.hiddenEvidence,
+        );
+      }
     }
 
     this.recordDiagnosticTurn(activeGeneration, state);
@@ -379,6 +421,7 @@ export class ConversationStore implements IConversationStore {
       flagged: false,
       flagNote: null,
       contextMemory: null,
+      responseMode: this.dependencies.getDefaultResponseMode(),
     };
   }
 
@@ -409,6 +452,7 @@ export class ConversationStore implements IConversationStore {
         ? ('followUp' as const)
         : ('first' as const),
       conversationContext,
+      responseMode: activeGeneration.responseMode,
     };
     void this.dependencies.inferenceQueue.submit(request, options).catch((error: unknown) => {
       if (
@@ -481,6 +525,9 @@ export function createConversationStore(
     now: Date.now,
     createId: createStableId,
     contextOrchestrator: new ContextOrchestrator(),
+    getDefaultResponseMode: () => DEFAULT_RESPONSE_MODE,
+    setPersistedResponseMode: () => undefined,
+    persistEvidence: () => undefined,
     ...dependencies,
   });
 }
@@ -488,6 +535,24 @@ export function createConversationStore(
 export const conversationStore: IConversationStore = createConversationStore({
   inferenceQueue,
   historyStore,
+  getDefaultResponseMode: () => useSettingsStore.getState().defaultResponseMode,
+  setPersistedResponseMode: (conversationId, mode) => {
+    conversationRepository.setResponseMode(conversationId, toStoredMode(mode));
+    useHistoryStore.getState().refresh();
+  },
+  persistEvidence: (conversationId, sourceMessageId, evidence) => {
+    const asset = imageRepository.getAssetsForMessage(sourceMessageId)[0];
+    if (asset === undefined) {
+      return;
+    }
+    evidenceRepository.saveEvidence({
+      conversationId,
+      sourceMessageId,
+      imageAssetId: asset.id,
+      evidence,
+      sourceRevision: `${evidence.version}:${asset.content_hash ?? asset.local_path}`,
+    });
+  },
 });
 
 function createEmptyDraft(conversationId: string | 'new'): Draft {
