@@ -59,11 +59,12 @@ export interface IConversationStore {
   ): () => void;
   submit(
     conversationId: string | 'new',
-    request: { question: string; imagePath: string | null }
+    request: { question: string; imagePath: string | null; conversationTargetId?: string }
   ): Promise<{
     conversationId: string;
     originatingUserMessageId: string;
     assistantMessageId: string;
+    targetNotice?: string;
   }>;
   retryFailedMessage(conversationId: string, assistantMessageId: string): Promise<void>;
   cancelActiveGeneration(conversationId: string): void;

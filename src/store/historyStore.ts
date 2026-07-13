@@ -1,12 +1,17 @@
 import { File } from 'expo-file-system';
 import { create } from 'zustand';
 
+import { deriveConversationTitle } from '../history/ConversationSearch';
 import { fromStoredMode, toStoredMode } from '../inference/ResponseMode';
+import { ChunkRepository } from '../persistence/ChunkRepository';
 import { ConversationRepository } from '../persistence/ConversationRepository';
+import { EmbeddingRepository } from '../persistence/EmbeddingRepository';
 import { EvidenceRepository } from '../persistence/EvidenceRepository';
+import { FactRepository } from '../persistence/FactRepository';
 import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
+import { SummaryRepository } from '../persistence/SummaryRepository';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
@@ -30,6 +35,10 @@ export const conversationRepository = new ConversationRepository(driver, {
 export const messageRepository = new MessageRepository(driver);
 export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
 export const evidenceRepository = new EvidenceRepository(driver);
+export const chunkRepository = new ChunkRepository(driver);
+export const embeddingRepository = new EmbeddingRepository(driver);
+export const summaryRepository = new SummaryRepository(driver);
+export const factRepository = new FactRepository(driver);
 
 let conversationCache = createConversationListCache(conversationRepository);
 const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();
@@ -121,6 +130,7 @@ function listSnapshot(): Pick<HistoryStoreState, 'conversations' | 'metricsSumma
 function rowsToConversationHeaders(rows: ConversationRow[]): Conversation[] {
   return rows.map((row) => ({
     id: row.id,
+    title: row.title,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     messages: [],
@@ -183,8 +193,14 @@ function toConversationMessage(row: MessageRow): ConversationMessage {
 }
 
 function persistConversationSnapshot(conversation: Conversation): void {
-  if (conversationRepository.getConversation(conversation.id) === null) {
-    conversationRepository.createConversation({ id: conversation.id, responseMode: toStoredMode(conversation.responseMode ?? useSettingsStore.getState().defaultResponseMode) });
+  let persistedConversation = conversationRepository.getConversation(conversation.id);
+  if (persistedConversation === null) {
+    persistedConversation = conversationRepository.createConversation({
+      id: conversation.id,
+      responseMode: toStoredMode(
+        conversation.responseMode ?? useSettingsStore.getState().defaultResponseMode,
+      ),
+    });
   }
   for (const message of conversation.messages) {
     const existing = messageRepository.getMessage(message.id);
@@ -209,7 +225,12 @@ function persistConversationSnapshot(conversation: Conversation): void {
       messageRepository.finalizeAttempt(message.id, message.status, message.errorMessage);
     }
   }
-  conversationRepository.updateConversation(conversation.id, { touch: true });
+  conversationRepository.updateConversation(conversation.id, {
+    ...(persistedConversation.title === null && conversation.messages.length > 0
+      ? { title: deriveConversationTitle(conversation) }
+      : {}),
+    touch: true,
+  });
 }
 
 function findPreviousUser(messages: ConversationMessage[], assistantId: string): ConversationMessage | null {

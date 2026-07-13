@@ -1,11 +1,11 @@
 // T013 — failing-first tests for the device resource policy (FR-045).
 
-import { InferenceActivityLock } from '../../../src/inference/InferenceActivityLock';
 import {
   activityOwnerFor,
   SingleFlightResourcePolicy,
   type ProtectedOperation,
 } from '../../../src/inference/DeviceResourcePolicy';
+import { InferenceActivityLock } from '../../../src/inference/InferenceActivityLock';
 
 function freshPolicy(): { policy: SingleFlightResourcePolicy; lock: InferenceActivityLock } {
   const lock = new InferenceActivityLock();

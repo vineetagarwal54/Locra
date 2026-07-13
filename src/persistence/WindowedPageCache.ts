@@ -23,15 +23,15 @@ export class WindowedPageCache<T> {
   }
 
   /** Resets the window and loads the first page. */
-  loadFirst(fetch: PageFetcher<T>): void {
+  loadFirst(loadPage: PageFetcher<T>): void {
     this.boundaries.length = 0;
     this.boundaries.push(null);
     this.firstPageIndex = 0;
-    this.pages = [fetch(null)];
+    this.pages = [loadPage(null)];
   }
 
   /** Loads the next page; evicts the head if the window is full. Returns false at the end. */
-  loadNext(fetch: PageFetcher<T>): boolean {
+  loadNext(loadPage: PageFetcher<T>): boolean {
     if (this.pages.length === 0) {
       return false;
     }
@@ -41,7 +41,7 @@ export class WindowedPageCache<T> {
     }
     const nextIndex = this.firstPageIndex + this.pages.length;
     this.boundaries[nextIndex] = tail.nextCursor;
-    this.pages.push(fetch(tail.nextCursor));
+    this.pages.push(loadPage(tail.nextCursor));
     if (this.pages.length > this.maxPages) {
       this.pages.shift();
       this.firstPageIndex += 1;
@@ -50,12 +50,12 @@ export class WindowedPageCache<T> {
   }
 
   /** Re-fetches the page above the window head; evicts the tail if full. Returns false at the top. */
-  loadPrevious(fetch: PageFetcher<T>): boolean {
+  loadPrevious(loadPage: PageFetcher<T>): boolean {
     if (this.firstPageIndex === 0) {
       return false;
     }
     const previousIndex = this.firstPageIndex - 1;
-    this.pages.unshift(fetch(this.boundaries[previousIndex]));
+    this.pages.unshift(loadPage(this.boundaries[previousIndex]));
     this.firstPageIndex = previousIndex;
     if (this.pages.length > this.maxPages) {
       this.pages.pop();

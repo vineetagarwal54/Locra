@@ -4,8 +4,8 @@
 
 import { ConversationRepository } from '../../../src/persistence/ConversationRepository';
 import { MessageRepository } from '../../../src/persistence/MessageRepository';
-import { WindowedPageCache } from '../../../src/persistence/WindowedPageCache';
 import type { Keyset, Page } from '../../../src/persistence/types';
+import { WindowedPageCache } from '../../../src/persistence/WindowedPageCache';
 import {
   CONVERSATION_LIST_MAX_PAGES,
   MESSAGE_MAX_PAGES,

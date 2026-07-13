@@ -216,6 +216,28 @@ describe('conversationStore', () => {
     ]);
   });
 
+  it('continues without cross-chat context when a selected target was deleted', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const ids = [...ID_SEQUENCE];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      targetResolver: { resolve: () => ({ kind: 'not-found' }) },
+    });
+
+    const result = await store.submit('new', {
+      question: 'Use that trip conversation.',
+      imagePath: null,
+      conversationTargetId: 'deleted-conversation',
+    });
+
+    expect(result.targetNotice).toMatch(/no longer available/i);
+    expect(queue.submitted).toHaveLength(1);
+  });
+
   it('snapshots completed canonical turns for every follow-up in chronological order', async () => {
     const { store, queue } = makeStore();
 
@@ -243,7 +265,7 @@ describe('conversationStore', () => {
       olderSummary: null,
       budget: {
         policyId: 'character-budget-v1',
-        maximumUnits: 14_400,
+        maximumUnits: 7_000,
         usedUnits: 130,
       },
     });
