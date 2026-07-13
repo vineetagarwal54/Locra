@@ -28,7 +28,10 @@ module.exports = {
   },
   rules: {
     '@typescript-eslint/no-explicit-any': 'error',
-    '@typescript-eslint/no-unused-vars': 'error',
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+    ],
     'no-unused-vars': 'off',
     'react/prop-types': 'off',
     'react/react-in-jsx-scope': 'off',

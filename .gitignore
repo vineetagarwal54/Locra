@@ -30,11 +30,17 @@ yarn-error.*
 
 # macOS
 .DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
 *.pem
 
 # local env files
 .env*
 .env*.local
+!.env.example
 
 # typescript
 *.tsbuildinfo
@@ -42,3 +48,18 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+# Qwen spike local files
+spikes/qwen3vl-llamarn/.hf-venv/
+spikes/qwen3vl-llamarn/node_modules/
+spikes/qwen3vl-llamarn/.expo/
+spikes/qwen3vl-llamarn/android/
+spikes/qwen3vl-llamarn/ios/
+spikes/qwen3vl-llamarn/models/
+spikes/qwen3vl-llamarn/*.gguf
+spikes/qwen3vl-llamarn/*.log
+/spikes/qwen3vl-llamarn/
+
+# Environment files
+.env
+.env.*
+!.env.example

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#eef2f8"/>
+  <rect x="88" y="74" width="336" height="364" rx="22" fill="#fff" stroke="#b8c0cc" stroke-width="5"/>
+  <rect x="118" y="126" width="220" height="52" rx="20" fill="#d7ebff"/>
+  <text x="138" y="160" font-family="Arial" font-size="20" fill="#111">Dinner at 6 PM?</text>
+  <rect x="174" y="206" width="220" height="52" rx="20" fill="#e8e8e8"/>
+  <text x="194" y="240" font-family="Arial" font-size="20" fill="#111">Yes, meet outside.</text>
+  <rect x="118" y="286" width="246" height="52" rx="20" fill="#d7ebff"/>
+  <text x="138" y="320" font-family="Arial" font-size="20" fill="#111">Bring the tickets.</text>
+</svg>

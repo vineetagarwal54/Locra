@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#f2eee8"/>
+  <ellipse cx="214" cy="272" rx="116" ry="80" fill="#242424"/>
+  <path d="M318 260h126" stroke="#7a4a24" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="360" cy="260" r="10" fill="#ddd"/>
+  <text x="126" y="116" font-family="Arial" font-size="28" fill="#222">pan with handle</text>
+</svg>
