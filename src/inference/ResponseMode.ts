@@ -75,11 +75,14 @@ export function fromStoredMode(value: string): ResponseMode {
   return 'Medium';
 }
 
-export function getResponseModeInstruction(mode: ResponseMode): string {
+export function getResponseModeInstruction(
+  mode: ResponseMode,
+  config: ResponseModeConfig = getResponseModeConfig(mode),
+): string {
   const detail = mode === 'Low'
     ? 'Be concise and focus only on the essential answer.'
     : mode === 'High'
       ? 'Give a thorough answer with useful detail and steps where appropriate.'
       : 'Give a balanced answer with the key explanation and useful details.';
-  return `${detail} Finish the answer cleanly within ${getResponseTokenBudget(mode)} tokens; prioritize completeness over adding another section.`;
+  return `${detail} Finish the answer cleanly within ${config.answerTargetTokens} tokens; prioritize completeness over adding another section.`;
 }

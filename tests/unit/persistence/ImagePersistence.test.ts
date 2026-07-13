@@ -1,9 +1,9 @@
 import { evaluateImageEvidenceAvailability } from '../../../src/inference/ImageEvidencePolicy';
+import type { HiddenVisualEvidence } from '../../../src/inference/OutputPipelineTypes';
+import { ConversationRepository } from '../../../src/persistence/ConversationRepository';
 import { EvidenceRepository } from '../../../src/persistence/EvidenceRepository';
 import { ImageRepository } from '../../../src/persistence/ImageRepository';
-import { ConversationRepository } from '../../../src/persistence/ConversationRepository';
 import { MessageRepository } from '../../../src/persistence/MessageRepository';
-import type { HiddenVisualEvidence } from '../../../src/inference/OutputPipelineTypes';
 import { createTestDatabase, type TestDatabase } from '../../helpers/nodeSqliteDriver';
 
 const evidence: HiddenVisualEvidence = {

@@ -5,8 +5,8 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
-import type { SqlParams, SqliteDriver } from '../../src/persistence/types';
 import { initializeSchema } from '../../src/persistence/sqlite/Schema';
+import type { SqlParams, SqliteDriver } from '../../src/persistence/types';
 
 export interface TestDatabase {
   readonly driver: SqliteDriver;

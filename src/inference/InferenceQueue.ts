@@ -22,6 +22,7 @@ import {
   createCanonicalConversationContext,
   type ModelRequestMessage,
 } from './ContextBuilder';
+import type { DeviceResourcePolicy, ResourceLease } from './DeviceResourcePolicy';
 import { parseExtractionWithRetry } from './ExtractionParser';
 import { buildStructuredExtractionPrompt, requiresStructuredVision } from './ExtractionPrompt';
 import {
@@ -46,7 +47,7 @@ import {
   type InferenceTraceStageKind,
 } from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
-import { DEFAULT_RESPONSE_MODE, type ResponseMode } from './ResponseMode';
+import { DEFAULT_RESPONSE_MODE, getResponseModeConfig, type ResponseMode } from './ResponseMode';
 import {
   buildToolRefusalRecoveryMessages,
   shouldRetryToolRefusal,
@@ -78,6 +79,7 @@ export interface InferenceQueueDeps {
   getResponseMode?: () => ResponseMode;
   createRecorder?: () => InferenceMetricsRecorder;
   activityLock?: ActivityLock;
+  resourcePolicy?: DeviceResourcePolicy;
   getDeviceBuildMetadata?: () => DeviceBuildMetadata;
   isTraceEnabled?: () => boolean;
   getModelAttribution?: () => {
@@ -134,10 +136,12 @@ export class InferenceQueue implements IInferenceQueue {
   private lifecycleRequestSequence = 0;
   private readonly createRecorder: () => InferenceMetricsRecorder;
   private readonly activityLock: ActivityLock;
+  private readonly resourcePolicy: DeviceResourcePolicy | null;
 
   constructor(private readonly deps: InferenceQueueDeps) {
     this.createRecorder = deps.createRecorder ?? (() => new InferenceMetricsRecorder());
     this.activityLock = deps.activityLock ?? inferenceActivityLock;
+    this.resourcePolicy = deps.resourcePolicy ?? null;
     this.lifecycleActor = createActor(
       turnLifecycleMachine.provide({
         actors: {
@@ -169,9 +173,16 @@ export class InferenceQueue implements IInferenceQueue {
 
     const conversationContext = resolveConversationContext(options);
 
-    if (!this.activityLock.tryAcquire('vlm')) {
+    const resourceLease: ResourceLease | null = this.resourcePolicy?.tryAcquire('qwen-answer') ?? null;
+    const acquiredLegacyLock = this.resourcePolicy === null && this.activityLock.tryAcquire('vlm');
+    if ((this.resourcePolicy !== null && resourceLease === null) ||
+        (this.resourcePolicy === null && !acquiredLegacyLock)) {
       return Promise.reject(
-        new Error('Voice input is in progress. Try again in a moment.'),
+        new Error(
+          this.resourcePolicy === null
+            ? 'Voice input is in progress. Stop it before starting inference.'
+            : 'Another on-device operation is in progress. Try again in a moment.',
+        ),
       );
     }
 
@@ -295,7 +306,11 @@ export class InferenceQueue implements IInferenceQueue {
       if (this.lifecycleGates === lifecycleGates) {
         this.lifecycleGates = null;
       }
-      this.activityLock.release('vlm');
+      if (resourceLease !== null) {
+        resourceLease.release();
+      } else if (acquiredLegacyLock) {
+        this.activityLock.release('vlm');
+      }
     }
   }
 
@@ -433,6 +448,7 @@ export class InferenceQueue implements IInferenceQueue {
         conversationContext,
         currentQuestion: answerPrompt,
         responseMode,
+        responseModeConfig: getResponseModeConfig(responseMode),
       }),
       responseMode,
       active,
@@ -468,6 +484,7 @@ export class InferenceQueue implements IInferenceQueue {
         conversationContext,
         currentQuestion: request.question,
         responseMode,
+        responseModeConfig: getResponseModeConfig(responseMode),
       }),
       responseMode,
       active,

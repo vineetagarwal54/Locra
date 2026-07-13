@@ -33,7 +33,7 @@ export interface InferenceEngineHandle {
 export interface EngineGenerateRequest {
   messages: ModelRequestMessage[];
   responseMode: import('./ResponseMode').ResponseMode;
-  kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat';
+  kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
   originalQuestion?: string;
 }
 

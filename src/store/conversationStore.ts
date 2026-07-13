@@ -1,8 +1,14 @@
 import { diagnosticsTraceStore } from '../diagnostics/DiagnosticsTraceStore';
 import {
+  CompactionService,
+  createRegisteredEngineCompactionGenerator,
+  CURRENT_SUMMARIZER_VERSION,
+} from '../inference/CompactionService';
+import {
   type CanonicalConversationContext,
 } from '../inference/ContextBuilder';
 import {
+  CharacterContextBudgetPolicy,
   ContextOrchestrator,
   createCanonicalConversationSnapshot,
   mergeVisualEvidenceIntoMemory,
@@ -12,6 +18,11 @@ import { inferenceQueue } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 import { DEFAULT_RESPONSE_MODE, type ResponseMode, toStoredMode } from '../inference/ResponseMode';
+import { ChunkingService } from '../retrieval/ChunkingService';
+import { ConversationTargetResolver } from '../retrieval/ConversationTargetResolver';
+import { HybridRetriever } from '../retrieval/HybridRetriever';
+import { LexicalFallbackRetriever } from '../retrieval/LexicalFallbackRetriever';
+import type { RetrievalCandidate } from '../retrieval/types';
 import type { IConversationStore, IHistoryStore, IInferenceQueue } from '../types/interfaces';
 import type {
   Conversation,
@@ -23,7 +34,18 @@ import type {
   MessageStatus,
 } from '../types/models';
 
-import { conversationRepository, evidenceRepository, historyStore, imageRepository, useHistoryStore } from './historyStore';
+import {
+  chunkRepository,
+  conversationRepository,
+  embeddingRepository,
+  evidenceRepository,
+  factRepository,
+  historyStore,
+  imageRepository,
+  messageRepository,
+  summaryRepository,
+  useHistoryStore,
+} from './historyStore';
 import { useSettingsStore } from './settingsStore';
 
 export interface ConversationStoreDependencies {
@@ -35,6 +57,9 @@ export interface ConversationStoreDependencies {
   getDefaultResponseMode?: () => ResponseMode;
   setPersistedResponseMode?: (conversationId: string, mode: ResponseMode) => void;
   persistEvidence?: (conversationId: string, sourceMessageId: string, evidence: HiddenVisualEvidence) => void;
+  persistRetrievalUnits?: (conversationId: string, messageIds: readonly string[]) => void;
+  scheduleCompaction?: (conversationId: string) => void;
+  targetResolver?: Pick<ConversationTargetResolver, 'resolve'>;
 }
 
 interface ActiveGeneration {
@@ -49,6 +74,7 @@ interface SubmitResult {
   conversationId: string;
   originatingUserMessageId: string;
   assistantMessageId: string;
+  targetNotice?: string;
 }
 
 export class ConversationStore implements IConversationStore {
@@ -87,9 +113,21 @@ export class ConversationStore implements IConversationStore {
 
   async submit(
     conversationId: string | 'new',
-    request: { question: string; imagePath: string | null }
+    request: { question: string; imagePath: string | null; conversationTargetId?: string }
   ): Promise<SubmitResult> {
     this.assertCanStartGeneration();
+
+    const target = this.dependencies.targetResolver.resolve({
+      rawText: request.question,
+      selectedId: request.conversationTargetId,
+    });
+    if (target.kind === 'ambiguous') {
+      throw new Error('Choose one conversation before sending this message.');
+    }
+    const targetNotice = target.kind === 'not-found'
+      ? 'The selected conversation is no longer available. Continuing without it.'
+      : undefined;
+    const selectedConversationId = target.kind === 'scoped' ? target.conversationId : undefined;
 
     const resolvedConversationId =
       conversationId === 'new' ? this.dependencies.createId('conversation') : conversationId;
@@ -141,6 +179,7 @@ export class ConversationStore implements IConversationStore {
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
+      { responseMode: effectiveResponseMode, selectedConversationId },
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const conversationWithMemory: Conversation = {
@@ -164,6 +203,7 @@ export class ConversationStore implements IConversationStore {
       conversationId: activeGeneration.conversationId,
       originatingUserMessageId: activeGeneration.originatingUserMessageId,
       assistantMessageId: activeGeneration.assistantMessageId,
+      ...(targetNotice === undefined ? {} : { targetNotice }),
     };
   }
 
@@ -217,6 +257,7 @@ export class ConversationStore implements IConversationStore {
     };
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversationWithoutMemory, userMessage.id),
+      { responseMode: activeGeneration.responseMode },
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const updatedConversation: Conversation = {
@@ -374,6 +415,13 @@ export class ConversationStore implements IConversationStore {
           state.hiddenEvidence,
         );
       }
+      if (state.status === 'completed') {
+        this.dependencies.persistRetrievalUnits(activeGeneration.conversationId, [
+          activeGeneration.originatingUserMessageId,
+          activeGeneration.assistantMessageId,
+        ]);
+        this.dependencies.scheduleCompaction(activeGeneration.conversationId);
+      }
     }
 
     this.recordDiagnosticTurn(activeGeneration, state);
@@ -528,13 +576,52 @@ export function createConversationStore(
     getDefaultResponseMode: () => DEFAULT_RESPONSE_MODE,
     setPersistedResponseMode: () => undefined,
     persistEvidence: () => undefined,
+    persistRetrievalUnits: () => undefined,
+    scheduleCompaction: () => undefined,
+    targetResolver: { resolve: () => ({ kind: 'active' }) },
     ...dependencies,
   });
+}
+
+function createRuntimeContextOrchestrator(): ContextOrchestrator {
+  const lexicalFallback = new LexicalFallbackRetriever();
+  return new ContextOrchestrator(new CharacterContextBudgetPolicy(), {
+    retriever: new HybridRetriever(embeddingRepository, lexicalFallback),
+    evidenceRepository,
+    listLexicalCandidates: listLexicalCandidates,
+    listDurableFacts: (conversationId) => factRepository.getReadyFacts(conversationId).map((fact) => ({
+      version: 'context-memory-fact-v1',
+      id: fact.id,
+      sourceMessageId: factRepository.getSourceMessageIds(fact.id)[0] ?? fact.id,
+      text: fact.value_text,
+      createdAt: fact.updated_at,
+    })),
+    getNewestReadySummary: (conversationId) =>
+      summaryRepository.getNewestReady(conversationId, CURRENT_SUMMARIZER_VERSION)?.text ?? null,
+    // The approved embedding manifest is intentionally absent until T005 passes.
+  });
+}
+
+function listLexicalCandidates(conversationIds: readonly string[]): RetrievalCandidate[] {
+  const chunks = chunkRepository.listRetrievalSourceUnits(conversationIds);
+  const evidence = conversationIds.flatMap((conversationId) =>
+    evidenceRepository.listRetrievalSourceUnits(conversationId).map((unit) => ({
+      id: unit.id,
+      sourceConversationId: unit.conversationId,
+      sourceMessageId: unit.sourceMessageId,
+      imageAssetId: unit.imageAssetId,
+      timestamp: unit.timestamp,
+      contentType: 'evidence' as const,
+      text: unit.text,
+    })),
+  );
+  return [...chunks, ...evidence];
 }
 
 export const conversationStore: IConversationStore = createConversationStore({
   inferenceQueue,
   historyStore,
+  contextOrchestrator: createRuntimeContextOrchestrator(),
   getDefaultResponseMode: () => useSettingsStore.getState().defaultResponseMode,
   setPersistedResponseMode: (conversationId, mode) => {
     conversationRepository.setResponseMode(conversationId, toStoredMode(mode));
@@ -553,6 +640,35 @@ export const conversationStore: IConversationStore = createConversationStore({
       sourceRevision: `${evidence.version}:${asset.content_hash ?? asset.local_path}`,
     });
   },
+  persistRetrievalUnits: (_conversationId, messageIds) => {
+    const chunker = new ChunkingService('chunk-v1');
+    for (const messageId of messageIds) {
+      const row = messageRepository.getMessage(messageId);
+      if (row === null || (row.role === 'assistant' && row.status !== 'completed')) {
+        continue;
+      }
+      chunkRepository.upsertChunksForMessage(row.id, 'chunk-v1', chunker.chunk({
+        id: row.id,
+        conversationId: row.conversation_id,
+        text: row.text,
+        sourceRevision: `${row.status}:${row.created_at}:${row.text.length}`,
+        createdAt: row.created_at,
+      }));
+    }
+  },
+  scheduleCompaction: (conversationId) => {
+    setTimeout(() => {
+      void runtimeCompactionService.maybeRun(conversationId).catch(() => undefined);
+    }, 0);
+  },
+  targetResolver: new ConversationTargetResolver(conversationRepository),
+});
+
+const runtimeCompactionService = new CompactionService({
+  messages: messageRepository,
+  summaries: summaryRepository,
+  facts: factRepository,
+  generator: createRegisteredEngineCompactionGenerator(),
 });
 
 function createEmptyDraft(conversationId: string | 'new'): Draft {

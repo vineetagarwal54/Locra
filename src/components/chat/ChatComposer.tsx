@@ -1,5 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -11,12 +11,16 @@ import {
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { designTokens, haptics } from '../../constants/theme';
+import { deriveConversationTitle } from '../../history/ConversationSearch';
 import type { ResponseMode } from '../../inference/ResponseMode';
 import { conversationStore } from '../../store/conversationStore';
+import { useHistoryStore } from '../../store/historyStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
 
+import { ConversationTargetPicker } from './ConversationTargetPicker';
 import { ResponseModeSelector } from './ResponseModeSelector';
+import { VoiceControl } from './VoiceControl';
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -57,6 +61,16 @@ export function ChatComposer({
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const historyRevision = useHistoryStore((state) => state.conversations);
+  const targetOptions = useMemo(() => historyRevision
+    .filter((conversation) => conversation.id !== conversationId)
+    .slice(0, 10)
+    .map((conversation) => ({
+      id: conversation.id,
+      title: deriveConversationTitle(conversation),
+      updatedAt: conversation.updatedAt,
+    })), [conversationId, historyRevision]);
 
   const canSend =
     !locked && !submitting && (draft.text.trim() !== '' || draft.imagePath !== null);
@@ -111,8 +125,14 @@ export function ChatComposer({
     setSendError(null);
     void haptics.tap();
     void conversationStore
-      .submit(conversationId, { question, imagePath })
+      .submit(conversationId, {
+        question,
+        imagePath,
+        ...(selectedTargetId === null ? {} : { conversationTargetId: selectedTargetId }),
+      })
       .then((result) => {
+        setSelectedTargetId(null);
+        setSendError(result.targetNotice ?? null);
         onDraftChange(conversationStore.getDraft(conversationId));
         onConversationResolved(result.conversationId);
       })
@@ -130,6 +150,7 @@ export function ChatComposer({
     draft.text,
     onConversationResolved,
     onDraftChange,
+    selectedTargetId,
   ]);
 
   return (
@@ -137,6 +158,12 @@ export function ChatComposer({
       offset={{ closed: 0, opened: designTokens.spacing.space8 }}
       style={styles.dock}
     >
+      <ConversationTargetPicker
+        options={targetOptions}
+        selectedId={selectedTargetId}
+        disabled={controlsDisabled}
+        onChange={setSelectedTargetId}
+      />
       <ResponseModeSelector
         value={responseMode}
         disabled={controlsDisabled}
@@ -207,6 +234,14 @@ export function ChatComposer({
         >
           <MaterialCommunityIcons name="image-plus" size={22} color={designTokens.color.primary} />
         </Pressable>
+
+        <VoiceControl
+          disabled={controlsDisabled}
+          onTranscript={(transcript) => {
+            const nextText = [draft.text.trim(), transcript].filter((value) => value !== '').join(' ');
+            onChangeText(nextText);
+          }}
+        />
 
         <TextInput
           style={[styles.input, controlsDisabled && styles.inputDisabled]}

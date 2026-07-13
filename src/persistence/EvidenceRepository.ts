@@ -127,7 +127,7 @@ export class EvidenceRepository {
   listRetrievalSourceUnits(conversationId: string): EvidenceRetrievalSourceUnit[] {
     const rows = this.driver.getAllSync<VisualEvidenceRow>(
       `SELECT * FROM visual_evidence WHERE conversation_id = ?
-        ORDER BY created_at ASC, id ASC`,
+        ORDER BY created_at DESC, id ASC LIMIT 100`,
       [conversationId],
     );
     return rows.map(toRetrievalSourceUnit);

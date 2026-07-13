@@ -31,6 +31,14 @@ export interface ConversationRepositoryDeps {
   onUnlinkImageFiles?: (paths: ReadonlyArray<string>) => void;
 }
 
+export interface ConversationTargetCandidateRow {
+  readonly id: string;
+  readonly title: string;
+  readonly normalized_title: string;
+  readonly created_at: number;
+  readonly updated_at: number;
+}
+
 /** Deterministic title normalization for candidate lookup (US7) and dedup. */
 export function normalizeTitle(title: string | null | undefined): string | null {
   if (title === null || title === undefined) {
@@ -82,6 +90,27 @@ export class ConversationRepository {
     return this.driver.getFirstSync<ConversationRow>(
       'SELECT * FROM conversation WHERE id = ? AND deleted_at IS NULL',
       [id],
+    );
+  }
+
+  findTargetCandidates(tokens: readonly string[], limit = 10): ConversationTargetCandidateRow[] {
+    const boundedLimit = Math.min(10, Math.max(1, Math.floor(limit)));
+    const normalizedTokens = tokens.map((token) => normalizeTitle(token)).filter(
+      (token): token is string => token !== null,
+    );
+    if (normalizedTokens.length === 0) {
+      return this.driver.getAllSync<ConversationTargetCandidateRow>(
+        `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
+         WHERE deleted_at IS NULL AND normalized_title IS NOT NULL
+         ORDER BY updated_at DESC, id DESC LIMIT ?`, [boundedLimit],
+      );
+    }
+    const conditions = normalizedTokens.map(() => 'normalized_title LIKE ?').join(' AND ');
+    return this.driver.getAllSync<ConversationTargetCandidateRow>(
+      `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
+       WHERE deleted_at IS NULL AND normalized_title IS NOT NULL AND ${conditions}
+       ORDER BY updated_at DESC, id DESC LIMIT ?`,
+      [...normalizedTokens.map((token) => `%${token}%`), boundedLimit],
     );
   }
 

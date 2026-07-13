@@ -9,6 +9,7 @@ import {
   mergeVisualEvidenceIntoMemory,
 } from '../../../src/inference/ContextOrchestrator';
 import type { HiddenVisualEvidence } from '../../../src/inference/OutputPipelineTypes';
+import type { RetrievedItem } from '../../../src/retrieval/types';
 import type {
   Conversation,
   ConversationContextMemory,
@@ -421,5 +422,78 @@ describe('ContextOrchestrator', () => {
       (candidate) => candidate.exclusionReason === 'budget',
     );
     expect(excludedForBudget?.length).toBeGreaterThan(0);
+  });
+
+  it('assembles persisted sources in fixed priority order with deterministic retrieval', () => {
+    const retrieved: RetrievedItem[] = [
+      {
+        id: 'same-b', sourceConversationId: 'conversation-a', sourceMessageId: 'same-message-b',
+        imageAssetId: null, timestamp: 200, contentType: 'chunk', text: 'same chat B', score: 0.9,
+      },
+      {
+        id: 'same-a', sourceConversationId: 'conversation-a', sourceMessageId: 'same-message-a',
+        imageAssetId: null, timestamp: 200, contentType: 'chunk', text: 'same chat A', score: 0.9,
+      },
+    ];
+    const search = jest.fn(({ conversationIds }: { conversationIds: readonly string[] }) =>
+      conversationIds[0] === 'conversation-a'
+        ? retrieved
+        : [{
+            id: 'past', sourceConversationId: 'conversation-b', sourceMessageId: 'past-message',
+            imageAssetId: null, timestamp: 100, contentType: 'chunk' as const,
+            text: 'selected past chat', score: 0.8,
+          }]);
+    const messages = [
+      ...completedTurn(1, 'Recent question', 'Recent answer'),
+      currentMessage(2, 'Current request'),
+    ];
+    const orchestrator = new ContextOrchestrator(compactPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+      listDurableFacts: () => [{
+        version: 'context-memory-fact-v1', id: 'durable', sourceMessageId: 'durable-source',
+        text: 'durable fact', createdAt: 50,
+      }],
+      getNewestReadySummary: () => 'older range summary',
+      retrievalManifest: { embeddingVersion: 'embedding-v1', artifactHash: 'hash-1' },
+    });
+
+    const first = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+      { responseMode: 'Medium', selectedConversationId: 'conversation-b' },
+    );
+    const second = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+      { responseMode: 'Medium', selectedConversationId: 'conversation-b' },
+    );
+
+    expect(first.context).toEqual(second.context);
+    expect(first.context.recentTurns).toEqual([{ question: 'Recent question', answer: 'Recent answer' }]);
+    expect(first.context.importantFacts.map((fact) => fact.text)).toEqual([
+      'same chat B', 'same chat A',
+      '[Selected conversation conversation-b] selected past chat', 'durable fact',
+    ]);
+    expect(first.context.olderSummary).toBe('older range summary');
+  });
+
+  it('uses the response-mode recent floor even when protected content exceeds the character budget', () => {
+    const messages = [
+      ...completedTurn(1, 'Question one', 'A'.repeat(900)),
+      ...completedTurn(2, 'Question two', 'B'.repeat(900)),
+      ...completedTurn(3, 'Question three', 'C'.repeat(900)),
+      ...completedTurn(4, 'Question four', 'D'.repeat(900)),
+      ...completedTurn(5, 'Question five', 'E'.repeat(900)),
+      ...completedTurn(6, 'Question six', 'F'.repeat(900)),
+      currentMessage(7, 'Current request'),
+    ];
+
+    const result = new ContextOrchestrator().orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-7'),
+      { responseMode: 'Low' },
+    );
+
+    expect(result.context.recentTurns).toHaveLength(6);
+    expect(result.context.budget.usedUnits).toBeGreaterThan(result.context.budget.maximumUnits);
+    expect(result.context.olderSummary).toBeNull();
   });
 });

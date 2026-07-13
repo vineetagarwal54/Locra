@@ -26,13 +26,15 @@ describe('persistent system prompt', () => {
 });
 
 describe('canonical follow-up assembly', () => {
-  const messages = buildCanonicalModelMessages({
-    conversationContext: createCanonicalConversationContext([
+  const conversationContext = createCanonicalConversationContext([
       {
         question: 'What is this?',
         answer: 'It is a cast-iron skillet with dull, patchy residue.',
       },
-    ]),
+    ]);
+  const originalContext = JSON.parse(JSON.stringify(conversationContext));
+  const messages = buildCanonicalModelMessages({
+    conversationContext,
     currentQuestion: OFF_IMAGE_FOLLOW_UP,
   });
 
@@ -48,6 +50,25 @@ describe('canonical follow-up assembly', () => {
   it('does not wrap follow-ups in a transcript prompt string', () => {
     expect(messages.at(-1)?.content).toBe(OFF_IMAGE_FOLLOW_UP);
     expect(messages.map((message) => message.content).join('\n')).not.toMatch(/conversation so far/i);
+  });
+
+  it('passes assembled context through unchanged while applying the effective mode config', () => {
+    const lowModeMessages = buildCanonicalModelMessages({
+      conversationContext,
+      currentQuestion: OFF_IMAGE_FOLLOW_UP,
+      responseMode: 'Low',
+      responseModeConfig: {
+        recentExactTurns: 6,
+        contextBudgetUnits: 4_000,
+        sameChatRetrievalLimit: 2,
+        selectedChatRetrievalLimit: 1,
+        answerTargetTokens: 192,
+        generationLimit: 320,
+      },
+    });
+
+    expect(conversationContext).toEqual(originalContext);
+    expect(lowModeMessages[0]?.content).toContain('192 tokens');
   });
 });
 

@@ -50,6 +50,7 @@ export interface ConversationMessage {
 
 export interface Conversation {
   id: string;
+  title?: string | null;
   createdAt: number;
   updatedAt: number;
   messages: ConversationMessage[];

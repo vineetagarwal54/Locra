@@ -76,7 +76,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 - [X] T021 [US1] Update `src/screens/HistoryScreen.tsx`, `src/navigation/ConversationDrawer.tsx`, `src/components/ConversationListItem.tsx` to consume paginated conversation pages (infinite scroll, ≤50 per page).
 - [X] T022 [US1] Update `src/screens/ChatScreen.tsx` to load the newest message page first and fetch older pages on demand (bounded cache).
 - [X] T023 [P] [US1] Add a seed/dev fixture `src/evaluation/fixtures/seedConversations.ts` generating ≥200 conversations incl. several with ~500 messages.
-- [ ] T024 [US1] Implement conversation deletion in the UI flow (drawer/history) calling `deleteConversation`; verify cascade + image-file cleanup end to end.
+- [X] T024 [US1] Implement conversation deletion in the UI flow (drawer/history) calling `deleteConversation`; verify cascade + image-file cleanup end to end.
 
 **Checkpoint**: History scales and pages independently; MVP demonstrable.
 
@@ -156,22 +156,22 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 3 ⚠️ (write first, must fail)
 
-- [ ] T043 [P] [US3] Failing determinism suite in `tests/unit/inference/ContextOrchestrator.test.ts`: fixed priority order (current request → recent exact turns → referenced image evidence → same-chat retrieved → selected past-chat retrieved → durable facts → older summary); recent-turn floor never replaced; identical inputs → identical order (score DESC, time DESC, id ASC); character-based budget drop lowest-priority-first. (FR-015/017, SC-007)
-- [ ] T044 [P] [US3] Failing `tests/unit/retrieval/HybridRetriever.test.ts`: scope filter applied before scoring; **pinned 0.62 cosine threshold** excludes low matches; source-message dedup; mode-specific limit; empty result adds no filler. (FR-016/017; item: threshold assertion folded here)
-- [ ] T045 [P] [US3] Failing `tests/unit/retrieval/LexicalFallbackRetriever.test.ts`: deterministic lexical results when compatible vectors are missing/stale/failed. (FR-020)
-- [ ] T046 [P] [US3] Failing `tests/unit/retrieval/ChunkingService.test.ts`: **pinned max 800 chars / 120 overlap**, short message → one unit, stores unchanged original, ordinal + char offsets + `chunk_version` recorded. (FR-023; item: chunk constants folded here)
-- [ ] T047 [P] [US3] Failing `tests/unit/retrieval/EmbeddingService.test.ts` (embedding **lifecycle contract**, precedes T056/T057): asserts persisted model id / artifact hash / embedding version / dimensions / source revision, `DeviceResourcePolicy` lease acquire+release, failure handling (marks state failed, keeps lexical fallback), and the ≤25-item backfill batch limit. (Constitution VI; FR-018/019)
+- [X] T043 [P] [US3] Failing determinism suite in `tests/unit/inference/ContextOrchestrator.test.ts`: fixed priority order (current request → recent exact turns → referenced image evidence → same-chat retrieved → selected past-chat retrieved → durable facts → older summary); recent-turn floor never replaced; identical inputs → identical order (score DESC, time DESC, id ASC); character-based budget drop lowest-priority-first. (FR-015/017, SC-007)
+- [X] T044 [P] [US3] Failing `tests/unit/retrieval/HybridRetriever.test.ts`: scope filter applied before scoring; **pinned 0.62 cosine threshold** excludes low matches; source-message dedup; mode-specific limit; empty result adds no filler. (FR-016/017; item: threshold assertion folded here)
+- [X] T045 [P] [US3] Failing `tests/unit/retrieval/LexicalFallbackRetriever.test.ts`: deterministic lexical results when compatible vectors are missing/stale/failed. (FR-020)
+- [X] T046 [P] [US3] Failing `tests/unit/retrieval/ChunkingService.test.ts`: **pinned max 800 chars / 120 overlap**, short message → one unit, stores unchanged original, ordinal + char offsets + `chunk_version` recorded. (FR-023; item: chunk constants folded here)
+- [X] T047 [P] [US3] Failing `tests/unit/retrieval/EmbeddingService.test.ts` (embedding **lifecycle contract**, precedes T056/T057): asserts persisted model id / artifact hash / embedding version / dimensions / source revision, `DeviceResourcePolicy` lease acquire+release, failure handling (marks state failed, keeps lexical fallback), and the ≤25-item backfill batch limit. (Constitution VI; FR-018/019)
 
 ### Implementation for User Story 3
 
-- [ ] T048 [P] [US3] Implement `src/persistence/ChunkRepository.ts`: upsert chunks for a message (back-references conversation/source_message/image_asset), unique `(source_message_id, chunk_version, ordinal)`.
-- [ ] T049 [P] [US3] Implement `src/persistence/EmbeddingRepository.ts`: `getCompatibleByScope(conversationIds, embeddingVersion, artifactHash)` (in-scope `ready` only), `upsert`, `markStaleByRevision`, `pendingBatch(limit)`. (FR-018/019)
-- [ ] T050 [P] [US3] Implement `src/retrieval/ChunkingService.ts` (800/120 deterministic windows; make T046 pass).
-- [ ] T051 [US3] Implement `src/retrieval/LexicalFallbackRetriever.ts` reusing the existing token-overlap logic from `ContextOrchestrator` (make T045 pass). (FR-020)
-- [ ] T052 [US3] Implement `src/retrieval/HybridRetriever.ts`: scope-first candidate load → cosine over float32 BLOBs → pinned 0.62 threshold constant → dedup by source message → mode limit → stable tie-break; delegate to lexical fallback when no compatible vectors. (FR-015/016/017; make T044 pass)
-- [ ] T053 [US3] Refactor `src/inference/ContextOrchestrator.ts` to assemble the fixed priority order over the SQL canonical projection using `HybridRetriever`, durable facts, and the newest valid range summary; enforce character-based budget drop lowest-priority-first while keeping current request + referenced image + recent-turn floor. (FR-015; make T043 pass)
-- [ ] T054 [US3] **Wire the Phase-4 mode config and Phase-5 image-evidence resolution into the refactored `ContextOrchestrator`**: apply per-mode recent-turn floor / budget / retrieval limits, and resolve active-vs-referenced image evidence via `EvidenceRepository`. (moves the deferred wiring from T034/T040 here)
-- [ ] T055 [US3] Wire `src/inference/ContextBuilder.ts` to receive the assembled context unchanged (preserve `CanonicalConversationContext`) and pass the effective response-mode config.
+- [X] T048 [P] [US3] Implement `src/persistence/ChunkRepository.ts`: upsert chunks for a message (back-references conversation/source_message/image_asset), unique `(source_message_id, chunk_version, ordinal)`.
+- [X] T049 [P] [US3] Implement `src/persistence/EmbeddingRepository.ts`: `getCompatibleByScope(conversationIds, embeddingVersion, artifactHash)` (in-scope `ready` only), `upsert`, `markStaleByRevision`, `pendingBatch(limit)`. (FR-018/019)
+- [X] T050 [P] [US3] Implement `src/retrieval/ChunkingService.ts` (800/120 deterministic windows; make T046 pass).
+- [X] T051 [US3] Implement `src/retrieval/LexicalFallbackRetriever.ts` reusing the existing token-overlap logic from `ContextOrchestrator` (make T045 pass). (FR-020)
+- [X] T052 [US3] Implement `src/retrieval/HybridRetriever.ts`: scope-first candidate load → cosine over float32 BLOBs → pinned 0.62 threshold constant → dedup by source message → mode limit → stable tie-break; delegate to lexical fallback when no compatible vectors. (FR-015/016/017; make T044 pass)
+- [X] T053 [US3] Refactor `src/inference/ContextOrchestrator.ts` to assemble the fixed priority order over the SQL canonical projection using `HybridRetriever`, durable facts, and the newest valid range summary; enforce character-based budget drop lowest-priority-first while keeping current request + referenced image + recent-turn floor. (FR-015; make T043 pass)
+- [X] T054 [US3] **Wire the Phase-4 mode config and Phase-5 image-evidence resolution into the refactored `ContextOrchestrator`**: apply per-mode recent-turn floor / budget / retrieval limits, and resolve active-vs-referenced image evidence via `EvidenceRepository`. (moves the deferred wiring from T034/T040 here)
+- [X] T055 [US3] Wire `src/inference/ContextBuilder.ts` to receive the assembled context unchanged (preserve `CanonicalConversationContext`) and pass the effective response-mode config.
 - [ ] T056 [US3] **⛔ GATED (T005)** Implement `src/retrieval/EmbeddingService.ts` using the approved manifest via `llama.rn`, resource-locked; expose `modelId`, `modelArtifactHash`, `embeddingVersion`, `dimensions` (make T047 pass). (FR-018)
 - [ ] T057 [US3] **⛔ GATED (T005)** Implement `src/retrieval/EmbeddingBackfill.ts`: enqueue new/changed derived units after terminal persistence; backfill ≤25 units when idle and resource-locked; record model/version/hash + source revision; yield to user-visible work (make T047 pass). (FR-019)
 
@@ -187,18 +187,18 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 4 ⚠️ (write first, must fail)
 
-- [ ] T058 [P] [US4] Write one failing `tests/unit/inference/CompactionService.test.ts` lifecycle suite covering the pinned trigger policy (≥24 eligible older messages OR ≥6,000 estimated older **character** units), no random/manual trigger, immutable covered ranges, appended-turn validity, and staleness only from covered-source/active-attempt/deletion/version changes. (FR-026/028, SC-009)
-- [ ] T059 [P] [US4] Failing `tests/unit/persistence/FactRepository.test.ts`: normalized-key dedup, multi-source links, contradictory newer fact supersedes (older retained). (FR-030/031)
-- [ ] T060 [P] [US4] Failing `tests/unit/inference/CompactionParser.test.ts`: structured output → one summary + source-linked facts; every referenced message ID validated before persistence.
+- [X] T058 [P] [US4] Write one failing `tests/unit/inference/CompactionService.test.ts` lifecycle suite covering the pinned trigger policy (≥24 eligible older messages OR ≥6,000 estimated older **character** units), no random/manual trigger, immutable covered ranges, appended-turn validity, and staleness only from covered-source/active-attempt/deletion/version changes. (FR-026/028, SC-009)
+- [X] T059 [P] [US4] Failing `tests/unit/persistence/FactRepository.test.ts`: normalized-key dedup, multi-source links, contradictory newer fact supersedes (older retained). (FR-030/031)
+- [X] T060 [P] [US4] Failing `tests/unit/inference/CompactionParser.test.ts`: structured output → one summary + source-linked facts; every referenced message ID validated before persistence.
 
 ### Implementation for User Story 4
 
-- [ ] T061 [P] [US4] Implement `src/persistence/SummaryRepository.ts`: versioned range summary (`first/last_source_message_id`, `source_view_hash`, `summarizer_version`, `status`), `markStale`, `getNewestReady`. (FR-027)
-- [ ] T062 [P] [US4] Implement `src/persistence/FactRepository.ts` + `durable_fact_source` writes: upsert by normalized key, supersession link, `getReadyFacts`, `markStale` (make T059 pass). (FR-030/031)
-- [ ] T063 [P] [US4] Implement `src/inference/CompactionPrompt.ts` and `src/inference/CompactionParser.ts` (make T060 pass). (FR-029)
-- [ ] T064 [US4] Implement `src/inference/CompactionService.ts`: evaluate fixed triggers, select one contiguous older range excluding the recent-turn window, acquire `DeviceResourcePolicy` (qwen-compaction), reset native Qwen context, run the isolated request, validate IDs, persist summary + facts; never inject prompt/output into visible history. (FR-026/029/032; make T058 pass)
-- [ ] T065 [US4] Integrate compaction into `src/store/conversationStore.ts` after terminal message persistence (never concurrent with visible generation/embedding/recording/transcription); answering proceeds with exact/retrieved context + last valid summary when compaction is pending. (FR-032, SC-009)
-- [ ] T066 [US4] Confirm summaries + durable facts fill the `ContextOrchestrator` assembly slots already ordered in T053, internal-only (no UI surface).
+- [X] T061 [P] [US4] Implement `src/persistence/SummaryRepository.ts`: versioned range summary (`first/last_source_message_id`, `source_view_hash`, `summarizer_version`, `status`), `markStale`, `getNewestReady`. (FR-027)
+- [X] T062 [P] [US4] Implement `src/persistence/FactRepository.ts` + `durable_fact_source` writes: upsert by normalized key, supersession link, `getReadyFacts`, `markStale` (make T059 pass). (FR-030/031)
+- [X] T063 [P] [US4] Implement `src/inference/CompactionPrompt.ts` and `src/inference/CompactionParser.ts` (make T060 pass). (FR-029)
+- [X] T064 [US4] Implement `src/inference/CompactionService.ts`: evaluate fixed triggers, select one contiguous older range excluding the recent-turn window, acquire `DeviceResourcePolicy` (qwen-compaction), reset native Qwen context, run the isolated request, validate IDs, persist summary + facts; never inject prompt/output into visible history. (FR-026/029/032; make T058 pass)
+- [X] T065 [US4] Integrate compaction into `src/store/conversationStore.ts` after terminal message persistence (never concurrent with visible generation/embedding/recording/transcription); answering proceeds with exact/retrieved context + last valid summary when compaction is pending. (FR-032, SC-009)
+- [X] T066 [US4] Confirm summaries + durable facts fill the `ContextOrchestrator` assembly slots already ordered in T053, internal-only (no UI surface).
 
 **Checkpoint**: Long chats compact automatically and deterministically.
 
@@ -212,14 +212,14 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 7 ⚠️ (write first, must fail)
 
-- [ ] T067 [P] [US7] Failing `tests/unit/retrieval/ConversationTargetResolver.test.ts`: default active-only; named/selected → single stable ID; candidate search bounded to ≤10 via normalized title tokens + dates; ambiguity → require selection; no content retrieval before resolution; deleted target → not-found. (FR-037/038/039/041)
+- [X] T067 [P] [US7] Failing `tests/unit/retrieval/ConversationTargetResolver.test.ts`: default active-only; named/selected → single stable ID; candidate search bounded to ≤10 via normalized title tokens + dates; ambiguity → require selection; no content retrieval before resolution; deleted target → not-found. (FR-037/038/039/041)
 
 ### Implementation for User Story 7
 
-- [ ] T068 [US7] Implement `src/retrieval/ConversationTargetResolver.ts`: deterministic named-chat intent detection + `normalized_title` candidate query (≤10), resolve-to-one or ambiguous/not-found (make T067 pass). (FR-037/038/039)
-- [ ] T069 [US7] Extend `HybridRetriever`/`ContextOrchestrator` to accept a request-scoped single `conversation_target`, apply the selected-chat retrieval limit, preserve source attribution, and NEVER merge selected-chat content into active-chat summary/facts/active-image state. (FR-040/041, US7 AS8)
-- [ ] T070 [US7] Implement `src/components/chat/ConversationTargetPicker.tsx` (bounded candidate list) reachable from `ChatComposer.tsx`, existing design components; handle ambiguous + deleted-target notices. (US7 AS5, Edge Cases)
-- [ ] T071 [US7] Wire target selection through `src/store/conversationStore.ts` submit path as transient request scope (not persisted). (FR-040)
+- [X] T068 [US7] Implement `src/retrieval/ConversationTargetResolver.ts`: deterministic named-chat intent detection + `normalized_title` candidate query (≤10), resolve-to-one or ambiguous/not-found (make T067 pass). (FR-037/038/039)
+- [X] T069 [US7] Extend `HybridRetriever`/`ContextOrchestrator` to accept a request-scoped single `conversation_target`, apply the selected-chat retrieval limit, preserve source attribution, and NEVER merge selected-chat content into active-chat summary/facts/active-image state. (FR-040/041, US7 AS8)
+- [X] T070 [US7] Implement `src/components/chat/ConversationTargetPicker.tsx` (bounded candidate list) reachable from `ChatComposer.tsx`, existing design components; handle ambiguous + deleted-target notices. (US7 AS5, Edge Cases)
+- [X] T071 [US7] Wire target selection through `src/store/conversationStore.ts` submit path as transient request scope (not persisted). (FR-040)
 
 **Checkpoint**: One-chat targeting works with zero leakage.
 
@@ -233,15 +233,15 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 8 ⚠️ (write first, must fail)
 
-- [ ] T072 [P] [US8] Write one failing `tests/unit/voice/VoiceFlow.test.ts` covering explicit enablement, storage disclosure, download/integrity failure recovery, editable transcript with no auto-submit, and mutual exclusion for record/transcribe versus every protected operation. (FR-042/044/045, SC-012)
+- [X] T072 [P] [US8] Write one failing `tests/unit/voice/VoiceFlow.test.ts` covering explicit enablement, storage disclosure, download/integrity failure recovery, editable transcript with no auto-submit, and mutual exclusion for record/transcribe versus every protected operation. (FR-042/044/045, SC-012)
 
 ### Implementation for User Story 8
 
 - [ ] T073 [US8] **⛔ GATED (T006)** Install the approved voice runtime (NDK-26 + New-Arch verified) and implement `src/voice/VoiceModelLifecycle.ts` (enable, storage disclosure, download/verify via existing model-artifact patterns, mic permission). (FR-042/043; make T072 pass)
 - [ ] T074 [US8] **⛔ GATED (T006)** Implement `src/voice/VoiceRecordingService.ts` and `src/voice/VoiceTranscriptionService.ts` (on-device transcribe, cancellation, context release) resource-locked via `DeviceResourcePolicy`. (FR-042/045; make T072 pass)
-- [ ] T075 [P] [US8] Implement `src/store/voiceStore.ts` (zustand) for enable/download/permission/recording/transcribing/error UI state.
-- [ ] T076 [US8] Implement `src/components/chat/VoiceControl.tsx` and wire into `src/components/chat/ChatComposer.tsx`: transcript → editable draft; explicit Send only; clean recovery on cancel/failure; existing design tokens. (FR-044, US8 AS4/AS8, Principle XI)
-- [ ] T077 [US8] Confirm submitted voice text flows through the identical typed-message submit path (`conversationStore.submit`) with no separate answer path. (FR-044/046, US8 AS5)
+- [X] T075 [P] [US8] Implement `src/store/voiceStore.ts` (zustand) for enable/download/permission/recording/transcribing/error UI state.
+- [X] T076 [US8] Implement `src/components/chat/VoiceControl.tsx` and wire into `src/components/chat/ChatComposer.tsx`: transcript → editable draft; explicit Send only; clean recovery on cancel/failure; existing design tokens. (FR-044, US8 AS4/AS8, Principle XI)
+- [X] T077 [US8] Confirm submitted voice text flows through the identical typed-message submit path (`conversationStore.submit`) with no separate answer path. (FR-044/046, US8 AS5)
 
 **Checkpoint**: Offline voice works with resource safety and no auto-submit.
 
@@ -251,11 +251,11 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **Purpose**: Offline architecture guard, consolidated cascade check, full evaluation, device validation.
 
-- [ ] T078 [P] Add one lightweight automated **offline architecture guard** in `tests/unit/architecture/OfflineGuard.test.ts` that fails if any module under `src/persistence/`, `src/retrieval/`, `src/inference/` (embedding/compaction paths), or `src/voice/` imports or calls a networking module (`fetch`, `expo-network` request APIs, `XMLHttpRequest`, sockets, or the background downloader outside model-artifact paths). (Constitution I; SC-015; research R13)
-- [ ] T079 [P] Add one consolidated **deletion/cascade** test in `tests/integration/Deletion.test.ts` (after all tables exist): deleting a conversation leaves zero orphaned attempts, chunks, embeddings, evidence, summaries, facts, and image links, and zero unreferenced image files. (SC-014)
-- [ ] T080 Implement the evaluation harness + repeatable cases in `src/evaluation/cases/` covering short chat, long chat, image follow-ups, retries, selected past-chat retrieval, all modes, voice, memory, storage, latency, and comparison against the T004 baseline rubric. (FR-048/049)
+- [X] T078 [P] Add one lightweight automated **offline architecture guard** in `tests/unit/architecture/OfflineGuard.test.ts` that fails if any module under `src/persistence/`, `src/retrieval/`, `src/inference/` (embedding/compaction paths), or `src/voice/` imports or calls a networking module (`fetch`, `expo-network` request APIs, `XMLHttpRequest`, sockets, or the background downloader outside model-artifact paths). (Constitution I; SC-015; research R13)
+- [X] T079 [P] Add one consolidated **deletion/cascade** test in `tests/integration/Deletion.test.ts` (after all tables exist): deleting a conversation leaves zero orphaned attempts, chunks, embeddings, evidence, summaries, facts, and image links, and zero unreferenced image files. (SC-014)
+- [X] T080 Implement the evaluation harness + repeatable cases in `src/evaluation/cases/` covering short chat, long chat, image follow-ups, retries, selected past-chat retrieval, all modes, voice, memory, storage, latency, and comparison against the T004 baseline rubric. (FR-048/049)
 - [ ] T081 Run physical-device validation from `quickstart.md`: page/cache bounds, retrieval latency, answer-quality rubric, image/file cleanup after deletion, model memory, no protected-operation overlap, development DB reset, and a **final airplane-mode** offline audit. (SC-001/002/003/004/006/010/012/013/014/015)
-- [ ] T082 Full `npm run type-check`, `npm run lint`, and `npm test` green; confirm no `any`/unexplained `@ts-ignore` added (Principle V).
+- [X] T082 Full `npm run type-check`, `npm run lint`, and `npm test` green; confirm no `any`/unexplained `@ts-ignore` added (Principle V).
 
 ---
 
