@@ -30,8 +30,8 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 - [X] T001 Create feature module directories: `src/persistence/sqlite/`, `src/persistence/`, `src/retrieval/`, `src/voice/`, and confirm `src/inference/`, `src/store/`, `src/components/chat/`, `src/evaluation/` exist.
 - [X] T002 Verify and install `expo-sqlite` for SDK 56: inspect its `android/` for any `ndkVersion`/NDK-27 requirement (must build on pinned NDK 26.3.11579264), confirm New Architecture compatibility, add to `package.json`, and run a dev-client build to prove it links. (research R1)
-- [ ] T003 [P] Run `npm run type-check`, `npm run lint`, and `npm test` on the unchanged branch and record the baseline result before implementation.
-- [ ] T004 [P] Record reusable pre-feature evaluation fixtures and a manual scoring rubric (short chat, long chat, image answers, retries, latency, memory) in `src/evaluation/baselines/`; do not assert exact model wording in Jest. (FR-047)
+- [X] T003 [P] Run `npm run type-check`, `npm run lint`, and `npm test` on the unchanged branch and record the baseline result before implementation.
+- [X] T004 [P] Record reusable pre-feature evaluation fixtures and a manual scoring rubric (short chat, long chat, image answers, retries, latency, memory) in `src/evaluation/baselines/`; do not assert exact model wording in Jest. (FR-047)
 - [ ] T005 **⛔ GATE** Run a `llama.rn` embedding spike on a physical 6–8GB device and approve one exact embedding artifact manifest (model id, license, URL, filename, bytes, SHA-256, dimensions, runtime call shape, peak memory, latency) in `research.md`; embedding-runtime implementation (T056/T057) is blocked until approval. (FR-021)
 - [ ] T006 **⛔ GATE** Run a physical-device offline voice spike and approve one runtime/model/audio-capture manifest (API, audio format, New Architecture, NDK-26 build, Android permission behavior, license, URL, filename, bytes, SHA-256, memory, cancellation) in `research.md`; voice-runtime implementation (T073/T074) is blocked until approval. (FR-043)
 
