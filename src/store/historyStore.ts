@@ -16,7 +16,14 @@ import { SummaryRepository } from '../persistence/SummaryRepository';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
-import { createConversationListCache, createMessageHistoryCache, loadMoreConversations, loadOlderMessages } from './conversationHistoryCache';
+import {
+  createConversationListCache,
+  createMessageHistoryCache,
+  loadMoreConversations,
+  loadNewerConversations,
+  loadNewerMessages,
+  loadOlderMessages,
+} from './conversationHistoryCache';
 import { useSettingsStore } from './settingsStore';
 
 const EMPTY_METRICS: MetricsSummary = {
@@ -52,6 +59,9 @@ export interface HistoryStoreState {
   refresh: () => void;
   loadMore: () => void;
   loadOlderMessages: (conversationId: string) => void;
+  loadNewer: () => void;
+  loadNewerMessages: (conversationId: string) => void;
+  search: (query: string) => Conversation[];
   delete: (id: string) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
@@ -73,11 +83,22 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
     loadMoreConversations(conversationCache, conversationRepository);
     set(listSnapshot());
   },
+  loadNewer: (): void => {
+    loadNewerConversations(conversationCache, conversationRepository);
+    set(listSnapshot());
+  },
   loadOlderMessages: (conversationId: string): void => {
     const cache = getMessageCache(conversationId);
     loadOlderMessages(cache, messageRepository, conversationId);
     set({ conversations: [...get().conversations] });
   },
+  loadNewerMessages: (conversationId: string): void => {
+    const cache = getMessageCache(conversationId);
+    loadNewerMessages(cache, messageRepository, conversationId);
+    set({ conversations: [...get().conversations] });
+  },
+  search: (query: string): Conversation[] =>
+    rowsToConversationHeaders(conversationRepository.searchConversations(query)),
   delete: (id: string): void => {
     conversationRepository.deleteConversation(id);
     messageCaches.delete(id);
@@ -143,6 +164,8 @@ function rowsToConversationHeaders(rows: ConversationRow[]): Conversation[] {
     flagNote: null,
     contextMemory: null,
     responseMode: fromStoredMode(row.response_mode),
+    latestMessagePreview: row.latest_message_preview,
+    hasImage: row.has_image === 1,
   }));
 }
 
