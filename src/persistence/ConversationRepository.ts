@@ -7,6 +7,7 @@ import type { ConversationRow, StoredResponseMode } from '../types/models';
 import { clampLimit, toPage } from './paging';
 import { runInTransaction } from './sqlite/Transactions';
 import { type Keyset, type Page, type SqliteDriver } from './types';
+import { MAX_PAGE_SIZE } from './types';
 
 export interface CreateConversationInput {
   id?: string;
@@ -39,6 +40,40 @@ export interface ConversationTargetCandidateRow {
   readonly updated_at: number;
 }
 
+const CONVERSATION_SELECT = `
+  SELECT conversation.*,
+    COALESCE(
+      (
+        SELECT CASE
+          WHEN message.role = 'assistant' THEN NULLIF(TRIM(message.text), '')
+          ELSE NULLIF(TRIM(message.text), '')
+        END
+        FROM message
+        WHERE message.conversation_id = conversation.id
+          AND (
+            message.role = 'user'
+            OR (message.role = 'assistant' AND message.is_active_attempt = 1 AND message.status = 'completed')
+          )
+        ORDER BY message.created_at DESC, message.id DESC
+        LIMIT 1
+      ),
+      (
+        SELECT NULLIF(TRIM(message.text), '')
+        FROM message
+        WHERE message.conversation_id = conversation.id AND message.role = 'user'
+        ORDER BY message.created_at DESC, message.id DESC
+        LIMIT 1
+      ),
+      conversation.title
+    ) AS latest_message_preview,
+    EXISTS (
+      SELECT 1
+      FROM message_image
+      JOIN message ON message.id = message_image.message_id
+      WHERE message.conversation_id = conversation.id
+    ) AS has_image
+  FROM conversation`;
+
 /** Deterministic title normalization for candidate lookup (US7) and dedup. */
 export function normalizeTitle(title: string | null | undefined): string | null {
   if (title === null || title === undefined) {
@@ -69,26 +104,59 @@ export class ConversationRepository {
     const limit = clampLimit(cursor.limit);
     const rows = cursor.before === undefined
       ? this.driver.getAllSync<ConversationRow>(
-          `SELECT * FROM conversation
-             WHERE deleted_at IS NULL
-             ORDER BY updated_at DESC, id DESC
+          `${CONVERSATION_SELECT}
+             WHERE conversation.deleted_at IS NULL
+             ORDER BY conversation.updated_at DESC, conversation.id DESC
              LIMIT ?`,
           [limit + 1],
         )
       : this.driver.getAllSync<ConversationRow>(
-          `SELECT * FROM conversation
-             WHERE deleted_at IS NULL
-               AND (updated_at < ? OR (updated_at = ? AND id < ?))
-             ORDER BY updated_at DESC, id DESC
+          `${CONVERSATION_SELECT}
+             WHERE conversation.deleted_at IS NULL
+               AND (conversation.updated_at < ? OR (conversation.updated_at = ? AND conversation.id < ?))
+             ORDER BY conversation.updated_at DESC, conversation.id DESC
              LIMIT ?`,
           [cursor.before.ts, cursor.before.ts, cursor.before.id, limit + 1],
         );
     return toPage(rows, limit, (row) => ({ ts: row.updated_at, id: row.id }));
   }
 
+  /** Bounded SQL search across titles and canonical searchable messages. */
+  searchConversations(query: string, limit = MAX_PAGE_SIZE): ConversationRow[] {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    if (normalizedQuery === '') {
+      return [];
+    }
+    const pattern = `%${normalizedQuery}%`;
+    return this.driver.getAllSync<ConversationRow>(
+      `${CONVERSATION_SELECT}
+       WHERE conversation.deleted_at IS NULL
+         AND (
+           LOWER(COALESCE(conversation.title, '')) LIKE ?
+           OR EXISTS (
+             SELECT 1 FROM message
+             WHERE message.conversation_id = conversation.id
+               AND message.role = 'user'
+               AND LOWER(message.text) LIKE ?
+           )
+           OR EXISTS (
+             SELECT 1 FROM message
+             WHERE message.conversation_id = conversation.id
+               AND message.role = 'assistant'
+               AND message.is_active_attempt = 1
+               AND message.status = 'completed'
+               AND LOWER(message.text) LIKE ?
+           )
+         )
+       ORDER BY conversation.updated_at DESC, conversation.id DESC
+       LIMIT ?`,
+      [pattern, pattern, pattern, clampLimit(limit)],
+    );
+  }
+
   getConversation(id: string): ConversationRow | null {
     return this.driver.getFirstSync<ConversationRow>(
-      'SELECT * FROM conversation WHERE id = ? AND deleted_at IS NULL',
+      `${CONVERSATION_SELECT} WHERE conversation.id = ? AND conversation.deleted_at IS NULL`,
       [id],
     );
   }
@@ -140,6 +208,8 @@ export class ConversationRepository {
       created_at: timestamp,
       updated_at: timestamp,
       deleted_at: null,
+      latest_message_preview: null,
+      has_image: 0,
     };
     this.driver.runSync(
       `INSERT INTO conversation

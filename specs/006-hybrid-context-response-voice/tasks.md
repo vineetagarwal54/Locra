@@ -334,3 +334,39 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 - Existing MMKV chat history is NOT migrated (development-stage cutover, FR-006); MMKV holds only small settings.
 - New UI uses existing design tokens/components and is validated manually on device (Principle XI).
 - Commit by logical phase rather than one commit per tiny task.
+
+---
+
+## Phase 12: Production Stabilization and Voice Composer Corrections
+
+**Purpose**: Fix the grouped production-device defects found after Spec 006 implementation without replacing the approved architecture. Add only focused regression tests for data-loss and lifecycle invariants; validate UI behavior manually.
+
+- [X] T083 [US1] Fix bounded History and message windows so evicted pages can be fetched in both directions. Move History search to indexed SQL across titles, user messages and active completed attempts; return accurate latest-message previews and image indicators without loading complete chats. (FR-A01, SC-A01/A02)
+
+- [ ] T084 [US2] Add throttled SQLite checkpoints for streaming assistant text; flush before completion, stop, failure and cancellation; preserve partial text with `Stopped`/`Failed` status; reconcile abandoned `generating` attempts on startup; allow retry from failed and interrupted attempts without overwriting history. (FR-A02, SC-A03)
+
+- [ ] T085 Stabilize model setup: explicit downloading/verifying/preparing/ready states, final progress completion, exact-size and SHA-256 verification, durable manifest-bound verification records, correct notification wording, startup timeout/recovery, and no onboarding completion or usable Chat state before the model is ready. (FR-A03, SC-A04)
+
+- [ ] T086 [US5] Copy gallery and camera images into durable conversation-scoped application storage before SQL persistence; keep preprocessing files temporary; clean temp files; reconcile missing source files; preserve reusable evidence; add preview/remove/retake and reopen-original behavior using existing design components. (FR-A04, SC-A05)
+
+- [ ] T087 [US3/US7] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, use Unicode-safe conversation-title normalization, and ensure the real bounded past-chat picker and transient target state are wired end to end. (FR-A05, SC-A06)
+
+- [ ] T088 Restore diagnostics for internal production APKs under `Settings → Beta Tools`: export complete selected conversations and attempts directly from repositories, include app/model/download/storage/resource state, disclose included content, sanitize local paths, exclude images by default, delete temporary ZIPs, and add a response-level Report Issue action. (FR-A06, SC-A07)
+
+- [ ] T089 Replace production schema mismatch failure with ordered transactional migrations and controlled asynchronous database bootstrap. Add a recoverable database-error screen with restart, diagnostics export and explicit local reset; never silently reset production conversations. (FR-A07)
+
+- [ ] T090 Improve runtime performance without changing output behavior: lazy-load Qwen, release it after the approved idle/background policy, run compaction/embedding only when idle and deduplicated, release native resources before signaling completion, throttle streaming render/scroll work, and preserve History cache state after writes. (FR-A08)
+
+- [ ] T091 Add compact user controls using existing design components: selectable text, Copy/Share and Copy Code, conversation rename, app/build/model/database version, Delete/Redownload Model, Clear Temporary Files, Clear Diagnostics, Clear Conversations, Android settings recovery after permanent permission denial, and projector/model recovery actions. (FR-A08)
+
+- [ ] T092 [US8] Extend the T006 physical-device gate to require an approved fully offline runtime that produces incremental partial transcription while recording is active. Record first-partial latency, update latency, corrections, memory, cancellation, New Architecture and NDK-26 compatibility before implementing the runtime. (FR-A09/A10)
+
+- [ ] T093 [US8] Refactor the voice resource model to one exclusive `voice-input` session containing recording plus incremental transcription. Place the microphone inside the right side of the primary text input; after one-time setup one tap starts, partial text appears in the same editable draft while speaking, existing typed text is preserved, the active mic stops/finalizes, and stopping never sends. (FR-A09/A10, SC-A08)
+
+- [ ] T094 Update `README.md`, `AGENTS.md` and task/file claims to match the actual SQLite, llama.rn, context, voice and UI architecture. Add lightweight CI for type-check, lint, focused tests, Expo config validation and Android JavaScript bundling.
+
+- [ ] T095 Extend existing suites only where needed for T083–T093: bidirectional paging/search, attempt recovery, artifact verification, durable images, migration rollback and live voice-session coordination. Do not add UI snapshots, duplicate tests or exact model/speech wording assertions.
+
+- [ ] T096 Run a physical production-APK checklist covering History beyond cache limits, SQL search outside cache, stop/failure/relaunch recovery, model download→verify→ready without restart, corrupted download recovery, durable images after cache cleanup, context relevance, diagnostics completeness, schema upgrade, background/runtime recovery, one-tap live voice and final airplane-mode operation.
+
+**Execution order**: T083 → T084 → T085 → T086 → T087 → T088 → T089 → T090/T091 → T092/T093 → T094/T095 → T096.

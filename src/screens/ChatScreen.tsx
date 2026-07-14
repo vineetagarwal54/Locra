@@ -248,6 +248,9 @@ export function ChatScreen({ navigation, route }: Props) {
     if (contentOffset.y <= designTokens.spacing.space24 * 2 && conversationId !== 'new') {
       useHistoryStore.getState().loadOlderMessages(conversationId);
     }
+    if (distanceFromBottom <= designTokens.spacing.space24 * 2 && conversationId !== 'new') {
+      useHistoryStore.getState().loadNewerMessages(conversationId);
+    }
   }, [conversationId]);
 
   const onContentSizeChange = useCallback((): void => {
@@ -322,6 +325,7 @@ export function ChatScreen({ navigation, route }: Props) {
         onScroll={onScroll}
         scrollEventThrottle={16}
         onContentSizeChange={onContentSizeChange}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
       <ChatComposer
         conversationId={conversationId}

@@ -61,6 +61,8 @@ export interface Conversation {
   flagNote: string | null;
   contextMemory?: ConversationContextMemory | null;
   responseMode?: import('../inference/ResponseMode').ResponseMode;
+  latestMessagePreview?: string | null;
+  hasImage?: boolean;
 }
 
 export interface CanonicalContextTurn {
@@ -239,6 +241,8 @@ export interface ConversationRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  latest_message_preview: string | null;
+  has_image: number;
 }
 
 /** Kind of a benchmarked turn: image turns include preparation time, text turns don't. */

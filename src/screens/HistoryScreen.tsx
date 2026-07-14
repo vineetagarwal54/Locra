@@ -19,7 +19,6 @@ import {
   type RecencyBucket,
   groupConversationsByRecency,
 } from '../history/conversationGroups';
-import { searchConversations } from '../history/ConversationSearch';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
 import type { Conversation } from '../types/models';
@@ -46,6 +45,8 @@ export function HistoryScreen({ navigation }: Props) {
   const revision = useHistoryStore((s) => s.conversations);
   const refresh = useHistoryStore((s) => s.refresh);
   const loadMore = useHistoryStore((s) => s.loadMore);
+  const loadNewer = useHistoryStore((s) => s.loadNewer);
+  const search = useHistoryStore((s) => s.search);
   const deleteConversation = useHistoryStore((s) => s.delete);
   const [query, setQuery] = useState('');
   const { confirm, dialog } = useConfirmSheet();
@@ -56,13 +57,14 @@ export function HistoryScreen({ navigation }: Props) {
 
   const sections = useMemo<HistorySection[]>(() => {
     void revision;
-    const conversations = useHistoryStore.getState().listConversations();
-    const filtered = searchConversations(conversations, query);
-    return groupConversationsByRecency(filtered).map((group) => ({
+    const conversations = query.trim() === ''
+      ? useHistoryStore.getState().listConversations()
+      : search(query);
+    return groupConversationsByRecency(conversations).map((group) => ({
       title: HISTORY_GROUP_LABEL[group.bucket],
       data: group.conversations,
     }));
-  }, [revision, query]);
+  }, [revision, query, search]);
 
   const hasAnyConversation = useMemo(
     () => useHistoryStore.getState().listConversations(1).length > 0,
@@ -193,6 +195,13 @@ export function HistoryScreen({ navigation }: Props) {
         keyboardShouldPersistTaps="handled"
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
+        onScroll={(event) => {
+          if (event.nativeEvent.contentOffset.y <= 0) {
+            loadNewer();
+          }
+        }}
+        scrollEventThrottle={100}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
       {dialog}
     </SafeAreaView>
