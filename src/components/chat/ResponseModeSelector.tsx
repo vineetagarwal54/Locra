@@ -13,14 +13,11 @@ interface ResponseModeSelectorProps {
 }
 
 const MODE_DESCRIPTION: Readonly<Record<ResponseMode, string>> = {
-  Low: 'Short, essential answers.',
-  Medium: 'Balanced detail and explanation.',
-  High: 'Thorough, in-depth answers.',
+  Low: 'Quick',
+  Medium: 'Balanced',
+  High: 'Detailed',
 };
 
-// Compact ChatGPT-style pill ("Medium ▾") beside the input that opens a Locra
-// bottom sheet. Replaces the wide Low/Medium/High segmented control while keeping
-// the exact per-conversation mode behavior the caller wires in.
 export function ResponseModeSelector({ value, disabled = false, onChange }: ResponseModeSelectorProps) {
   const [sheetVisible, setSheetVisible] = useState(false);
 
@@ -97,18 +94,17 @@ export function ResponseModeSelector({ value, disabled = false, onChange }: Resp
 
 const styles = StyleSheet.create({
   pill: {
-    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: designTokens.spacing.space4,
+    minHeight: designTokens.spacing.space24 + designTokens.spacing.space16,
     paddingVertical: designTokens.spacing.space4,
-    paddingLeft: designTokens.spacing.space12,
-    paddingRight: designTokens.spacing.space8,
+    paddingLeft: designTokens.spacing.space16,
+    paddingRight: designTokens.spacing.space12,
     borderRadius: designTokens.radius.pill,
     borderWidth: designTokens.borderWidth,
     borderColor: designTokens.color.border,
     backgroundColor: designTokens.color.surface,
-    marginBottom: designTokens.spacing.space8,
   },
   pillPressed: {
     backgroundColor: designTokens.color.divider,

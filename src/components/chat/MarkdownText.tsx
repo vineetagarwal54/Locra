@@ -45,16 +45,7 @@ function BlockView({ block, isFirst }: { block: MarkdownBlock; isFirst: boolean 
   if (block.type === 'list') {
     return (
       <View style={spacing}>
-        {block.items.map((item, index) => (
-          <View key={index} style={styles.listItem}>
-            <Text style={styles.listMarker}>
-              {block.ordered ? `${index + 1}.` : '•'}
-            </Text>
-            <Text style={styles.listItemText}>
-              <InlineSpans spans={item} />
-            </Text>
-          </View>
-        ))}
+        <ListView block={block} />
       </View>
     );
   }
@@ -63,6 +54,32 @@ function BlockView({ block, isFirst }: { block: MarkdownBlock; isFirst: boolean 
     <Text style={[styles.paragraph, spacing]}>
       <InlineSpans spans={block.spans} />
     </Text>
+  );
+}
+
+function ListView({ block }: { block: MarkdownBlock & { readonly type: 'list' } }) {
+  return (
+    <View>
+      {block.items.map((item, index) => (
+        <View key={index} style={styles.listItem}>
+          <Text style={styles.listMarker}>
+            {block.ordered ? `${(block.start ?? 1) + index}.` : '•'}
+          </Text>
+          <View style={styles.listItemContent}>
+            <Text style={styles.listItemText}>
+              <InlineSpans spans={item.spans} />
+            </Text>
+            {item.children.map((child, childIndex) =>
+              child.type === 'list' ? (
+                <View key={childIndex} style={styles.nestedList}>
+                  <ListView block={child} />
+                </View>
+              ) : null
+            )}
+          </View>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -166,5 +183,11 @@ const styles = StyleSheet.create({
     color: designTokens.color.textPrimary,
     fontSize: designTokens.type.body.fontSize,
     lineHeight: designTokens.type.body.lineHeight,
+  },
+  listItemContent: {
+    flex: 1,
+  },
+  nestedList: {
+    marginTop: designTokens.spacing.space4,
   },
 });
