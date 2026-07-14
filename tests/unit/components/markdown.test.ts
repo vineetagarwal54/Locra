@@ -30,12 +30,62 @@ describe('markdown parser', () => {
     ]);
   });
 
-  it('parses bullet and ordered lists', () => {
+  it('preserves ordered list numbering and nested list structure', () => {
     expect(parseMarkdown('- one\n- two')).toEqual([
-      { type: 'list', ordered: false, items: [[{ text: 'one' }], [{ text: 'two' }]] },
+      {
+        type: 'list',
+        ordered: false,
+        items: [
+          { spans: [{ text: 'one' }], children: [] },
+          { spans: [{ text: 'two' }], children: [] },
+        ],
+      },
     ]);
     expect(parseMarkdown('1. first\n2. second')).toEqual([
-      { type: 'list', ordered: true, items: [[{ text: 'first' }], [{ text: 'second' }]] },
+      {
+        type: 'list',
+        ordered: true,
+        start: 1,
+        items: [
+          { spans: [{ text: 'first' }], children: [] },
+          { spans: [{ text: 'second' }], children: [] },
+        ],
+      },
+    ]);
+    expect(parseMarkdown('3. Third\n4. Fourth')).toEqual([
+      {
+        type: 'list',
+        ordered: true,
+        start: 3,
+        items: [
+          { spans: [{ text: 'Third' }], children: [] },
+          { spans: [{ text: 'Fourth' }], children: [] },
+        ],
+      },
+    ]);
+    expect(parseMarkdown('1. Parent\n   3. Nested\n   4. Nested again\n2. Sibling')).toEqual([
+      {
+        type: 'list',
+        ordered: true,
+        start: 1,
+        items: [
+          {
+            spans: [{ text: 'Parent' }],
+            children: [
+              {
+                type: 'list',
+                ordered: true,
+                start: 3,
+                items: [
+                  { spans: [{ text: 'Nested' }], children: [] },
+                  { spans: [{ text: 'Nested again' }], children: [] },
+                ],
+              },
+            ],
+          },
+          { spans: [{ text: 'Sibling' }], children: [] },
+        ],
+      },
     ]);
   });
 
