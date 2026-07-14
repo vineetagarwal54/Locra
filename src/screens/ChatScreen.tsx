@@ -4,7 +4,6 @@ import { DrawerActions, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   BackHandler,
   FlatList,
   Keyboard,
@@ -23,6 +22,7 @@ import { ChatComposer } from '../components/chat/ChatComposer';
 import { ImagePromptCard } from '../components/chat/ImagePromptCard';
 import { MessageBubble } from '../components/chat/MessageBubble';
 import { OfflineIndicator } from '../components/OfflineIndicator';
+import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
 import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
@@ -67,6 +67,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const [responseMode, setResponseMode] = useState<ResponseMode>(() =>
     conversationStore.getResponseMode(conversationId)
   );
+  const { confirm, dialog } = useConfirmSheet();
 
   const conversation = useMemo(
     () =>
@@ -163,15 +164,17 @@ export function ChatScreen({ navigation, route }: Props) {
         if (navigation.canGoBack()) {
           return false;
         }
-        Alert.alert('Exit Locra?', undefined, [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Exit', style: 'destructive', onPress: () => BackHandler.exitApp() },
-        ]);
+        confirm({
+          title: 'Exit Locra?',
+          confirmLabel: 'Exit',
+          destructive: true,
+          onConfirm: () => BackHandler.exitApp(),
+        });
         return true;
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
       return () => subscription.remove();
-    }, [navigation])
+    }, [confirm, navigation])
   );
 
   const isMissingConversation = conversationId !== 'new' && conversation === null;
@@ -288,6 +291,7 @@ export function ChatScreen({ navigation, route }: Props) {
           <Text style={styles.emptyTitle}>This conversation is gone</Text>
           <Text style={styles.emptyBody}>It was deleted from history on this phone.</Text>
         </View>
+        {dialog}
       </SafeAreaView>
     );
   }
@@ -337,6 +341,7 @@ export function ChatScreen({ navigation, route }: Props) {
           setResponseMode(mode);
         }}
       />
+      {dialog}
     </SafeAreaView>
   );
 }

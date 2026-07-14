@@ -3,6 +3,7 @@ import { create } from 'zustand';
 
 import { deriveConversationTitle } from '../history/ConversationSearch';
 import { fromStoredMode, toStoredMode } from '../inference/ResponseMode';
+import { BenchmarkRepository } from '../persistence/BenchmarkRepository';
 import { ChunkRepository } from '../persistence/ChunkRepository';
 import { ConversationRepository } from '../persistence/ConversationRepository';
 import { EmbeddingRepository } from '../persistence/EmbeddingRepository';
@@ -39,6 +40,7 @@ export const chunkRepository = new ChunkRepository(driver);
 export const embeddingRepository = new EmbeddingRepository(driver);
 export const summaryRepository = new SummaryRepository(driver);
 export const factRepository = new FactRepository(driver);
+export const benchmarkRepository = new BenchmarkRepository(driver);
 
 let conversationCache = createConversationListCache(conversationRepository);
 const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();

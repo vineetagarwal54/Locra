@@ -61,12 +61,18 @@ describe('conversation deletion cascade', () => {
           source_view_hash, summarizer_version, text, status, version, created_at, updated_at)
          VALUES ('s1','c1','u1','a1','h1','v1','summary','ready',1,1,1)`,
       );
+      db.driver.runSync(
+        `INSERT INTO benchmark_run
+         (id, conversation_id, message_id, kind, model_load_time_ms, preprocessing_time_ms,
+          first_token_latency_ms, tokens_per_second, total_wall_time_ms, created_at)
+         VALUES ('b1','c1','a1','text',1,2,3,4,5,1)`,
+      );
 
       repository.deleteConversation('c1');
 
       for (const table of [
         'message', 'message_image', 'image_asset', 'visual_evidence', 'chunk', 'embedding',
-        'summary', 'durable_fact', 'durable_fact_source',
+        'summary', 'durable_fact', 'durable_fact_source', 'benchmark_run',
       ]) {
         expect(db.driver.getFirstSync<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n)
           .toBe(0);

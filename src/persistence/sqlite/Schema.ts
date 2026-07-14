@@ -8,6 +8,40 @@ import type { SqliteDriver } from '../types';
 export const SCHEMA_VERSION = 1;
 
 /**
+ * Additive, self-contained tables that can be (re)created on every open with no
+ * destructive schema-version bump. `benchmark_run` records the timing of each
+ * SUCCESSFULLY completed assistant attempt (user-facing Benchmarks); it never
+ * feeds context/retrieval and cascades away with its conversation.
+ */
+const ADDITIVE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
+  `CREATE TABLE IF NOT EXISTS benchmark_run (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    message_id TEXT REFERENCES message(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('text','image')),
+    model_load_time_ms REAL NOT NULL,
+    preprocessing_time_ms REAL NOT NULL,
+    first_token_latency_ms REAL NOT NULL,
+    tokens_per_second REAL NOT NULL,
+    total_wall_time_ms REAL NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS ix_benchmark_created
+    ON benchmark_run (created_at DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS ix_benchmark_kind
+    ON benchmark_run (kind, created_at DESC, id DESC)`,
+];
+
+/** Applies additive tables idempotently so existing stores gain them without a reset. */
+export function applyAdditiveSchema(driver: SqliteDriver): void {
+  driver.withTransactionSync(() => {
+    for (const statement of ADDITIVE_SCHEMA_STATEMENTS) {
+      driver.execSync(statement);
+    }
+  });
+}
+
+/**
  * Ordered DDL statements that build the entire store. Parents precede children
  * so foreign keys resolve. Every child of `conversation` cascades on delete so a
  * conversation deletion leaves zero orphans (FR-005/006, SC-014).
@@ -212,10 +246,13 @@ export const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     ON summary (conversation_id)`,
   `CREATE INDEX IF NOT EXISTS ix_summary_status
     ON summary (conversation_id, status)`,
+
+  ...ADDITIVE_SCHEMA_STATEMENTS,
 ];
 
 /** Table names in dependency order (children before parents for DROP). */
 export const SCHEMA_TABLES: ReadonlyArray<string> = [
+  'benchmark_run',
   'summary',
   'embedding',
   'durable_fact_source',

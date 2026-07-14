@@ -115,7 +115,13 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
           });
           return result.text;
         } catch (error) {
-          setState({ generating: false, error: toMessage(error) });
+          // A user cancellation is not a failure: recording it as an engine error
+          // would make the NEXT request's loadModel see a stale error and reject,
+          // marking the following answer as failed. Clear it instead.
+          setState({
+            generating: false,
+            error: controller.signal.aborted ? null : toMessage(error),
+          });
           throw error;
         } finally {
           abortRef.current = null;

@@ -94,7 +94,14 @@ export interface DeviceBuildMetadata {
   appBuildId: string;
 }
 
-const IN_FLIGHT: ReadonlyArray<InferenceStatus> = ['preprocessing', 'loading_model', 'streaming'];
+// 'cancelling' is in-flight: a stop was requested but the native call/lease have
+// not settled, so no new generation may begin until it clears to 'idle'.
+const IN_FLIGHT: ReadonlyArray<InferenceStatus> = [
+  'preprocessing',
+  'loading_model',
+  'streaming',
+  'cancelling',
+];
 
 const IDLE_STATE: InferenceState = {
   status: 'idle',
@@ -300,33 +307,62 @@ export class InferenceQueue implements IInferenceQueue {
         inferenceTrace: active.trace,
       });
     } finally {
+      const wasCancelled = active.cancelled;
       if (this.active === active) {
         this.active = null;
       }
       if (this.lifecycleGates === lifecycleGates) {
         this.lifecycleGates = null;
       }
+      // Release the device gate ONLY after the native call has truly settled, so
+      // a queued/next generation cannot start while resources are still held.
       if (resourceLease !== null) {
         resourceLease.release();
       } else if (acquiredLegacyLock) {
         this.activityLock.release('vlm');
       }
+      // Now that everything is released, publish the terminal cancelled→idle
+      // transition. Skip it if the turn actually finished (completed/errored)
+      // between the stop request and settling — that result stands.
+      if (wasCancelled && this.state.status === 'cancelling') {
+        this.emitCancellationTerminal();
+      }
     }
   }
 
+  /**
+   * Requests cancellation. The queue enters 'cancelling' immediately (blocking any
+   * new generation) and does not return to 'idle' until the in-flight native call
+   * settles and its resource lease is released in `submit`'s finally block. This
+   * closes the race where a stopped turn's lease was still held when the next
+   * request began.
+   */
   cancel(): void {
     const active = this.active;
-    if (active === null) return;
+    if (active === null || active.cancelled) return;
 
     active.cancelled = true;
     active.controller.abort();
-    this.active = null;
     this.lifecycleActor.send({ type: 'CANCEL' });
     if (this.lifecycleGates !== null) {
       settleLifecycleGates(this.lifecycleGates);
-      this.lifecycleGates = null;
     }
 
+    this.setState({
+      status: 'cancelling',
+      response: '',
+      metrics: null,
+      error: null,
+      limitWarning: null,
+      pinnedExtraction: null,
+      hiddenEvidence: null,
+      objectiveResult: null,
+      inferenceTrace: null,
+    });
+  }
+
+  /** Publishes the observable terminal cancellation, then returns to idle. */
+  private emitCancellationTerminal(): void {
     this.setState({
       status: 'cancelled',
       response: '',
