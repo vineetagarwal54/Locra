@@ -5,6 +5,7 @@ import { designTokens, haptics } from '../../constants/theme';
 import type { ConversationMessage } from '../../types/models';
 
 import { ImagePromptCard } from './ImagePromptCard';
+import { MarkdownText } from './MarkdownText';
 import { StreamingMessage } from './StreamingMessage';
 
 interface MessageBubbleProps {
@@ -100,7 +101,7 @@ function AssistantMessage({
         {message.status === 'generating' && text.trim() === '' ? (
           <StreamingMessage />
         ) : (
-          <Text style={styles.assistantText}>{text}</Text>
+          <MarkdownText text={text} />
         )}
       </View>
     </View>
@@ -138,11 +139,6 @@ const styles = StyleSheet.create({
     backgroundColor: designTokens.color.surfaceStrong,
     borderWidth: designTokens.borderWidth,
     borderColor: designTokens.color.border,
-  },
-  assistantText: {
-    color: designTokens.color.textPrimary,
-    fontSize: designTokens.type.body.fontSize,
-    lineHeight: designTokens.type.body.lineHeight,
   },
   assistantMuted: {
     color: designTokens.color.textSecondary,

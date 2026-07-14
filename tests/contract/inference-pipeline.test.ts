@@ -3,6 +3,7 @@ jest.mock('react-native-nitro-image', () => ({ loadImage: jest.fn() }));
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { SingleFlightResourcePolicy } from '../../src/inference/DeviceResourcePolicy';
 import type { PreprocessedImage } from '../../src/inference/ImagePreprocessor';
 import {
   InferenceQueue,
@@ -138,6 +139,37 @@ describe('Inference pipeline contract', () => {
     expect(seen.some((state) => state.status === 'cancelled')).toBe(true);
     expect(queue.getState().status).toBe('idle');
     expect(queue.getState().response).toBe('');
+    await expect(queue.submit(request)).resolves.toBeUndefined();
+  });
+
+  it('holds the device resource lease through cancellation until the native call settles', async () => {
+    const gate = defer<{ response: string; tokenCount: number }>();
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        onToken('partial');
+        return gate.promise;
+      },
+    };
+    const resourcePolicy = new SingleFlightResourcePolicy();
+    const queue = makeQueue({ engine, resourcePolicy });
+
+    const inFlight = queue.submit(request);
+    await flush();
+    expect(resourcePolicy.isBusy()).toBe(true);
+
+    queue.cancel();
+    // Still settling: the lease is held, status stays 'cancelling', and a new
+    // generation is refused rather than racing the lease release.
+    expect(queue.getState().status).toBe('cancelling');
+    expect(resourcePolicy.isBusy()).toBe(true);
+    await expect(queue.submit(request)).rejects.toThrow(/already in progress/i);
+
+    // Native call settles -> lease released -> idle -> the next request succeeds.
+    gate.resolve({ response: 'late answer', tokenCount: 2 });
+    await inFlight;
+    expect(queue.getState().status).toBe('idle');
+    expect(resourcePolicy.isBusy()).toBe(false);
     await expect(queue.submit(request)).resolves.toBeUndefined();
   });
 

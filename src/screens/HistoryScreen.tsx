@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConversationListItem } from '../components/ConversationListItem';
+import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
 import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import {
@@ -44,7 +45,10 @@ interface HistorySection {
 export function HistoryScreen({ navigation }: Props) {
   const revision = useHistoryStore((s) => s.conversations);
   const refresh = useHistoryStore((s) => s.refresh);
+  const loadMore = useHistoryStore((s) => s.loadMore);
+  const deleteConversation = useHistoryStore((s) => s.delete);
   const [query, setQuery] = useState('');
+  const { confirm, dialog } = useConfirmSheet();
 
   useEffect(() => {
     refresh();
@@ -86,6 +90,16 @@ export function HistoryScreen({ navigation }: Props) {
     },
     [navigation]
   );
+
+  const onDelete = useCallback((conversationId: string): void => {
+    confirm({
+      title: 'Delete conversation?',
+      message: 'This removes its messages and local images from this phone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => deleteConversation(conversationId),
+    });
+  }, [confirm, deleteConversation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -166,7 +180,7 @@ export function HistoryScreen({ navigation }: Props) {
         sections={sections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <ConversationListItem conversation={item} onPress={onResume} />
+          <ConversationListItem conversation={item} onPress={onResume} onDelete={onDelete} />
         )}
         renderSectionHeader={({ section }) => (
           <Text style={styles.sectionHeader}>{section.title}</Text>
@@ -177,7 +191,10 @@ export function HistoryScreen({ navigation }: Props) {
         }
         ListEmptyComponent={<HistoryEmptyState searching={query !== '' && hasAnyConversation} />}
         keyboardShouldPersistTaps="handled"
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.4}
       />
+      {dialog}
     </SafeAreaView>
   );
 }

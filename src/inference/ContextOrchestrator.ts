@@ -1,3 +1,6 @@
+import type { EvidenceReference } from '../persistence/EvidenceRepository';
+import type { HybridRetriever } from '../retrieval/HybridRetriever';
+import type { RetrievalCandidate, RetrievedItem } from '../retrieval/types';
 import type {
   CanonicalContextTurn,
   CanonicalConversationContext,
@@ -10,11 +13,13 @@ import type {
   Conversation,
   ConversationContextMemory,
   ConversationMessage,
+  VisualEvidenceRow,
 } from '../types/models';
 
 import { assessAnswerQuality } from './AnswerPostProcessor';
 import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
+import { getResponseModeConfig, type ResponseMode } from './ResponseMode';
 import { isToolRefusalResponse } from './ToolRefusalRecovery';
 
 const DEFAULT_MAXIMUM_UNITS = 14_400;
@@ -150,11 +155,33 @@ export interface ContextOrchestrationResult {
 
 export interface ContextOrchestrationOptions {
   readonly diagnosticsEnabled?: boolean;
+  readonly responseMode?: ResponseMode;
+  readonly selectedConversationId?: string;
+  readonly referencedImage?: Omit<EvidenceReference, 'conversationId'>;
+  readonly queryVector?: Float32Array;
+}
+
+export interface HybridContextSources {
+  readonly retriever?: Pick<HybridRetriever, 'search'>;
+  readonly evidenceRepository?: {
+    getActiveImageEvidence(conversationId: string): VisualEvidenceRow | null;
+    resolveReferencedImageEvidence(reference: EvidenceReference): VisualEvidenceRow | null;
+  };
+  readonly listLexicalCandidates?: (
+    conversationIds: readonly string[],
+  ) => readonly RetrievalCandidate[];
+  readonly listDurableFacts?: (conversationId: string) => readonly ContextMemoryFact[];
+  readonly getNewestReadySummary?: (conversationId: string) => string | null;
+  readonly retrievalManifest?: {
+    readonly embeddingVersion: string;
+    readonly artifactHash: string;
+  };
 }
 
 export class ContextOrchestrator {
   constructor(
     private readonly budgetPolicy: ContextBudgetPolicy = new CharacterContextBudgetPolicy(),
+    private readonly sources: HybridContextSources = {},
   ) {}
 
   orchestrate(
@@ -162,11 +189,14 @@ export class ContextOrchestrator {
     options: ContextOrchestrationOptions = {},
   ): ContextOrchestrationResult {
     const diagnosticsEnabled = options.diagnosticsEnabled ?? isDevelopmentInferenceTraceEnabled();
+    const policy = options.responseMode === undefined
+      ? this.budgetPolicy
+      : responseModeBudgetPolicy(this.budgetPolicy, options.responseMode);
     const conversationTurns = conversationTurnsFromMessages(snapshot.priorMessages);
     const selection = selectRecentTurns(
       conversationTurns,
       snapshot.currentMessage.text,
-      this.budgetPolicy,
+      policy,
       diagnosticsEnabled,
     );
     const olderTurns = conversationTurns.slice(
@@ -176,39 +206,73 @@ export class ContextOrchestrator {
     const memory = rebuildDerivedMemory(snapshot, olderTurns);
     let usedUnits = selection.usedUnits;
 
-    const mediaEvidence = selectMediaEvidenceWithinBudget(
-      memory.mediaEvidence,
-      snapshot.currentMessage.text,
-      this.budgetPolicy.maxMediaEvidenceItems,
-      usedUnits,
-      this.budgetPolicy,
-      diagnosticsEnabled,
-    );
+    const persistedEvidence = this.resolvePersistedEvidence(snapshot.conversationId, options);
+    const mediaEvidence = persistedEvidence === null
+      ? selectMediaEvidenceWithinBudget(
+          memory.mediaEvidence,
+          snapshot.currentMessage.text,
+          policy.maxMediaEvidenceItems,
+          usedUnits,
+          policy,
+          diagnosticsEnabled,
+        )
+      : selectProtectedEvidence(persistedEvidence, usedUnits, policy, diagnosticsEnabled);
     usedUnits = mediaEvidence.usedUnits;
 
-    const importantFacts = selectWithinBudget(
-      rankFacts(memory.importantFacts, snapshot.currentMessage.text),
-      this.budgetPolicy.maxFactItems,
+    const sameChatRetrieved = selectRetrievedWithinBudget(
+      this.retrieve(snapshot, [snapshot.conversationId], responseModeLimit(options.responseMode, false), options),
       usedUnits,
-      this.budgetPolicy,
+      policy,
+      false,
+    );
+    usedUnits = sameChatRetrieved.usedUnits;
+
+    const selectedChatRetrieved = options.selectedConversationId === undefined
+      ? { items: [] as ContextMemoryFact[], usedUnits }
+      : selectRetrievedWithinBudget(
+          this.retrieve(
+            snapshot,
+            [options.selectedConversationId],
+            responseModeLimit(options.responseMode, true),
+            options,
+          ),
+          usedUnits,
+          policy,
+          true,
+        );
+    usedUnits = selectedChatRetrieved.usedUnits;
+
+    const durableFacts = this.sources.listDurableFacts?.(snapshot.conversationId)
+      ?? memory.importantFacts;
+    const importantFacts = selectWithinBudget(
+      rankFacts(durableFacts, snapshot.currentMessage.text),
+      policy.maxFactItems,
+      usedUnits,
+      policy,
       formatMemoryFact,
       diagnosticsEnabled,
     );
     usedUnits = importantFacts.usedUnits;
 
-    const summaryEntries = selectWithinBudget(
-      rankSummaryEntries(memory.rollingSummary?.entries ?? [], snapshot.currentMessage.text),
-      this.budgetPolicy.maxSummaryEntries,
-      usedUnits,
-      this.budgetPolicy,
-      formatSummaryEntry,
-      diagnosticsEnabled,
-    );
+    const persistedSummary = this.sources.getNewestReadySummary?.(snapshot.conversationId);
+    const summaryEntries = persistedSummary === undefined
+      ? {
+          ...selectWithinBudget(
+            rankSummaryEntries(memory.rollingSummary?.entries ?? [], snapshot.currentMessage.text),
+            policy.maxSummaryEntries,
+            usedUnits,
+            policy,
+            formatSummaryEntry,
+            diagnosticsEnabled,
+          ),
+          summary: undefined,
+        }
+      : selectSummaryWithinBudget(persistedSummary, usedUnits, policy);
     usedUnits = summaryEntries.usedUnits;
 
     const budget: ContextBudgetMetadata = {
       policyId: this.budgetPolicy.policyId,
-      maximumUnits: this.budgetPolicy.maximumUnits,
+      maximumUnits: policy.maximumUnits,
       usedUnits,
     };
 
@@ -217,8 +281,14 @@ export class ContextOrchestrator {
         version: 'canonical-conversation-v2',
         recentTurns: selection.turns.map(cloneContextTurn),
         mediaEvidence: mediaEvidence.items.map(cloneMediaEvidence),
-        importantFacts: importantFacts.items.map(cloneMemoryFact),
-        olderSummary: buildSelectedSummary(summaryEntries.items),
+        importantFacts: [
+          ...sameChatRetrieved.items,
+          ...selectedChatRetrieved.items,
+          ...importantFacts.items.map(cloneMemoryFact),
+        ],
+        olderSummary: summaryEntries.summary === undefined
+          ? buildSelectedSummary(summaryEntries.items)
+          : summaryEntries.summary,
         budget,
       },
       memory: cloneContextMemory(memory),
@@ -239,6 +309,41 @@ export class ContextOrchestrator {
         budget,
       },
     };
+  }
+
+  private resolvePersistedEvidence(
+    conversationId: string,
+    options: ContextOrchestrationOptions,
+  ): VisualEvidenceRow | null {
+    const repository = this.sources.evidenceRepository;
+    if (repository === undefined) {
+      return null;
+    }
+    return options.referencedImage === undefined
+      ? repository.getActiveImageEvidence(conversationId)
+      : repository.resolveReferencedImageEvidence({ conversationId, ...options.referencedImage });
+  }
+
+  private retrieve(
+    snapshot: CanonicalConversationSnapshot,
+    conversationIds: readonly string[],
+    limit: number,
+    options: ContextOrchestrationOptions,
+  ): RetrievedItem[] {
+    const retriever = this.sources.retriever;
+    const manifest = this.sources.retrievalManifest;
+    if (retriever === undefined || limit <= 0) {
+      return [];
+    }
+    return retriever.search({
+      query: snapshot.currentMessage.text,
+      queryVector: options.queryVector,
+      conversationIds,
+      embeddingVersion: manifest?.embeddingVersion ?? '',
+      artifactHash: manifest?.artifactHash ?? '',
+      limit,
+      lexicalCandidates: this.sources.listLexicalCandidates?.(conversationIds) ?? [],
+    });
   }
 }
 
@@ -335,7 +440,9 @@ function selectRecentTurns(
   const selected: CanonicalContextTurn[] = [];
   const selectedDiagnostics: RecentTurnDiagnostic[] = [];
   let usedUnits = policy.measure(currentRequest);
-  const candidates = turns.slice(-policy.recentExactTurnLimit);
+  const candidates = policy.recentExactTurnLimit === 0
+    ? []
+    : turns.slice(-policy.recentExactTurnLimit);
 
   for (let index = candidates.length - 1; index >= 0; index -= 1) {
     const turn = candidates[index];
@@ -343,9 +450,6 @@ function selectRecentTurns(
       policy.measure(turn.question) +
       policy.measure(turn.answer ?? '') +
       TURN_ROLE_OVERHEAD_UNITS;
-    if (usedUnits + cost > policy.maximumUnits) {
-      break;
-    }
     selected.unshift({ question: turn.question, answer: turn.answer });
     usedUnits += cost;
     if (collectDiagnostics) {
@@ -359,6 +463,118 @@ function selectRecentTurns(
   }
 
   return { turns: selected, usedUnits, consideredCount: candidates.length, selectedDiagnostics };
+}
+
+function responseModeBudgetPolicy(
+  base: ContextBudgetPolicy,
+  mode: ResponseMode,
+): ContextBudgetPolicy {
+  const config = getResponseModeConfig(mode);
+  return new CharacterContextBudgetPolicy({
+    maximumUnits: config.contextBudgetUnits,
+    recentExactTurnLimit: config.recentExactTurns,
+    maxMediaEvidenceItems: base.maxMediaEvidenceItems,
+    maxFactItems: base.maxFactItems,
+    maxSummaryEntries: base.maxSummaryEntries,
+  });
+}
+
+function responseModeLimit(mode: ResponseMode | undefined, selected: boolean): number {
+  const config = getResponseModeConfig(mode ?? 'Medium');
+  return selected ? config.selectedChatRetrievalLimit : config.sameChatRetrievalLimit;
+}
+
+function selectProtectedEvidence(
+  row: VisualEvidenceRow,
+  initialUsedUnits: number,
+  policy: ContextBudgetPolicy,
+  collectDiagnostics: boolean,
+): {
+  items: ContextMediaEvidence[];
+  usedUnits: number;
+  candidates: RankedCandidateDiagnostic[];
+} {
+  const item = visualEvidenceRowToContext(row);
+  const usedUnits = initialUsedUnits + policy.measure(formatMediaEvidence(item)) + TURN_ROLE_OVERHEAD_UNITS;
+  return {
+    items: [item],
+    usedUnits,
+    candidates: collectDiagnostics
+      ? [{
+          stableId: item.id, relevance: 1, createdAt: item.createdAt, selected: true,
+          exclusionReason: null, preview: truncatePreview(formatMediaEvidence(item)),
+        }]
+      : [],
+  };
+}
+
+function visualEvidenceRowToContext(row: VisualEvidenceRow): ContextMediaEvidence {
+  return {
+    version: 'context-media-evidence-v1',
+    id: row.id,
+    sourceMessageId: row.source_message_id,
+    modality: 'image',
+    sourcePath: row.image_asset_id,
+    summary: row.subject_object,
+    facts: parseStringArray(row.visible_features_json),
+    extractedText: parseStringArray(row.visible_text_json),
+    uncertainty: [row.visible_condition, ...parseStringArray(row.uncertainty_json)]
+      .filter(isNonEmptyString),
+    createdAt: row.created_at,
+  };
+}
+
+function parseStringArray(value: string): string[] {
+  const parsed: unknown = JSON.parse(value);
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+}
+
+function selectRetrievedWithinBudget(
+  retrieved: readonly RetrievedItem[],
+  initialUsedUnits: number,
+  policy: ContextBudgetPolicy,
+  selectedConversation: boolean,
+): { items: ContextMemoryFact[]; usedUnits: number } {
+  const items: ContextMemoryFact[] = [];
+  let usedUnits = initialUsedUnits;
+  for (const item of retrieved) {
+    const text = selectedConversation
+      ? `[Selected conversation ${item.sourceConversationId}] ${item.text}`
+      : item.text;
+    const cost = policy.measure(text) + TURN_ROLE_OVERHEAD_UNITS;
+    if (usedUnits + cost > policy.maximumUnits) {
+      continue;
+    }
+    items.push({
+      version: 'context-memory-fact-v1',
+      id: `retrieved:${item.sourceConversationId}:${item.id}`,
+      sourceMessageId: item.sourceMessageId,
+      text,
+      createdAt: item.timestamp,
+    });
+    usedUnits += cost;
+  }
+  return { items, usedUnits };
+}
+
+function selectSummaryWithinBudget(
+  summary: string | null,
+  initialUsedUnits: number,
+  policy: ContextBudgetPolicy,
+): {
+  items: ContextSummaryEntry[];
+  summary: string | null;
+  usedUnits: number;
+  candidates: RankedCandidateDiagnostic[];
+} {
+  if (summary === null) {
+    return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
+  }
+  const cost = policy.measure(summary) + TURN_ROLE_OVERHEAD_UNITS;
+  if (initialUsedUnits + cost > policy.maximumUnits) {
+    return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
+  }
+  return { items: [], summary, usedUnits: initialUsedUnits + cost, candidates: [] };
 }
 
 function rebuildDerivedMemory(

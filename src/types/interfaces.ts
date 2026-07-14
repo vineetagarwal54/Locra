@@ -2,6 +2,8 @@
 // contract tests (tests/contract/*) assert against these, mirroring the plain
 // module contracts in specs/001-camera-vlm-qa/contracts/*.contract.md.
 
+import type { ResponseMode } from '../inference/ResponseMode';
+
 import type {
   Conversation,
   CanonicalConversationContext,
@@ -20,6 +22,7 @@ export interface IInferenceQueue {
     options?: {
       turn?: 'first' | 'followUp';
       conversationContext?: CanonicalConversationContext;
+      responseMode?: ResponseMode;
     }
   ): Promise<void>;
   cancel(): void;
@@ -56,11 +59,12 @@ export interface IConversationStore {
   ): () => void;
   submit(
     conversationId: string | 'new',
-    request: { question: string; imagePath: string | null }
+    request: { question: string; imagePath: string | null; conversationTargetId?: string }
   ): Promise<{
     conversationId: string;
     originatingUserMessageId: string;
     assistantMessageId: string;
+    targetNotice?: string;
   }>;
   retryFailedMessage(conversationId: string, assistantMessageId: string): Promise<void>;
   cancelActiveGeneration(conversationId: string): void;
@@ -71,4 +75,6 @@ export interface IConversationStore {
   setDraftImage(conversationId: string | 'new', imagePath: string | null): void;
   clearDraft(conversationId: string | 'new'): void;
   startNewConversation(): void;
+  getResponseMode(conversationId: string | 'new'): ResponseMode;
+  setResponseMode(conversationId: string | 'new', mode: ResponseMode): void;
 }

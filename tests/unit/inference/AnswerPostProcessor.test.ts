@@ -55,4 +55,41 @@ describe('AnswerPostProcessor (FR-054)', () => {
     expect(assessAnswerQuality('The mug is blue.')).toBe('complete');
     expect(assessAnswerQuality('The mug is blue and the')).toBe('truncated');
   });
+
+  it('removes consecutive repeated sentences, keeping one', () => {
+    const repeated =
+      'Water boils at 100 degrees Celsius. Water boils at 100 degrees Celsius. It does so at sea level.';
+
+    const result = postProcessAnswer(repeated);
+
+    expect(result.text).toBe(
+      'Water boils at 100 degrees Celsius. It does so at sea level.'
+    );
+    expect(result.verdict).toBe('looping');
+  });
+
+  it('removes consecutive repeated paragraphs, keeping one', () => {
+    const repeated = 'Here is the summary.\n\nHere is the summary.\n\nThat is all.';
+
+    const result = postProcessAnswer(repeated);
+
+    expect(result.text).toBe('Here is the summary.\n\nThat is all.');
+  });
+
+  it('does not remove non-consecutive repeated sentences', () => {
+    const spaced = 'Turn it off. Then wait a moment. Turn it off.';
+
+    const result = postProcessAnswer(spaced);
+
+    expect(result.text).toBe(spaced);
+    expect(result.verdict).toBe('complete');
+  });
+
+  it('preserves repeated lines inside a fenced code block', () => {
+    const code = 'Run this:\n\n```\nretry()\nretry()\nretry()\n```';
+
+    const result = postProcessAnswer(code);
+
+    expect(result.text).toContain('retry()\nretry()\nretry()');
+  });
 });

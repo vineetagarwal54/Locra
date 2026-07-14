@@ -68,6 +68,13 @@ describe('ConversationSearch', () => {
     ).toBe(IMAGE_CONVERSATION_TITLE);
   });
 
+  it('uses a persisted title when a paginated header has no messages', () => {
+    expect(deriveConversationTitle(makeConversation({
+      title: 'Niagara trip',
+      messages: [],
+    }))).toBe('Niagara trip');
+  });
+
   it('previews the completed assistant response or the most recent user text otherwise', () => {
     expect(deriveConversationPreview(makeConversation())).toBe('A ceramic mug on a desk.');
 

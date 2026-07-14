@@ -216,6 +216,93 @@ describe('conversationStore', () => {
     ]);
   });
 
+  it('continues without cross-chat context when a selected target was deleted', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const ids = [...ID_SEQUENCE];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      targetResolver: { resolve: () => ({ kind: 'not-found' }) },
+    });
+
+    const result = await store.submit('new', {
+      question: 'Use that trip conversation.',
+      imagePath: null,
+      conversationTargetId: 'deleted-conversation',
+    });
+
+    expect(result.targetNotice).toMatch(/no longer available/i);
+    expect(queue.submitted).toHaveLength(1);
+  });
+
+  it('asks which past chat when ambiguous, then resumes with the chosen one', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const ids = ['conversation-a', 'user-a', 'assistant-a', 'request-b', 'user-b', 'assistant-b'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      targetResolver: {
+        resolve: () => ({
+          kind: 'ambiguous',
+          candidates: [
+            { id: 'japan', title: 'Japan trip', createdAt: 1, updatedAt: 2 },
+            { id: 'japan2', title: 'Japan plans', createdAt: 1, updatedAt: 3 },
+          ],
+        }),
+      },
+    });
+
+    // Ambiguous reference -> a clarification turn is posted, no generation runs.
+    const first = await store.submit('new', {
+      question: 'Do you remember our previous chats?',
+      imagePath: null,
+    });
+    expect(queue.submitted).toHaveLength(0);
+    expect(store.isAnyGenerationInFlight()).toBe(false);
+    const assistant = history
+      .get(first.conversationId)
+      ?.messages.find((message) => message.role === 'assistant');
+    expect(assistant?.status).toBe('completed');
+    expect(assistant?.text).toMatch(/Japan trip/);
+    expect(assistant?.text).toMatch(/Japan plans/);
+
+    // The next reply selects a remembered candidate and generation resumes.
+    const second = await store.submit(first.conversationId, { question: '2', imagePath: null });
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(queue.submitted).toHaveLength(1);
+  });
+
+  it('records a benchmark only for a completed attempt, never a failed one', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const ids = [...ID_SEQUENCE];
+    const recordBenchmark = jest.fn();
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      recordBenchmark,
+    });
+
+    await store.submit('new', { question: 'Text only.', imagePath: null });
+    queue.emit(makeInferenceState('errored'));
+    expect(recordBenchmark).not.toHaveBeenCalled();
+
+    await store.submit('conversation-a', { question: 'Try again.', imagePath: null });
+    queue.emit(makeInferenceState('completed', 'The answer.'));
+    expect(recordBenchmark).toHaveBeenCalledTimes(1);
+    expect(recordBenchmark).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'text', conversationId: 'conversation-a' })
+    );
+  });
+
   it('snapshots completed canonical turns for every follow-up in chronological order', async () => {
     const { store, queue } = makeStore();
 
@@ -243,7 +330,7 @@ describe('conversationStore', () => {
       olderSummary: null,
       budget: {
         policyId: 'character-budget-v1',
-        maximumUnits: 14_400,
+        maximumUnits: 7_000,
         usedUnits: 130,
       },
     });
@@ -326,7 +413,7 @@ describe('conversationStore', () => {
     expect(store.getConversationRuntimeState('conversation-b')).toBeNull();
   });
 
-  it('retryFailedMessage resets the identified assistant message in place', async () => {
+  it('retryFailedMessage preserves the failed attempt and appends a new active attempt', async () => {
     const { store, queue, history } = makeStore();
     await store.submit('new', { question: 'A question', imagePath: null });
     queue.emit(makeInferenceState('errored'));
@@ -334,20 +421,25 @@ describe('conversationStore', () => {
     await store.retryFailedMessage('conversation-a', 'assistant-a');
 
     const conversation = history.get('conversation-a');
-    expect(conversation?.messages.map((message) => message.id)).toEqual(['user-a', 'assistant-a']);
+    expect(conversation?.messages.map((message) => message.id)).toEqual([
+      'user-a', 'assistant-a', 'request-b',
+    ]);
     expect(conversation?.messages[1]).toEqual(
+      expect.objectContaining({ id: 'assistant-a', status: 'failed' })
+    );
+    expect(conversation?.messages[2]).toEqual(
       expect.objectContaining({
-        id: 'assistant-a',
+        id: 'request-b',
         status: 'generating',
         errorMessage: null,
       })
     );
     expect(queue.submitted.at(-1)).toEqual(
       expect.objectContaining({
-        requestId: 'request-b',
+        requestId: 'user-b',
         conversationId: 'conversation-a',
         originatingUserMessageId: 'user-a',
-        assistantMessageId: 'assistant-a',
+        assistantMessageId: 'request-b',
       })
     );
   });

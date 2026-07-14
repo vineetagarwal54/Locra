@@ -103,10 +103,14 @@ describe('InferenceQueue runtime neutrality', () => {
 
     queue.cancel();
     expect((receivedSignal as AbortSignal | null)?.aborted).toBe(true);
-    expect(queue.getState().status).toBe('idle');
+    // Race-safe cancellation: the queue stays in-flight ('cancelling') until the
+    // native call settles and its resource lease is released — it does not flip to
+    // 'idle' the instant stop is pressed.
+    expect(queue.getState().status).toBe('cancelling');
 
     generateDeferred.resolve({ response: '', tokenCount: 0 });
     await submitPromise;
+    expect(queue.getState().status).toBe('idle');
   });
 
   it('surfaces a neutral-adapter failure as an errored queue state', async () => {
