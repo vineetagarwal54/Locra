@@ -3,6 +3,51 @@ import type {
   InferenceEngineAdapter,
   InferenceEngineHandle,
 } from '../../../src/inference/InferenceEngineHandle';
+import {
+  inferenceEngineAdapter,
+  registerInferenceEngine,
+} from '../../../src/inference/InferenceEngineRegistry';
+
+function makeHandle(overrides: Partial<InferenceEngineHandle>): InferenceEngineHandle {
+  return {
+    generate: jest.fn(async (): Promise<string> => 'done'),
+    cancel: jest.fn(),
+    getResponse: (): string => '',
+    isGenerating: (): boolean => false,
+    isReady: (): boolean => true,
+    getGeneratedTokenCount: (): number => 0,
+    getPromptTokenCount: (): number => 0,
+    getTotalTokenCount: (): number => 0,
+    getMessageHistoryLength: (): number => 0,
+    clearHistory: jest.fn(),
+    getError: (): string | null => null,
+    subscribe: (): (() => void) => jest.fn(),
+    ...overrides,
+  };
+}
+
+describe('inference engine adapter loadModel', () => {
+  afterEach(() => registerInferenceEngine(null));
+
+  it('loads a ready runtime even when a prior generation left an error (e.g. a cancel)', async () => {
+    // Regression: after a user cancel the handle reports "Generation was cancelled."
+    // but the runtime is still ready — the next loadModel must resolve, not reject,
+    // so the following answer is not spuriously marked failed.
+    registerInferenceEngine(
+      makeHandle({ isReady: (): boolean => true, getError: (): string | null => 'Generation was cancelled.' }),
+    );
+
+    await expect(inferenceEngineAdapter.loadModel()).resolves.toBeUndefined();
+  });
+
+  it('rejects only when the runtime is not ready and reports an error', async () => {
+    registerInferenceEngine(
+      makeHandle({ isReady: (): boolean => false, getError: (): string | null => 'Model failed to load.' }),
+    );
+
+    await expect(inferenceEngineAdapter.loadModel()).rejects.toThrow(/failed to load/i);
+  });
+});
 
 describe('runtime-neutral inference contracts', () => {
   it('supports idempotent loading, normalized messages, cumulative streaming, cancellation, and metrics', async () => {

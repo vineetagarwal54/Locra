@@ -12,6 +12,7 @@ import {
 import type { SqlParams, SqliteDriver, SqlRunResult } from '../types';
 
 import { ensureSchemaOrReset } from './DevSchemaReset';
+import { applyAdditiveSchema } from './Schema';
 
 export const LOCRA_DATABASE_NAME = 'locra.db';
 
@@ -67,6 +68,9 @@ export function openLocraDatabase(options: OpenDatabaseOptions = {}): SqliteDriv
   ensureSchemaOrReset(driver, {
     isDevelopment: resolveIsDevelopment(options.isDevelopment),
   });
+  // Additive tables (e.g. benchmark_run) are created idempotently on every open so
+  // an existing store gains them without a destructive schema-version reset.
+  applyAdditiveSchema(driver);
   return driver;
 }
 

@@ -25,6 +25,7 @@ const REQUIRED_TABLES = [
   'durable_fact_source',
   'embedding',
   'summary',
+  'benchmark_run',
 ] as const;
 
 describe('SQL schema contract', () => {
@@ -53,10 +54,10 @@ describe('SQL schema contract', () => {
   });
 
   it('cascades every conversation child on delete', () => {
-    // Seven tables reference conversation(id) directly: message, image_asset,
-    // visual_evidence, chunk, durable_fact, embedding, summary.
+    // Eight tables reference conversation(id) directly: message, image_asset,
+    // visual_evidence, chunk, durable_fact, embedding, summary, benchmark_run.
     const directRefs = DDL.match(/REFERENCES conversation\(id\) ON DELETE CASCADE/g) ?? [];
-    expect(directRefs.length).toBe(7);
+    expect(directRefs.length).toBe(8);
     // The two link tables cascade transitively via their parents.
     expect(DDL).toMatch(/message_image[\s\S]*REFERENCES message\(id\) ON DELETE CASCADE/);
     expect(DDL).toMatch(/durable_fact_source[\s\S]*REFERENCES durable_fact\(id\) ON DELETE CASCADE/);

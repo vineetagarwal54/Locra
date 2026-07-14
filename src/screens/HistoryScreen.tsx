@@ -3,7 +3,6 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Pressable,
-  Alert,
   SectionList,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConversationListItem } from '../components/ConversationListItem';
+import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
 import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import {
@@ -48,6 +48,7 @@ export function HistoryScreen({ navigation }: Props) {
   const loadMore = useHistoryStore((s) => s.loadMore);
   const deleteConversation = useHistoryStore((s) => s.delete);
   const [query, setQuery] = useState('');
+  const { confirm, dialog } = useConfirmSheet();
 
   useEffect(() => {
     refresh();
@@ -91,11 +92,14 @@ export function HistoryScreen({ navigation }: Props) {
   );
 
   const onDelete = useCallback((conversationId: string): void => {
-    Alert.alert('Delete conversation?', 'This removes its messages and local images from this phone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => deleteConversation(conversationId) },
-    ]);
-  }, [deleteConversation]);
+    confirm({
+      title: 'Delete conversation?',
+      message: 'This removes its messages and local images from this phone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => deleteConversation(conversationId),
+    });
+  }, [confirm, deleteConversation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -190,6 +194,7 @@ export function HistoryScreen({ navigation }: Props) {
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
       />
+      {dialog}
     </SafeAreaView>
   );
 }

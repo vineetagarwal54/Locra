@@ -159,6 +159,16 @@ describe('InferenceQueue', () => {
 
     queue.cancel();
 
+    // Race-safe cancel: the queue stays in-flight ('cancelling') and clears the
+    // partial output immediately, but only settles to idle once the native call
+    // returns (below).
+    expect(queue.getState().status).toBe('cancelling');
+    expect(queue.getState().response).toBe('');
+
+    // A late resolution of the cancelled generation must not resurrect output.
+    gate.resolve({ response: 'partial ans and more', tokenCount: 9 });
+    await inFlight;
+
     // Subscribers observe the terminal 'cancelled' notification (contract)...
     expect(seen.some((s) => s.status === 'cancelled')).toBe(true);
     // ...and the queue returns to idle with no residual output.
@@ -166,12 +176,6 @@ describe('InferenceQueue', () => {
     expect(state.status).toBe('idle');
     expect(state.response).toBe('');
     expect(state.metrics).toBeNull();
-
-    // A late resolution of the cancelled generation must not resurrect output.
-    gate.resolve({ response: 'partial ans and more', tokenCount: 9 });
-    await inFlight;
-    expect(queue.getState().response).toBe('');
-    expect(queue.getState().status).toBe('idle');
   });
 
   it('rejects a follow-up before inference when canonical context is omitted', async () => {

@@ -1,83 +1,104 @@
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { ReactElement } from 'react';
-import { useCallback, useEffect, useMemo } from 'react';
+import { type ReactElement, useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { haptics, theme } from '../constants/theme';
+import { designTokens, haptics } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { useHistoryStore } from '../store/historyStore';
+import type { BenchmarkFilter } from '../persistence/BenchmarkRepository';
+import { benchmarkRepository } from '../store/historyStore';
+import type { BenchmarkRunRow } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Benchmark'>;
-type HistorySession = ReturnType<typeof useHistoryStore.getState>['conversations'][number];
-type SessionWithMetrics = HistorySession & { metrics: NonNullable<HistorySession['metrics']> };
-type PerformanceMetrics = NonNullable<HistorySession['metrics']>;
-type MetricKey = keyof PerformanceMetrics;
 
-interface MetricDefinition {
-  key: MetricKey;
-  title: string;
-  unit: string;
-  summaryLabel: string;
+type MetricFormat = 'duration' | 'rate';
+
+interface MetricCard {
+  readonly accessor: (run: BenchmarkRunRow) => number;
+  readonly title: string;
+  readonly help: string;
+  readonly format: MetricFormat;
+  readonly higherBetter: boolean;
+  /** Only shown when the visible runs include image turns. */
+  readonly imageOnly?: boolean;
 }
 
-interface MetricTrend {
-  definition: MetricDefinition;
-  average: number;
-  latest: number;
-  values: number[];
-}
-
-const READABLE_LINE_HEIGHT_RATIO = 1.45;
 const MAX_TREND_POINTS = 8;
-const METRICS: MetricDefinition[] = [
+const RECENT_RUNS_SHOWN = 6;
+
+const METRIC_CARDS: readonly MetricCard[] = [
   {
-    key: 'modelLoadTimeMs',
-    title: 'Model load',
-    unit: 'ms',
-    summaryLabel: 'Lower is smoother',
+    accessor: (run) => run.first_token_latency_ms,
+    title: 'Time to first token',
+    help: 'How quickly Locra starts replying after you send.',
+    format: 'duration',
+    higherBetter: false,
   },
   {
-    key: 'preprocessingTimeMs',
-    title: 'Image prep',
-    unit: 'ms',
-    summaryLabel: 'Lower is smoother',
+    accessor: (run) => run.total_wall_time_ms,
+    title: 'Total response time',
+    help: 'How long the whole answer took to finish.',
+    format: 'duration',
+    higherBetter: false,
   },
   {
-    key: 'firstTokenLatencyMs',
-    title: 'First token',
-    unit: 'ms',
-    summaryLabel: 'Lower is smoother',
+    accessor: (run) => run.tokens_per_second,
+    title: 'Tokens per second',
+    help: 'How fast Locra writes the answer once it starts.',
+    format: 'rate',
+    higherBetter: true,
   },
   {
-    key: 'tokensPerSecond',
-    title: 'Tokens/sec',
-    unit: '',
-    summaryLabel: 'Higher is faster',
+    accessor: (run) => run.model_load_time_ms,
+    title: 'Model loading time',
+    help: 'Time to get the model ready to answer.',
+    format: 'duration',
+    higherBetter: false,
   },
   {
-    key: 'totalWallTimeMs',
-    title: 'Total time',
-    unit: 'ms',
-    summaryLabel: 'Lower is smoother',
+    accessor: (run) => run.preprocessing_time_ms,
+    title: 'Image preparation',
+    help: 'Time spent preparing an attached photo before answering.',
+    format: 'duration',
+    higherBetter: false,
+    imageOnly: true,
   },
 ];
 
+const FILTERS: readonly { readonly key: BenchmarkFilter; readonly label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'text', label: 'Text' },
+  { key: 'image', label: 'Image' },
+];
+
 export function BenchmarkScreen({ navigation }: Props): ReactElement {
-  const sessions = useHistoryStore((s) => s.conversations);
-  const refresh = useHistoryStore((s) => s.refresh);
+  const [filter, setFilter] = useState<BenchmarkFilter>('all');
+  const [totalCount, setTotalCount] = useState(0);
+  const [runs, setRuns] = useState<BenchmarkRunRow[]>([]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  const completedSessions = useMemo(() => sessions.filter(hasMetrics), [sessions]);
-  const trends = useMemo(() => buildMetricTrends(completedSessions), [completedSessions]);
+  useFocusEffect(
+    useCallback(() => {
+      // The store counts across ALL kinds so the empty state only appears when no
+      // successful run of any kind exists; the list itself honors the filter.
+      setTotalCount(benchmarkRepository.count('all'));
+      setRuns(benchmarkRepository.listRecent(filter, 50));
+      return undefined;
+    }, [filter]),
+  );
 
   const onBack = useCallback((): void => {
     void haptics.tap();
     navigation.goBack();
   }, [navigation]);
+
+  const onSelectFilter = useCallback((next: BenchmarkFilter): void => {
+    void haptics.tap();
+    setFilter(next);
+  }, []);
+
+  const hasImageRuns = runs.some((run) => run.kind === 'image');
+  const visibleCards = METRIC_CARDS.filter((card) => card.imageOnly !== true || hasImageRuns);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -88,73 +109,144 @@ export function BenchmarkScreen({ navigation }: Props): ReactElement {
           style={styles.headerButton}
           onPress={onBack}
         >
-          <Text style={styles.headerButtonLabel}>History</Text>
+          <Text style={styles.headerButtonLabel}>Back</Text>
         </Pressable>
         <Text style={styles.title}>Benchmarks</Text>
         <View style={styles.headerSpacer} />
       </View>
 
-      {completedSessions.length === 0 ? (
+      {totalCount === 0 ? (
         <BenchmarkEmptyState />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
-          <View style={styles.summaryBlock}>
-            <Text style={styles.summaryValue}>{completedSessions.length}</Text>
-            <Text style={styles.summaryLabel}>
-              {completedSessions.length === 1 ? 'answer tracked' : 'answers tracked'}
-            </Text>
+          <Text style={styles.intro}>
+            Real performance on this device, measured on each completed answer.
+          </Text>
+
+          <View style={styles.filterRow}>
+            {FILTERS.map((option) => (
+              <FilterChip
+                key={option.key}
+                label={option.label}
+                selected={filter === option.key}
+                onPress={() => onSelectFilter(option.key)}
+              />
+            ))}
           </View>
 
-          {trends.map((trend) => (
-            <MetricTrendCard key={trend.definition.key} trend={trend} />
-          ))}
+          {runs.length === 0 ? (
+            <View style={styles.noneForFilter}>
+              <Text style={styles.noneForFilterText}>
+                No {filter} answers yet. Try another filter.
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.summaryBlock}>
+                <Text style={styles.summaryValue}>{runs.length}</Text>
+                <Text style={styles.summaryLabel}>
+                  {runs.length === 1 ? 'answer measured' : 'answers measured'}
+                </Text>
+              </View>
+
+              {visibleCards.map((card) => (
+                <MetricCardView key={card.title} card={card} runs={runs} />
+              ))}
+
+              <Text style={styles.sectionHeading}>Recent runs</Text>
+              {runs.slice(0, RECENT_RUNS_SHOWN).map((run) => (
+                <RecentRunRow key={run.id} run={run} />
+              ))}
+            </>
+          )}
         </ScrollView>
       )}
     </SafeAreaView>
   );
 }
 
-interface MetricTrendCardProps {
-  trend: MetricTrend;
+function FilterChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}): ReactElement {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Show ${label} runs`}
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [
+        styles.chip,
+        selected && styles.chipSelected,
+        pressed && styles.chipPressed,
+      ]}
+      onPress={onPress}
+    >
+      <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>{label}</Text>
+    </Pressable>
+  );
 }
 
-function MetricTrendCard({ trend }: MetricTrendCardProps): ReactElement {
-  const maxValue = Math.max(...trend.values, 1);
+function MetricCardView({ card, runs }: { card: MetricCard; runs: BenchmarkRunRow[] }): ReactElement {
+  // Runs arrive newest-first; chart them oldest→latest.
+  const chronological = [...runs].reverse();
+  const values = chronological.map(card.accessor);
+  const trend = values.slice(-MAX_TREND_POINTS);
+  const averageValue = average(values);
+  const latestValue = values[values.length - 1] ?? 0;
+  const maxValue = Math.max(...trend, 1);
 
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleBlock}>
-          <Text style={styles.cardTitle}>{trend.definition.title}</Text>
-          <Text style={styles.cardSubtitle}>{trend.definition.summaryLabel}</Text>
+          <Text style={styles.cardTitle}>{card.title}</Text>
+          <Text style={styles.cardHelp}>{card.help}</Text>
         </View>
-        <View style={styles.metricNumbers}>
-          <Text style={styles.metricValue}>{formatMetric(trend.average, trend.definition)}</Text>
-          <Text style={styles.metricLabel}>avg</Text>
+        <View style={styles.cardNumbers}>
+          <Text style={styles.cardValue}>{formatMetric(averageValue, card.format)}</Text>
+          <Text style={styles.cardValueLabel}>average</Text>
         </View>
       </View>
 
       <View style={styles.trendRow}>
-        {trend.values.map((value, index) => (
-          <View
-            key={`${trend.definition.key}-${index}`}
-            style={styles.trendPoint}
-            accessibilityLabel={`${trend.definition.title} sample ${index + 1}: ${formatMetric(
-              value,
-              trend.definition
-            )}`}
-          >
-            <View style={[styles.trendBar, getBarLevelStyle(value, maxValue)]} />
+        {trend.map((value, index) => (
+          <View key={index} style={styles.trendPoint}>
+            <View style={[styles.trendBar, barLevelStyle(value, maxValue, card.higherBetter)]} />
           </View>
         ))}
       </View>
 
       <View style={styles.cardFooter}>
-        <Text style={styles.footerText}>oldest</Text>
-        <Text style={styles.footerText}>
-          latest {formatMetric(trend.latest, trend.definition)}
+        <Text style={styles.footerText}>{card.higherBetter ? 'higher is better' : 'lower is better'}</Text>
+        <Text style={styles.footerText}>latest {formatMetric(latestValue, card.format)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function RecentRunRow({ run }: { run: BenchmarkRunRow }): ReactElement {
+  return (
+    <View style={styles.runRow}>
+      <View style={[styles.kindBadge, run.kind === 'image' && styles.kindBadgeImage]}>
+        <Text style={[styles.kindBadgeText, run.kind === 'image' && styles.kindBadgeTextImage]}>
+          {run.kind === 'image' ? 'Image' : 'Text'}
         </Text>
       </View>
+      <View style={styles.runNumbers}>
+        <Text style={styles.runPrimary}>
+          {formatMetric(run.total_wall_time_ms, 'duration')} total
+        </Text>
+        <Text style={styles.runSecondary}>
+          {formatMetric(run.first_token_latency_ms, 'duration')} to first token ·{' '}
+          {formatMetric(run.tokens_per_second, 'rate')}
+        </Text>
+      </View>
+      <Text style={styles.runTime}>{formatRelativeTime(run.created_at)}</Text>
     </View>
   );
 }
@@ -167,32 +259,11 @@ function BenchmarkEmptyState(): ReactElement {
       </View>
       <Text style={styles.emptyTitle}>No timing history yet</Text>
       <Text style={styles.emptyBody}>
-        Ask a few questions and Locra will chart model load, image prep, first token, tokens per
-        second, and total time here.
+        Ask a few questions and Locra will chart time to first token, total response time, tokens
+        per second, model loading, and image preparation here.
       </Text>
     </View>
   );
-}
-
-function hasMetrics(session: HistorySession): session is SessionWithMetrics {
-  return session.metrics !== null;
-}
-
-function buildMetricTrends(sessions: SessionWithMetrics[]): MetricTrend[] {
-  return METRICS.map((definition) => {
-    const chronologicalValues = sessions
-      .slice(0, MAX_TREND_POINTS)
-      .reverse()
-      .map((session) => session.metrics[definition.key]);
-    const allValues = sessions.map((session) => session.metrics[definition.key]);
-
-    return {
-      definition,
-      average: average(allValues),
-      latest: chronologicalValues[chronologicalValues.length - 1] ?? 0,
-      values: chronologicalValues,
-    };
-  });
 }
 
 function average(values: number[]): number {
@@ -202,198 +273,292 @@ function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function formatMetric(value: number, definition: MetricDefinition): string {
-  if (definition.key === 'tokensPerSecond') {
-    return value.toFixed(1);
+function formatMetric(value: number, format: MetricFormat): string {
+  if (format === 'rate') {
+    return `${value.toFixed(1)} tok/s`;
   }
-  return `${Math.round(value)} ${definition.unit}`;
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)} s`;
+  }
+  return `${Math.round(value)} ms`;
 }
 
-function getBarLevelStyle(value: number, maxValue: number): ViewStyle {
+function formatRelativeTime(timestamp: number): string {
+  const deltaMs = Date.now() - timestamp;
+  const minutes = Math.round(deltaMs / 60_000);
+  if (minutes < 1) {
+    return 'just now';
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function barLevelStyle(value: number, maxValue: number, higherBetter: boolean): ViewStyle {
   const ratio = maxValue <= 0 ? 0 : value / maxValue;
-  if (ratio >= 0.8) return styles.barLevel5;
-  if (ratio >= 0.6) return styles.barLevel4;
-  if (ratio >= 0.4) return styles.barLevel3;
-  if (ratio >= 0.2) return styles.barLevel2;
-  return styles.barLevel1;
+  const height = Math.max(designTokens.spacing.space4, Math.round(ratio * (designTokens.spacing.space24 * 2)));
+  return { height, opacity: higherBetter ? 0.4 + ratio * 0.6 : 1 - ratio * 0.6 };
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.canvas,
+    backgroundColor: designTokens.color.canvas,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: theme.space4,
-    paddingVertical: theme.space3,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingVertical: designTokens.spacing.space12,
+    borderBottomWidth: designTokens.borderWidth,
+    borderBottomColor: designTokens.color.divider,
   },
   headerButton: {
-    minWidth: theme.space6 * 3,
-    height: theme.space6,
+    minWidth: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24,
     justifyContent: 'center',
   },
   headerButtonLabel: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    fontWeight: '700',
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
   },
   title: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
   },
   headerSpacer: {
-    minWidth: theme.space6 * 3,
-    height: theme.space6,
+    minWidth: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24,
   },
   content: {
-    paddingHorizontal: theme.space4,
-    paddingBottom: theme.space6,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingBottom: designTokens.spacing.space40,
+    paddingTop: designTokens.spacing.space16,
+  },
+  intro: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
+    lineHeight: designTokens.type.body.lineHeight,
+    marginBottom: designTokens.spacing.space16,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: designTokens.spacing.space8,
+    marginBottom: designTokens.spacing.space16,
+  },
+  chip: {
+    paddingVertical: designTokens.spacing.space8,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.pill,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    backgroundColor: designTokens.color.surface,
+  },
+  chipSelected: {
+    backgroundColor: designTokens.color.primary,
+    borderColor: designTokens.color.primary,
+  },
+  chipPressed: {
+    opacity: 0.85,
+  },
+  chipLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+  },
+  chipLabelSelected: {
+    color: designTokens.color.onPrimary,
+  },
+  noneForFilter: {
+    padding: designTokens.spacing.space20,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+  },
+  noneForFilterText: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
+    textAlign: 'center',
   },
   summaryBlock: {
-    marginBottom: theme.space4,
-    padding: theme.space4,
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    marginBottom: designTokens.spacing.space16,
+    padding: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   summaryValue: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeXl,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.screenTitle.fontSize,
+    fontWeight: designTokens.type.screenTitle.fontWeight,
   },
   summaryLabel: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeSm,
-    marginTop: theme.space1,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginTop: designTokens.spacing.space4,
   },
   card: {
-    marginBottom: theme.space4,
-    padding: theme.space4,
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
+    marginBottom: designTokens.spacing.space16,
+    padding: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: theme.space4,
+    marginBottom: designTokens.spacing.space16,
   },
   cardTitleBlock: {
     flex: 1,
-    paddingRight: theme.space3,
+    paddingRight: designTokens.spacing.space12,
   },
   cardTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.cardTitle.fontSize,
+    fontWeight: designTokens.type.cardTitle.fontWeight,
   },
-  cardSubtitle: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    marginTop: theme.space1,
+  cardHelp: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginTop: designTokens.spacing.space4,
   },
-  metricNumbers: {
+  cardNumbers: {
     alignItems: 'flex-end',
   },
-  metricValue: {
-    color: theme.accent,
-    fontSize: theme.fontSizeMd,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
+  cardValue: {
+    color: designTokens.color.primary,
+    fontSize: designTokens.type.cardTitle.fontSize,
+    fontWeight: designTokens.type.cardTitle.fontWeight,
   },
-  metricLabel: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    marginTop: theme.space1,
+  cardValueLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    marginTop: designTokens.spacing.space4,
   },
   trendRow: {
-    height: theme.space6 * 3,
+    height: designTokens.spacing.space24 * 2,
     flexDirection: 'row',
     alignItems: 'flex-end',
+    gap: designTokens.spacing.space4,
   },
   trendPoint: {
     flex: 1,
-    height: theme.space6 * 3,
     justifyContent: 'flex-end',
-    marginRight: theme.space1,
   },
   trendBar: {
-    borderRadius: theme.radiusPill,
-    backgroundColor: theme.accent,
-  },
-  barLevel1: {
-    height: theme.space2,
-    opacity: 0.35,
-  },
-  barLevel2: {
-    height: theme.space4,
-    opacity: 0.5,
-  },
-  barLevel3: {
-    height: theme.space6,
-    opacity: 0.65,
-  },
-  barLevel4: {
-    height: theme.space6 * 2,
-    opacity: 0.8,
-  },
-  barLevel5: {
-    height: theme.space6 * 3,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: theme.space3,
+    marginTop: designTokens.spacing.space12,
   },
   footerText: {
-    color: theme.textMuted,
-    fontSize: theme.fontSizeXs,
-    fontVariant: ['tabular-nums'],
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+  },
+  sectionHeading: {
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.bodyStrong.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+    marginTop: designTokens.spacing.space8,
+    marginBottom: designTokens.spacing.space12,
+  },
+  runRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: designTokens.spacing.space12,
+    paddingHorizontal: designTokens.spacing.space16,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space8,
+  },
+  kindBadge: {
+    paddingVertical: designTokens.spacing.space4,
+    paddingHorizontal: designTokens.spacing.space8,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.divider,
+    marginRight: designTokens.spacing.space12,
+  },
+  kindBadgeImage: {
+    backgroundColor: designTokens.color.primarySoft,
+  },
+  kindBadgeText: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+  },
+  kindBadgeTextImage: {
+    color: designTokens.color.onPrimary,
+  },
+  runNumbers: {
+    flex: 1,
+  },
+  runPrimary: {
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.body.fontSize,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
+  },
+  runSecondary: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginTop: designTokens.spacing.space4,
+  },
+  runTime: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    marginLeft: designTokens.spacing.space8,
   },
   emptyContent: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: theme.space5,
-    paddingBottom: theme.space6,
+    paddingHorizontal: designTokens.spacing.space24,
+    paddingBottom: designTokens.spacing.space40,
   },
   emptyMeter: {
-    width: theme.space6 * 5,
-    height: theme.space6 * 3,
+    width: designTokens.spacing.space40 * 3,
+    height: designTokens.spacing.space24 * 3,
     justifyContent: 'flex-end',
-    padding: theme.space2,
-    borderRadius: theme.radiusLg,
-    backgroundColor: theme.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    marginBottom: theme.space4,
+    padding: designTokens.spacing.space8,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space16,
   },
   emptyMeterFill: {
-    height: theme.space6,
-    borderRadius: theme.radiusMd,
-    backgroundColor: theme.accentGlow,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.accentBorder,
+    height: designTokens.spacing.space24,
+    borderRadius: designTokens.radius.card,
+    backgroundColor: designTokens.color.primarySoft,
   },
   emptyTitle: {
-    color: theme.textPrimary,
-    fontSize: theme.fontSizeLg,
-    fontWeight: '700',
+    color: designTokens.color.textPrimary,
+    fontSize: designTokens.type.sectionTitle.fontSize,
+    fontWeight: designTokens.type.sectionTitle.fontWeight,
     textAlign: 'center',
-    marginBottom: theme.space2,
+    marginBottom: designTokens.spacing.space8,
   },
   emptyBody: {
-    color: theme.textSecondary,
-    fontSize: theme.fontSizeMd,
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.body.fontSize,
     textAlign: 'center',
-    lineHeight: theme.fontSizeMd * READABLE_LINE_HEIGHT_RATIO,
+    lineHeight: designTokens.type.body.lineHeight,
   },
 });

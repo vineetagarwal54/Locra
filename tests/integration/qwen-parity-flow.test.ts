@@ -122,9 +122,11 @@ describe('Qwen parity flow (runtime-neutral)', () => {
     queue.cancel();
 
     expect((signal as AbortSignal | null)?.aborted).toBe(true);
-    expect(queue.getState().status).toBe('idle');
+    // Race-safe cancel: stays 'cancelling' until the native call settles.
+    expect(queue.getState().status).toBe('cancelling');
     generateDeferred.resolve({ response: '', tokenCount: 0 });
     await submitPromise;
+    expect(queue.getState().status).toBe('idle');
   });
 
   it('recovers to a working turn after a failed generation', async () => {

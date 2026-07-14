@@ -5,9 +5,10 @@ import {
 } from '@react-navigation/drawer';
 import type { NavigationState, PartialState } from '@react-navigation/native';
 import { useMemo } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationListItem } from '../components/ConversationListItem';
+import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
 import {
   type ConversationRecencyGroup,
@@ -32,6 +33,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
   const { navigation } = props;
   const revision = useHistoryStore((s) => s.conversations);
   const activeConversationId = findActiveConversationId(props.state);
+  const { confirm, dialog } = useConfirmSheet();
 
   const groups = useMemo(() => {
     // revision is a change-tick; the actual list is read imperatively so the
@@ -63,10 +65,13 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
   };
 
   const onDelete = (conversationId: string): void => {
-    Alert.alert('Delete conversation?', 'This removes its messages and local images from this phone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => useHistoryStore.getState().delete(conversationId) },
-    ]);
+    confirm({
+      title: 'Delete conversation?',
+      message: 'This removes its messages and local images from this phone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: () => useHistoryStore.getState().delete(conversationId),
+    });
   };
 
   const onViewAllHistory = (): void => {
@@ -135,6 +140,7 @@ export function ConversationDrawer(props: DrawerContentComponentProps) {
         <FooterButton icon="history" label="View all history" onPress={onViewAllHistory} />
         <FooterButton icon="cog-outline" label="Settings" onPress={onSettings} />
       </View>
+      {dialog}
     </View>
   );
 }

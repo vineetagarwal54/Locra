@@ -86,9 +86,11 @@ describe('Qwen active V1 runtime flow', () => {
     await Promise.resolve();
     queue.cancel();
 
-    expect(queue.getState().status).toBe('idle');
+    // Race-safe cancel: stays 'cancelling' until the native call settles.
+    expect(queue.getState().status).toBe('cancelling');
     generateDeferred.resolve({ response: '', tokenCount: 0 });
     await submitPromise;
+    expect(queue.getState().status).toBe('idle');
   });
 
   it('reports a failed generation as an errored state', async () => {

@@ -93,6 +93,20 @@ export class ConversationRepository {
     );
   }
 
+  /**
+   * The single most recently updated conversation other than `activeId` — the
+   * referent of a natural "our previous chat" / "last time" request (US7). Returns
+   * null when the active conversation is the only one.
+   */
+  getMostRecentOther(activeId: string): ConversationTargetCandidateRow | null {
+    return this.driver.getFirstSync<ConversationTargetCandidateRow>(
+      `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
+       WHERE deleted_at IS NULL AND id != ?
+       ORDER BY updated_at DESC, id DESC LIMIT 1`,
+      [activeId],
+    );
+  }
+
   findTargetCandidates(tokens: readonly string[], limit = 10): ConversationTargetCandidateRow[] {
     const boundedLimit = Math.min(10, Math.max(1, Math.floor(limit)));
     const normalizedTokens = tokens.map((token) => normalizeTitle(token)).filter(

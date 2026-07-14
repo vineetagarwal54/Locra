@@ -173,6 +173,9 @@ export type InferenceStatus =
   | 'preprocessing'
   | 'loading_model'
   | 'streaming'
+  // A stop was requested but the native generation and resource lease have not
+  // settled yet; no new generation may start until this clears to 'idle'.
+  | 'cancelling'
   | 'completed'
   | 'cancelled'
   | 'errored';
@@ -236,6 +239,23 @@ export interface ConversationRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+}
+
+/** Kind of a benchmarked turn: image turns include preparation time, text turns don't. */
+export type BenchmarkKind = 'text' | 'image';
+
+/** One SUCCESSFULLY completed assistant attempt's timings (user-facing Benchmarks). */
+export interface BenchmarkRunRow {
+  id: string;
+  conversation_id: string;
+  message_id: string | null;
+  kind: BenchmarkKind;
+  model_load_time_ms: number;
+  preprocessing_time_ms: number;
+  first_token_latency_ms: number;
+  tokens_per_second: number;
+  total_wall_time_ms: number;
+  created_at: number;
 }
 
 export interface MessageRow {

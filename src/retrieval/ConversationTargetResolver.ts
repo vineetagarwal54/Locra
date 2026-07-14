@@ -19,15 +19,17 @@ export type ConversationTargetResolution =
 export interface ConversationTargetReference {
   readonly rawText?: string;
   readonly selectedId?: string;
+  /** The chat the request is typed in; excluded from cross-chat candidates. */
+  readonly activeConversationId?: string;
 }
 
+type ResolverConversations = Pick<
+  ConversationRepository,
+  'getConversation' | 'findTargetCandidates' | 'getMostRecentOther'
+>;
+
 export class ConversationTargetResolver {
-  constructor(
-    private readonly conversations: Pick<
-      ConversationRepository,
-      'getConversation' | 'findTargetCandidates'
-    >,
-  ) {}
+  constructor(private readonly conversations: ResolverConversations) {}
 
   resolve(reference: ConversationTargetReference): ConversationTargetResolution {
     if (reference.selectedId !== undefined) {
@@ -35,12 +37,27 @@ export class ConversationTargetResolver {
         ? { kind: 'not-found' }
         : { kind: 'scoped', conversationId: reference.selectedId };
     }
-    const namedTarget = extractNamedTarget(reference.rawText ?? '');
+
+    const rawText = reference.rawText ?? '';
+    const active = reference.activeConversationId;
+
+    // "Do you remember our previous chat?" / "what did we discuss last time?" —
+    // the referent is simply the most recently updated OTHER conversation.
+    if (referencesPreviousChat(rawText)) {
+      const recent = active === undefined ? null : this.conversations.getMostRecentOther(active);
+      return recent === null
+        ? { kind: 'not-found' }
+        : { kind: 'scoped', conversationId: recent.id };
+    }
+
+    const namedTarget = extractNamedTarget(rawText);
     if (namedTarget === null) {
       return { kind: 'active' };
     }
-    const candidates = this.conversations.findTargetCandidates(tokenizeTarget(namedTarget), 10)
-      .map(toCandidate);
+    const candidates = this.conversations
+      .findTargetCandidates(tokenizeTarget(namedTarget), 10)
+      .map(toCandidate)
+      .filter((candidate) => candidate.id !== active);
     if (candidates.length === 0) {
       return { kind: 'not-found' };
     }
@@ -51,24 +68,49 @@ export class ConversationTargetResolver {
   }
 }
 
+/** Natural phrasings that mean "the conversation before this one", with no title. */
+export function referencesPreviousChat(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const patterns = [
+    /\b(?:previous|last|earlier|prior|other|another)\s+(?:chat|conversation|discussion|thread)\b/i,
+    /\bour\s+(?:previous|last|earlier|prior)\b/i,
+    /\blast time\b/i,
+    /\bearlier\s+(?:today|conversation|we\s+(?:talked|discussed))\b/i,
+  ];
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
 export function extractNamedTarget(text: string): string | null {
   const normalized = text.replace(/\s+/g, ' ').trim();
   const patterns = [
-    /\buse\s+(?:my\s+)?(.+?)\s+(?:chat|conversation)\b/i,
-    /\b(?:from|in|using)\s+(?:my\s+)?(.+?)\s+(?:chat|conversation)\b/i,
-    /\b(?:chat|conversation)\s+(?:about|named|called)\s+(.+?)(?:[?.!,]|$)/i,
+    // "the chat where we discussed SSDs" / "conversation about the budget"
+    /\b(?:chat|conversation)\s+(?:where|when)\s+we\s+(?:discussed|talked about|covered|were discussing)\s+(.+?)(?:[?.!,]|$)/i,
+    /\b(?:chat|conversation)\s+(?:about|named|called|regarding|on)\s+(.+?)(?:[?.!,]|$)/i,
+    /\bwhere\s+we\s+(?:discussed|talked about|covered)\s+(.+?)(?:[?.!,]|$)/i,
+    // "from my Japan trip chat" / "in the tax notes conversation"
+    /\b(?:from|in|using)\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+(?:chat|conversation)\b/i,
+    /\buse\s+(?:my\s+|the\s+|our\s+)?(.+?)\s+(?:chat|conversation)\b/i,
   ];
   for (const pattern of patterns) {
     const match = normalized.match(pattern)?.[1]?.trim();
-    if (match !== undefined && match !== '') {
+    if (match !== undefined && match !== '' && !isFillerTarget(match)) {
       return match;
     }
   }
   return null;
 }
 
+/** Rejects article-only matches (e.g. "the", "that") that carry no title tokens. */
+function isFillerTarget(value: string): boolean {
+  return tokenizeTarget(value).length === 0;
+}
+
 function tokenizeTarget(value: string): string[] {
-  return value.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 2);
+  const stopWords = new Set(['the', 'my', 'our', 'that', 'this', 'a', 'an']);
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 2 && !stopWords.has(token));
 }
 
 function toCandidate(row: ConversationTargetCandidateRow): ConversationCandidate {
