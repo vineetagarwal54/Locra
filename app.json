@@ -45,7 +45,8 @@
           "forceCxx20": true,
           "enableOpenCLAndHexagon": true
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "extra": {
       "eas": {

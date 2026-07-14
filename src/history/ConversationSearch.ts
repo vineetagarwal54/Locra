@@ -4,6 +4,11 @@ export const IMAGE_CONVERSATION_TITLE = 'Image conversation';
 export const UNTITLED_CONVERSATION_TITLE = 'Untitled conversation';
 
 export function deriveConversationTitle(conversation: Conversation): string {
+  const persistedTitle = conversation.title?.trim();
+  if (persistedTitle !== undefined && persistedTitle !== '') {
+    return persistedTitle;
+  }
+
   const firstMessage = conversation.messages[0];
   if (firstMessage === undefined) {
     return UNTITLED_CONVERSATION_TITLE;

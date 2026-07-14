@@ -11,6 +11,7 @@ const RESPONSE_MODE_KEY = 'settings:response-mode';
 
 interface SettingsState {
   responseMode: ResponseMode;
+  defaultResponseMode: ResponseMode;
   setResponseMode: (mode: ResponseMode) => void;
 }
 
@@ -23,8 +24,9 @@ function readResponseMode(): ResponseMode {
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   responseMode: readResponseMode(),
+  defaultResponseMode: readResponseMode(),
   setResponseMode: (responseMode: ResponseMode): void => {
     storage.set(RESPONSE_MODE_KEY, responseMode);
-    set({ responseMode });
+    set({ responseMode, defaultResponseMode: responseMode });
   },
 }));

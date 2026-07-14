@@ -6,8 +6,10 @@ import type {
 import { formatMediaEvidence, formatMemoryFact } from './ContextOrchestrator';
 import {
   DEFAULT_RESPONSE_MODE,
+  getResponseModeConfig,
   getResponseModeInstruction,
   type ResponseMode,
+  type ResponseModeConfig,
 } from './ResponseMode';
 import { LOCRA_FOLLOW_UP_INSTRUCTION, LOCRA_SYSTEM_PROMPT } from './SystemPrompt';
 
@@ -26,6 +28,7 @@ export interface BuildCanonicalContextInput {
   conversationContext: CanonicalConversationContext;
   currentQuestion: string;
   responseMode?: ResponseMode;
+  responseModeConfig?: ResponseModeConfig;
 }
 
 const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
@@ -34,8 +37,10 @@ const INTERNAL_PERCEPTION_SYSTEM_PROMPT =
 export function buildCanonicalModelMessages(
   input: BuildCanonicalContextInput
 ): ModelRequestMessage[] {
+  const responseMode = input.responseMode ?? DEFAULT_RESPONSE_MODE;
+  const responseModeConfig = input.responseModeConfig ?? getResponseModeConfig(responseMode);
   return [
-    answerSystemMessage(input.conversationContext, input.responseMode ?? DEFAULT_RESPONSE_MODE),
+    answerSystemMessage(input.conversationContext, responseMode, responseModeConfig),
     ...input.conversationContext.recentTurns.flatMap(turnToMessages),
     userMessage(input.currentQuestion),
   ];
@@ -107,8 +112,9 @@ function systemMessage(content: string): ModelRequestMessage {
 function answerSystemMessage(
   context: CanonicalConversationContext,
   responseMode: ResponseMode,
+  responseModeConfig: ResponseModeConfig,
 ): ModelRequestMessage {
-  const modeInstruction = getResponseModeInstruction(responseMode);
+  const modeInstruction = getResponseModeInstruction(responseMode, responseModeConfig);
   if (!hasConversationContext(context)) {
     return systemMessage(`${LOCRA_SYSTEM_PROMPT}\n\n${modeInstruction}`);
   }

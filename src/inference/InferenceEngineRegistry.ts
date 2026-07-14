@@ -29,15 +29,19 @@ export const inferenceEngineAdapter: InferenceEngineAdapter = {
     return new Promise<void>((resolve, reject) => {
       let unsubscribe: (() => void) | null = null;
       const settle = (): boolean => {
+        // A ready runtime is loaded even if a PRIOR generation left an error string
+        // (e.g. a user cancellation): that is not a load failure and must not block
+        // the next request. Only a genuine load failure — not ready AND errored —
+        // rejects here.
+        if (handle.isReady()) {
+          unsubscribe?.();
+          resolve();
+          return true;
+        }
         const error = handle.getError();
         if (error !== null) {
           unsubscribe?.();
           reject(new Error(error));
-          return true;
-        }
-        if (handle.isReady()) {
-          unsubscribe?.();
-          resolve();
           return true;
         }
         return false;

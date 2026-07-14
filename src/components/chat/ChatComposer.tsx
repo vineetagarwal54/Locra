@@ -11,9 +11,13 @@ import {
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { designTokens, haptics } from '../../constants/theme';
+import type { ResponseMode } from '../../inference/ResponseMode';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
+
+import { ResponseModeSelector } from './ResponseModeSelector';
+import { VoiceControl } from './VoiceControl';
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -31,6 +35,8 @@ interface ChatComposerProps {
   onOpenCamera: () => void;
   onDraftChange: (draft: Draft) => void;
   onConversationResolved: (conversationId: string) => void;
+  responseMode: ResponseMode;
+  onResponseModeChange: (mode: ResponseMode) => void;
 }
 
 export function ChatComposer({
@@ -45,6 +51,8 @@ export function ChatComposer({
   onOpenCamera,
   onDraftChange,
   onConversationResolved,
+  responseMode,
+  onResponseModeChange,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
@@ -106,6 +114,7 @@ export function ChatComposer({
     void conversationStore
       .submit(conversationId, { question, imagePath })
       .then((result) => {
+        setSendError(result.targetNotice ?? null);
         onDraftChange(conversationStore.getDraft(conversationId));
         onConversationResolved(result.conversationId);
       })
@@ -180,22 +189,6 @@ export function ChatComposer({
       ) : null}
 
       <View style={styles.composer}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Attach image"
-          disabled={controlsDisabled}
-          style={({ pressed }) => [
-            styles.iconButton,
-            pressed && !controlsDisabled && styles.iconButtonPressed,
-            controlsDisabled && styles.disabled,
-          ]}
-          onPress={() => {
-            setSourceModalVisible(true);
-          }}
-        >
-          <MaterialCommunityIcons name="image-plus" size={22} color={designTokens.color.primary} />
-        </Pressable>
-
         <TextInput
           style={[styles.input, controlsDisabled && styles.inputDisabled]}
           value={draft.text}
@@ -206,34 +199,70 @@ export function ChatComposer({
           multiline
         />
 
-        {canCancel ? (
+        <View style={styles.controlsRow}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Stop generating"
-            style={({ pressed }) => [styles.stopButton, pressed && styles.stopButtonPressed]}
+            accessibilityLabel="Attach image"
+            disabled={controlsDisabled}
+            style={({ pressed }) => [
+              styles.iconButton,
+              pressed && !controlsDisabled && styles.iconButtonPressed,
+              controlsDisabled && styles.disabled,
+            ]}
             onPress={() => {
-              void haptics.tap();
-              onCancel();
+              setSourceModalVisible(true);
             }}
           >
-            <MaterialCommunityIcons name="stop" size={22} color={designTokens.color.onPrimary} />
+            <MaterialCommunityIcons name="image-plus" size={22} color={designTokens.color.primary} />
           </Pressable>
-        ) : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-            accessibilityState={{ disabled: !canSend }}
-            disabled={!canSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              pressed && canSend && styles.sendButtonPressed,
-              !canSend && styles.disabled,
-            ]}
-            onPress={onSubmit}
-          >
-            <MaterialCommunityIcons name="arrow-up" size={22} color={designTokens.color.onPrimary} />
-          </Pressable>
-        )}
+
+          <ResponseModeSelector
+            value={responseMode}
+            disabled={controlsDisabled}
+            onChange={onResponseModeChange}
+          />
+
+          <View style={styles.controlsSpacer} />
+
+          <VoiceControl
+            disabled={controlsDisabled}
+            onTranscript={(transcript) => {
+              const nextText = [draft.text.trim(), transcript]
+                .filter((value) => value !== '')
+                .join(' ');
+              onChangeText(nextText);
+            }}
+          />
+
+          {canCancel ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stop generating"
+              style={({ pressed }) => [styles.stopButton, pressed && styles.stopButtonPressed]}
+              onPress={() => {
+                void haptics.tap();
+                onCancel();
+              }}
+            >
+              <MaterialCommunityIcons name="stop" size={22} color={designTokens.color.onPrimary} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+              accessibilityState={{ disabled: !canSend }}
+              disabled={!canSend}
+              style={({ pressed }) => [
+                styles.sendButton,
+                pressed && canSend && styles.sendButtonPressed,
+                !canSend && styles.disabled,
+              ]}
+              onPress={onSubmit}
+            >
+              <MaterialCommunityIcons name="arrow-up" size={22} color={designTokens.color.onPrimary} />
+            </Pressable>
+          )}
+        </View>
       </View>
 
       <SourceModal
@@ -309,7 +338,7 @@ const styles = StyleSheet.create({
     paddingTop: designTokens.spacing.space12,
     paddingBottom: designTokens.spacing.space12,
     backgroundColor: designTokens.color.canvas,
-    borderTopWidth: designTokens.borderWidth,
+    // borderTopWidth: designTokens.borderWidth,
     borderTopColor: designTokens.color.divider,
   },
   attachmentPill: {
@@ -366,13 +395,28 @@ const styles = StyleSheet.create({
     marginLeft: designTokens.spacing.space8,
   },
   composer: {
+    overflow: 'hidden',
+    borderRadius: designTokens.radius.composer,
+    backgroundColor: designTokens.color.surfaceStrong,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+  },
+  controlsRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     gap: designTokens.spacing.space8,
+    minHeight: designTokens.spacing.space24 + designTokens.spacing.space16,
+    paddingHorizontal: designTokens.spacing.space8,
+    paddingVertical: designTokens.spacing.space4,
+    // borderTopWidth: designTokens.borderWidth,
+    borderTopColor: designTokens.color.divider,
+  },
+  controlsSpacer: {
+    flex: 1,
   },
   iconButton: {
-    width: designTokens.spacing.space24 * 2,
-    height: designTokens.spacing.space24 * 2,
+    width: designTokens.spacing.space24 + designTokens.spacing.space16,
+    height: designTokens.spacing.space24 + designTokens.spacing.space16,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: designTokens.radius.pill,
@@ -384,18 +428,14 @@ const styles = StyleSheet.create({
     backgroundColor: designTokens.color.divider,
   },
   input: {
-    flex: 1,
     minHeight: designTokens.spacing.space24 * 2,
     maxHeight: designTokens.spacing.space24 * 5,
     paddingHorizontal: designTokens.spacing.space16,
     paddingVertical: designTokens.spacing.space12,
-    borderRadius: designTokens.radius.composer,
-    backgroundColor: designTokens.color.surfaceStrong,
-    borderWidth: designTokens.borderWidth,
-    borderColor: designTokens.color.border,
     color: designTokens.color.textPrimary,
     fontSize: designTokens.type.body.fontSize,
     lineHeight: designTokens.type.body.lineHeight,
+    textAlignVertical: 'top',
   },
   inputDisabled: {
     color: designTokens.color.textSecondary,
