@@ -19,7 +19,9 @@ import {
 
 import { designTokens, haptics, theme } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { openAndroidAppSettings } from '../platform/AppSettings';
 import { conversationStore } from '../store/conversationStore';
+import { discardTemporaryImage } from '../store/mediaStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Capture'>;
 
@@ -69,6 +71,10 @@ export function CaptureScreen({ navigation, route }: Props) {
 
     try {
       const photo = await photoOutput.capturePhotoToFile({}, {});
+      const previousImage = conversationStore.getDraft(conversationId).imagePath;
+      if (previousImage !== null && previousImage !== photo.filePath) {
+        await discardTemporaryImage(previousImage);
+      }
       conversationStore.setDraftImage(conversationId, toInferencePath(photo.filePath));
       goBackToChat();
     } catch {
@@ -121,6 +127,14 @@ export function CaptureScreen({ navigation, route }: Props) {
               <Text style={styles.fallbackText}>
                 Allow camera access or choose Gallery from the chat composer.
               </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open Android settings for camera permission"
+                style={styles.settingsButton}
+                onPress={() => { void openAndroidAppSettings(); }}
+              >
+                <Text style={styles.settingsButtonText}>Open Android settings</Text>
+              </Pressable>
             </View>
           )}
         </View>
@@ -289,5 +303,18 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.45,
+  },
+  settingsButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: designTokens.spacing.space16,
+    marginTop: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
+  },
+  settingsButtonText: {
+    color: designTokens.color.onPrimary,
+    fontSize: designTokens.type.button.fontSize,
+    fontWeight: designTokens.type.button.fontWeight,
   },
 });

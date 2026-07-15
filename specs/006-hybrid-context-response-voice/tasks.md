@@ -345,9 +345,9 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 
 - [X] T084 [US2] Add throttled SQLite checkpoints for streaming assistant text; flush before completion, stop, failure and cancellation; preserve partial text with `Stopped`/`Failed` status; reconcile abandoned `generating` attempts on startup; allow retry from failed and interrupted attempts without overwriting history. (FR-A02, SC-A03)
 
-- [ ] T085 Stabilize model setup: explicit downloading/verifying/preparing/ready states, final progress completion, exact-size and SHA-256 verification, durable manifest-bound verification records, correct notification wording, startup timeout/recovery, and no onboarding completion or usable Chat state before the model is ready. (FR-A03, SC-A04)
+- [X] T085 Stabilize model setup: explicit downloading/verifying/preparing/ready states, final progress completion, exact-size and SHA-256 verification, durable manifest-bound verification records, correct notification wording, startup timeout/recovery, and no onboarding completion or usable Chat state before the model is ready. (FR-A03, SC-A04)
 
-- [ ] T086 [US5] Copy gallery and camera images into durable conversation-scoped application storage before SQL persistence; keep preprocessing files temporary; clean temp files; reconcile missing source files; preserve reusable evidence; add preview/remove/retake and reopen-original behavior using existing design components. (FR-A04, SC-A05)
+- [X] T086 [US5] Copy gallery and camera images into durable conversation-scoped application storage before SQL persistence; keep preprocessing files temporary; clean temp files; reconcile missing source files; preserve reusable evidence; add preview/remove/retake and reopen-original behavior using existing design components. (FR-A04, SC-A05)
 
 - [X] T087 [US3/US7] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, use Unicode-safe conversation-title normalization, and ensure the real bounded past-chat picker and transient target state are wired end to end. (FR-A05, SC-A06)
 
@@ -357,7 +357,7 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 
 - [ ] T090 Improve runtime performance without changing output behavior: lazy-load Qwen, release it after the approved idle/background policy, run compaction/embedding only when idle and deduplicated, release native resources before signaling completion, throttle streaming render/scroll work, and preserve History cache state after writes. (FR-A08)
 
-- [ ] T091 Add compact user controls using existing design components: selectable text, Copy/Share and Copy Code, conversation rename, app/build/model/database version, Delete/Redownload Model, Clear Temporary Files, Clear Diagnostics, Clear Conversations, Android settings recovery after permanent permission denial, and projector/model recovery actions. (FR-A08)
+- [X] T091 Add compact user controls using existing design components: selectable text, Copy/Share and Copy Code, conversation rename, app/build/model/database version, Delete/Redownload Model, Clear Temporary Files, Clear Diagnostics, Clear Conversations, Android settings recovery after permanent permission denial, and projector/model recovery actions. (FR-A08)
 
 - [ ] T092 [US8] Extend the T006 physical-device gate to require an approved fully offline runtime that produces incremental partial transcription while recording is active. Record first-partial latency, update latency, corrections, memory, cancellation, New Architecture and NDK-26 compatibility before implementing the runtime. (FR-A09/A10)
 

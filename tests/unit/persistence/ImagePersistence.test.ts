@@ -85,6 +85,25 @@ describe('image persistence', () => {
       .toEqual({ kind: 'original-unavailable' });
   });
 
+  it('reconciles missing originals without replacing their stored path or evidence', () => {
+    const message = messages.appendUserMessage({ id: 'm1', conversationId: 'c1', text: 'image' });
+    const asset = images.createOrReuseAsset({ conversationId: 'c1', localPath: evidence.imagePath });
+    images.linkToMessage(message.id, asset.id, 0);
+    evidenceRepository.saveEvidence({
+      conversationId: 'c1', sourceMessageId: message.id, imageAssetId: asset.id,
+      evidence, sourceRevision: 'revision-1',
+    });
+
+    const reconciled = images.reconcileAvailability((path) => path !== evidence.imagePath);
+
+    expect(reconciled).toBe(1);
+    expect(images.getAsset(asset.id)).toEqual(expect.objectContaining({
+      local_path: evidence.imagePath,
+      available: 0,
+    }));
+    expect(evidenceRepository.getEvidenceForMessage(message.id)).toHaveLength(1);
+  });
+
   it('reuses compatible evidence and resolves the active or explicitly referenced image deterministically', () => {
     const firstMessage = messages.appendUserMessage({ id: 'm1', conversationId: 'c1', text: 'first', createdAt: 201 });
     const secondMessage = messages.appendUserMessage({ id: 'm2', conversationId: 'c1', text: 'second', createdAt: 202 });

@@ -263,3 +263,49 @@ Changing mode affects only future requests; summaries and embeddings are mode-in
 **Decision**: Keep only tests required for core architecture, NON-NEGOTIABLE constitution rules, and high-risk lifecycle behavior. Do not add a separate test where an existing focused suite already covers the invariant.
 
 **Applied**: pinned similarity threshold (0.62) is asserted inside the existing `HybridRetriever` suite; pinned chunk sizes (800/120) inside the `ChunkingService` suite; the lowercase↔runtime mode conversion inside the `ResponseMode` suite. Genuinely new suites are added only for: the embedding-lifecycle contract (model/version/hash/dimensions/source-revision/resource-lock/failure/≤25-batch), the offline architecture guard (R13), and one consolidated post-deletion cascade/orphan check after all tables exist.
+
+## R15 — T092 live incremental voice gate (blocked, no runtime approved)
+
+**Spike date**: 2026-07-14
+**Gate result**: **BLOCKED — NOT APPROVED**
+
+The required physical-device spike could not run. `adb devices -l` started the local ADB daemon successfully and then returned an empty device list. Because no Android device was available, no candidate was installed and no latency, memory, correction, permission, cancellation, cleanup, airplane-mode, New Architecture build, or NDK-26 build result was measured. T092 and its dependent T093 must remain unchecked.
+
+### Source-inspected candidates (documentation evidence only)
+
+| Candidate | Evidence found | Still unverified on Locra hardware |
+|---|---|---|
+| `whisper.rn` | The upstream project documents local `whisper.cpp` inference, a `RealtimeTranscriber`, PCM-stream adapter support, start/stop APIs, VAD/auto-slicing, Android support, MIT licensing, and Android build logic for both old and New Architecture source sets. Its build delegates `ndkVersion` to the consuming project and recommends NDK 24 or newer. | First-partial/update latency, whether callbacks provide sufficiently frequent revisable partials, peak memory beside Qwen, cancellation/resource cleanup, Android permission recovery, an actual New Architecture + NDK-26 Locra build, and model artifact selection/integrity. |
+| `react-native-executorch` speech-to-text | Official documentation exposes offline Whisper models and accepts 16 kHz mono PCM as `Float32Array`; older streaming documentation describes incremental token callbacks and streaming actions. The current Android package uses the React Native Gradle plugin and supports arm64-v8a. | Current-version live incremental behavior (the current primary example is file transcription), correction semantics, latency/memory, cancellation/cleanup, compatibility with Locra's existing native stack and NDK-26, and exact approved model artifacts. |
+| `sherpa-onnx` | Official documentation provides Android streaming and simulated-streaming ASR examples and states that prebuilt APKs run locally without internet. | A supported React Native New Architecture integration for this app, NDK-26 build compatibility, bridge/resource lifecycle, latency/memory, permission behavior, model choice and artifact integrity. |
+
+Primary sources inspected:
+
+- https://github.com/mybigday/whisper.rn
+- https://raw.githubusercontent.com/mybigday/whisper.rn/main/android/build.gradle
+- https://docs.swmansion.com/react-native-executorch/docs/hooks/natural-language-processing/useSpeechToText
+- https://raw.githubusercontent.com/software-mansion/react-native-executorch/main/packages/react-native-executorch/android/build.gradle
+- https://k2-fsa.github.io/sherpa/onnx/android/prebuilt-apk.html
+- https://k2-fsa.github.io/sherpa/onnx/android/build-sherpa-onnx.html
+
+### Measurements and artifact decision
+
+| Required field | Result |
+|---|---|
+| Approved runtime/model | None — physical gate did not run |
+| Model filename, size, URL and SHA-256 | Not selected; no manifest may be created from documentation alone |
+| Audio format | Candidate documentation only: `whisper.rn` supports a PCM stream adapter; React Native ExecuTorch documents 16 kHz mono PCM `Float32Array` |
+| First-partial latency | Not measured |
+| Partial update latency | Not measured |
+| Partial correction/revision behavior | Not measured |
+| Peak recording/transcription memory | Not measured |
+| Cancellation and native cleanup | Not measured |
+| Microphone permission behavior | Not measured |
+| Offline/airplane-mode behavior | Not measured |
+| New Architecture compatibility | Not built on device |
+| Android NDK-26 compatibility | Not built on device |
+| License suitability | Candidate-level only; no final runtime/model license approved |
+
+### Unblock criteria
+
+Attach a representative supported Android physical device and run a release/dev-client spike built through the project's supported EAS Linux path. Capture timestamps for recording start, first partial, subsequent partial revisions and finalization; Android memory before/load/record/stop/release; permission grant/deny/permanent-deny recovery; cancel/restart behavior; airplane-mode operation after setup; and native resource release. Approve and record an exact runtime version and model manifest only after that run passes.

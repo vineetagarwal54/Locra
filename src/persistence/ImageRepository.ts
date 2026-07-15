@@ -83,6 +83,19 @@ export class ImageRepository {
     this.driver.runSync('UPDATE image_asset SET available = 0 WHERE id = ?', [imageAssetId]);
   }
 
+  reconcileAvailability(fileExists: (path: string) => boolean): number {
+    const assets = this.driver.getAllSync<ImageAssetRow>('SELECT * FROM image_asset');
+    let changed = 0;
+    for (const asset of assets) {
+      const available = fileExists(asset.local_path) ? 1 : 0;
+      if (available !== asset.available) {
+        this.driver.runSync('UPDATE image_asset SET available = ? WHERE id = ?', [available, asset.id]);
+        changed += 1;
+      }
+    }
+    return changed;
+  }
+
   unlinkForMessage(messageId: string): void {
     const deletedPaths = runInTransaction(this.driver, () => {
       const assets = this.getAssetsForMessage(messageId);

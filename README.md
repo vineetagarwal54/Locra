@@ -44,7 +44,7 @@ Deferred backlog is tracked in `specs/001-camera-vlm-qa/DEFERRED_BACKLOG.md`.
 | Storage | MMKV only |
 | Navigation | React Navigation native stack |
 | Target platform | Android physical device |
-| Build strategy | EAS Build or EAS local mode on Linux CI; no local Windows native build |
+| Build strategy | Local Windows Android development builds; EAS Build for CI and release artifacts |
 
 ## Architecture Rules
 
@@ -91,20 +91,23 @@ Install dependencies:
 npm install
 ```
 
-Run the Metro dev server for an already-installed EAS dev-client APK:
+Build and install the local Android development client:
+
+```bash
+npx expo run:android
+```
+
+Then run Metro for the installed dev client:
 
 ```bash
 npm run start:dev-client
 adb reverse tcp:8081 tcp:8081
 ```
 
-Do not run `npx expo run:android`, `npm run android`, local `gradlew`, or
-`expo prebuild` on this Windows machine. The local Android native build is
-blocked by the current NDK/native dependency constraints documented in
-`AGENTS.md` and `specs/001-camera-vlm-qa/plan.md`.
-
-Use an EAS-built dev-client APK for device testing. Rebuild the APK when native
-dependencies or app config change.
+Local Android development builds are supported. Rebuild the client after native
+dependency or Expo configuration changes. Use EAS Build for CI and for release
+APK/AAB artifacts. Run `npx expo prebuild` only when intentionally regenerating
+the native projects after those changes.
 
 ## Local Validation Before Any EAS Build
 

@@ -216,6 +216,31 @@ describe('conversationStore', () => {
     ]);
   });
 
+  it('persists an attached image before saving or submitting its path', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const persistImage = jest.fn(async () =>
+      '/documents/locra-conversations/conversation-a/images/durable.jpg');
+    const ids = [...ID_SEQUENCE];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      persistImage,
+    });
+
+    await store.submit('new', { question: 'What is this?', imagePath: '/cache/capture.jpg' });
+
+    expect(persistImage).toHaveBeenCalledWith('conversation-a', '/cache/capture.jpg');
+    expect(queue.submitted[0]?.imagePath).toBe(
+      '/documents/locra-conversations/conversation-a/images/durable.jpg',
+    );
+    expect(history.get('conversation-a')?.messages[0]?.attachments[0]?.path).toBe(
+      '/documents/locra-conversations/conversation-a/images/durable.jpg',
+    );
+  });
+
   it('continues without cross-chat context when a selected target was deleted', async () => {
     const queue = new FakeInferenceQueue();
     const history = new FakeHistoryStore();

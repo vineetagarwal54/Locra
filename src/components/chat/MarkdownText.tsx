@@ -1,9 +1,10 @@
-import { Fragment } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Fragment, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { designTokens } from '../../constants/theme';
 
 import { parseMarkdown, type InlineSpan, type MarkdownBlock } from './markdown';
+import { copyText } from './MessageActions';
 
 interface MarkdownTextProps {
   readonly text: string;
@@ -28,7 +29,7 @@ function BlockView({ block, isFirst }: { block: MarkdownBlock; isFirst: boolean 
 
   if (block.type === 'heading') {
     return (
-      <Text style={[headingStyle(block.level), spacing]}>
+      <Text selectable style={[headingStyle(block.level), spacing]}>
         <InlineSpans spans={block.spans} />
       </Text>
     );
@@ -36,9 +37,7 @@ function BlockView({ block, isFirst }: { block: MarkdownBlock; isFirst: boolean 
 
   if (block.type === 'code') {
     return (
-      <View style={[styles.codeBlock, spacing]}>
-        <Text style={styles.codeBlockText}>{block.content}</Text>
-      </View>
+      <CodeBlock content={block.content} spacing={spacing} />
     );
   }
 
@@ -51,7 +50,7 @@ function BlockView({ block, isFirst }: { block: MarkdownBlock; isFirst: boolean 
   }
 
   return (
-    <Text style={[styles.paragraph, spacing]}>
+    <Text selectable style={[styles.paragraph, spacing]}>
       <InlineSpans spans={block.spans} />
     </Text>
   );
@@ -66,7 +65,7 @@ function ListView({ block }: { block: MarkdownBlock & { readonly type: 'list' } 
             {block.ordered ? `${(block.start ?? 1) + index}.` : '•'}
           </Text>
           <View style={styles.listItemContent}>
-            <Text style={styles.listItemText}>
+            <Text selectable style={styles.listItemText}>
               <InlineSpans spans={item.spans} />
             </Text>
             {item.children.map((child, childIndex) =>
@@ -79,6 +78,35 @@ function ListView({ block }: { block: MarkdownBlock & { readonly type: 'list' } 
           </View>
         </View>
       ))}
+    </View>
+  );
+}
+
+function CodeBlock({ content, spacing }: { content: string; spacing: object | undefined }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
+  const copying = state === 'copying';
+  const onCopy = async (): Promise<void> => {
+    if (copying) return;
+    setState('copying');
+    try {
+      await copyText(content);
+      setState('copied');
+    } catch {
+      setState('failed');
+    }
+  };
+  return (
+    <View style={[styles.codeBlock, spacing]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Copy code"
+        disabled={copying}
+        style={({ pressed }) => [styles.copyCode, pressed && styles.copyCodePressed, copying && styles.copyCodeDisabled]}
+        onPress={() => { void onCopy(); }}
+      >
+        <Text style={styles.copyCodeText}>{state === 'copied' ? 'Copied' : state === 'failed' ? 'Try again' : 'Copy Code'}</Text>
+      </Pressable>
+      <Text selectable style={styles.codeBlockText}>{content}</Text>
     </View>
   );
 }
@@ -166,6 +194,10 @@ const styles = StyleSheet.create({
     lineHeight: designTokens.type.supporting.lineHeight,
     color: designTokens.color.textPrimary,
   },
+  copyCode: { alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center' },
+  copyCodePressed: { opacity: 0.7 },
+  copyCodeDisabled: { opacity: 0.45 },
+  copyCodeText: { color: designTokens.color.primary, fontSize: designTokens.type.caption.fontSize, fontWeight: designTokens.type.caption.fontWeight },
   listItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',

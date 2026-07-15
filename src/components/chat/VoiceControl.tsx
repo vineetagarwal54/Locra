@@ -2,6 +2,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { designTokens, haptics } from '../../constants/theme';
+import { openAndroidAppSettings } from '../../platform/AppSettings';
 import { useVoiceStore } from '../../store/voiceStore';
 import { VOICE_INPUT_ENABLED } from '../../voice/voiceFeature';
 import { LocraSheet } from '../LocraSheet';
@@ -93,7 +94,12 @@ export function VoiceControl({ disabled, onTranscript }: VoiceControlProps) {
         title="Voice unavailable"
         message={error ?? undefined}
         onRequestClose={clearError}
-        actions={[{ label: 'Dismiss', variant: 'primary', onPress: clearError }]}
+        actions={error?.toLowerCase().includes('permission') === true
+          ? [
+              { label: 'Open Android settings', variant: 'primary', onPress: () => { void openAndroidAppSettings(); } },
+              { label: 'Dismiss', variant: 'quiet', onPress: clearError },
+            ]
+          : [{ label: 'Dismiss', variant: 'primary', onPress: clearError }]}
       />
     </>
   );

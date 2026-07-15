@@ -47,7 +47,7 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
-  Settings: undefined;
+  Settings: { conversationId?: string } | undefined;
 };
 
 export type RootDrawerParamList = {

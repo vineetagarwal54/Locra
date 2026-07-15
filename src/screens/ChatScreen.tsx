@@ -220,8 +220,8 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const onOpenSettings = useCallback((): void => {
     void haptics.tap();
-    navigation.navigate('Settings');
-  }, [navigation]);
+    navigation.navigate('Settings', conversationId === 'new' ? undefined : { conversationId });
+  }, [conversationId, navigation]);
 
   const onOpenCamera = useCallback((): void => {
     navigation.navigate('Capture', { conversationId });
@@ -437,6 +437,7 @@ function ChatHeaderContent({
           question={draft.text}
           metadata="Attached to your next message"
           onRemove={onRemoveImage}
+          onRetake={onPhotoSuggestion}
         />
       </View>
     ) : null;
@@ -464,6 +465,7 @@ function ChatHeaderContent({
             question={draft.text}
             metadata="Attached to your first message"
             onRemove={onRemoveImage}
+            onRetake={onPhotoSuggestion}
           />
         </View>
       ) : (
