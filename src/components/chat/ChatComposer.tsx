@@ -63,6 +63,7 @@ export function ChatComposer({
   onResponseModeChange,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
+  const discardTemporaryImage = useMediaStore((s) => s.discardTemporaryImage);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [targetPickerVisible, setTargetPickerVisible] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -103,13 +104,16 @@ export function ChatComposer({
     try {
       const localPath = await pickImageFromLibrary();
       if (localPath !== null) {
+        if (draft.imagePath !== null && draft.imagePath !== localPath) {
+          await discardTemporaryImage(draft.imagePath);
+        }
         setDraftImage(localPath);
       }
     } catch {
       setSendError('That image could not be opened.');
       void haptics.error();
     }
-  }, [pickImageFromLibrary, setDraftImage]);
+  }, [discardTemporaryImage, draft.imagePath, pickImageFromLibrary, setDraftImage]);
 
   const onSubmit = useCallback((): void => {
     if (!canSend) {
@@ -178,6 +182,7 @@ export function ChatComposer({
             ]}
             onPress={() => {
               void haptics.tap();
+              if (draft.imagePath !== null) void discardTemporaryImage(draft.imagePath);
               setDraftImage(null);
             }}
           >

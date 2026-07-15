@@ -38,8 +38,8 @@ data is ever sent to a server. This constraint is architectural, not a setting.
 
 8. **Single local store.** MMKV for all persistence in Phase 1. No AsyncStorage. No SQLite.
 
-9. **Verify before assuming.** ExecuTorch API details change frequently. Always verify
-   against current docs before implementing. Never assume.
+9. **Verify before assuming.** Native runtime APIs and build requirements change frequently.
+   Verify them against current documentation before implementing. Never assume.
 
 10. **Hard architecture boundaries.** Screens contain no business logic. Inference has
     no UI imports. Model lifecycle is self-contained.
@@ -85,18 +85,24 @@ else in code comments.
 
 ---
 
-## Build strategy (permanent)
+## Build strategy
 
-- Local Windows builds are blocked by NDK 26 vs 27 conflict between
-  executorch prebuilt OpenCV and reanimated C++20 requirements.
-- Production and development APK builds via EAS Build (Expo Linux CI).
-- Local dev server: npx expo start --dev-client --clear with USB.
-- adb reverse tcp:8081 tcp:8081 required for USB connection.
-- Do NOT attempt npx expo run:android or npx expo prebuild locally.
+- Local Windows Android development builds are supported with `npx expo run:android`.
+- Use `npx expo start --dev-client --clear` with USB after the development build is installed.
+- Run `adb reverse tcp:8081 tcp:8081` for USB Metro access when needed.
+- Use EAS Build for CI, release APK/AAB artifacts, or when a reproducible Linux build is required.
+- Run `npx expo prebuild` only when intentionally regenerating native projects after Expo config or native dependency changes.
 
 ---
 
-## NDK compatibility rule
+## Current Android native-dependency rule
+
+Before installing a new native dependency, verify that its Android build requirements
+are compatible with the project's configured NDK and New Architecture build. Check its
+CMakeLists.txt and `android/build.gradle` for `ndkVersion`, then validate a local
+Android development build before relying on it.
+
+## Historical NDK compatibility rule (superseded)
 
 Before installing any new native dependency, verify it does not require NDK 27+.
 Check the package's CMakeLists.txt and android/build.gradle for ndkVersion.

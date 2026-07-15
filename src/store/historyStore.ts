@@ -43,6 +43,7 @@ export const conversationRepository = new ConversationRepository(driver, {
 });
 export const messageRepository = new MessageRepository(driver);
 export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
+imageRepository.reconcileAvailability(fileExists);
 export const evidenceRepository = new EvidenceRepository(driver);
 export const chunkRepository = new ChunkRepository(driver);
 export const embeddingRepository = new EmbeddingRepository(driver);
@@ -97,6 +98,7 @@ export interface HistoryStoreState {
   loadNewerMessages: (conversationId: string) => void;
   search: (query: string) => Conversation[];
   delete: (id: string) => void;
+  rename: (id: string, title: string) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
   getMetricsSummary: () => MetricsSummary;
@@ -136,6 +138,13 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
   delete: (id: string): void => {
     conversationRepository.deleteConversation(id);
     messageCaches.delete(id);
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
+  },
+  rename: (id: string, title: string): void => {
+    const trimmed = title.trim();
+    if (trimmed === '') return;
+    conversationRepository.updateConversation(id, { title: trimmed, touch: true });
     conversationCache = createConversationListCache(conversationRepository);
     set(listSnapshot());
   },
@@ -243,7 +252,11 @@ function toConversationMessage(row: MessageRow): ConversationMessage {
     role: row.role,
     text: row.text,
     attachments: row.role === 'user'
-      ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({ kind: 'image' as const, path: asset.local_path }))
+      ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({
+          kind: 'image' as const,
+          path: asset.local_path,
+          available: asset.available === 1,
+        }))
       : [],
     status: row.role === 'user' ? 'completed' : row.status === 'submitted' ? 'completed' : row.status,
     errorMessage: row.error_message,
@@ -311,5 +324,13 @@ function unlinkFile(path: string): void {
   const file = new File(path.startsWith('file://') ? path : `file://${path}`);
   if (file.exists) {
     file.delete();
+  }
+}
+
+function fileExists(path: string): boolean {
+  try {
+    return new File(path.startsWith('file://') ? path : `file://${path}`).exists;
+  } catch {
+    return false;
   }
 }

@@ -75,6 +75,7 @@ export interface InferenceSubmitOptions {
 
 export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
+  cleanupProcessedImage?: (processedPath: string, sourcePath: string) => Promise<void>;
   isReadyForInference: (requiresVision: boolean) => boolean;
   getInferenceReadiness?: (requiresVision: boolean) => InferenceReadiness;
   engine: InferenceEngineAdapter;
@@ -210,6 +211,7 @@ export class InferenceQueue implements IInferenceQueue {
     const responseMode = options.responseMode
       ?? this.deps.getResponseMode?.()
       ?? DEFAULT_RESPONSE_MODE;
+    let processed: PreprocessedImage | null = null;
 
     this.setState({
       status: 'preprocessing',
@@ -227,7 +229,7 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markRequestStart();
       recorder.markPreprocessingStart();
       const requestImagePath = this.resolveRequestImagePath(request, options);
-      const processed = requestImagePath === null
+      processed = requestImagePath === null
         ? null
         : await this.deps.preprocess(requestImagePath);
       lifecycleGates.prepare.resolve(undefined);
@@ -319,6 +321,13 @@ export class InferenceQueue implements IInferenceQueue {
       }
       if (this.lifecycleGates === lifecycleGates) {
         this.lifecycleGates = null;
+      }
+      if (processed !== null && request.imagePath !== null) {
+        try {
+          await this.deps.cleanupProcessedImage?.(processed.path, request.imagePath);
+        } catch {
+          // Temporary derivative cleanup is best-effort and never changes the turn result.
+        }
       }
       // Release the device gate ONLY after the native call has truly settled, so
       // a queued/next generation cannot start while resources are still held.
@@ -748,6 +757,7 @@ export function createInferenceQueue(
 ): InferenceQueue {
   return new InferenceQueue({
     preprocess: prepareImageForInference,
+    cleanupProcessedImage: async () => undefined,
     isReadyForInference: () => false,
     getModelAttribution: () => ({
       modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',

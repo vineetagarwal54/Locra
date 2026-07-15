@@ -12,6 +12,7 @@ export type MessageStatus = 'generating' | 'completed' | 'failed' | 'interrupted
 export interface Attachment {
   kind: AttachmentKind;
   path: string;
+  available?: boolean;
 }
 
 export interface PerformanceMetrics {

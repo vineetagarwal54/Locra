@@ -18,6 +18,7 @@ import { inferenceQueue } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 import { DEFAULT_RESPONSE_MODE, type ResponseMode, toStoredMode } from '../inference/ResponseMode';
+import { durableImageStorage } from '../media/DurableImageStorage';
 import { ChunkingService } from '../retrieval/ChunkingService';
 import {
   ConversationTargetResolver,
@@ -74,6 +75,7 @@ export interface ConversationStoreDependencies {
   }) => void;
   targetResolver?: Pick<ConversationTargetResolver, 'resolve'>;
   checkpointAssistantText?: (assistantMessageId: string, text: string) => void;
+  persistImage?: (conversationId: string, sourcePath: string) => Promise<string>;
 }
 
 interface ActiveGeneration {
@@ -141,16 +143,20 @@ export class ConversationStore implements IConversationStore {
 
     const resolvedConversationId =
       conversationId === 'new' ? this.dependencies.createId('conversation') : conversationId;
+    const durableImagePath = request.imagePath === null
+      ? null
+      : await this.dependencies.persistImage(resolvedConversationId, request.imagePath);
+    const durableRequest = { ...request, imagePath: durableImagePath };
 
     // Cross-chat targeting is request-scoped only and is NEVER merged permanently
     // into this chat's summaries/facts/image state. An ambiguous reference posts a
     // clarification turn instead of generating.
-    const targetOutcome = this.resolveConversationTarget(resolvedConversationId, request);
+    const targetOutcome = this.resolveConversationTarget(resolvedConversationId, durableRequest);
     if (targetOutcome.kind === 'clarify') {
       return this.injectTargetClarification(
         conversationId,
         resolvedConversationId,
-        request,
+        durableRequest,
         targetOutcome.candidates,
       );
     }
@@ -177,9 +183,9 @@ export class ConversationStore implements IConversationStore {
         {
           id: originatingUserMessageId,
           role: 'user',
-          text: request.question,
+          text: durableRequest.question,
           attachments:
-            request.imagePath === null ? [] : [{ kind: 'image', path: request.imagePath }],
+            durableRequest.imagePath === null ? [] : [{ kind: 'image', path: durableRequest.imagePath }],
           status: 'completed',
           errorMessage: null,
           createdAt: timestamp,
@@ -205,7 +211,7 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointText: '',
       lastCheckpointAt: 0,
     };
-    const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
+    const inferenceRequest = this.createInferenceRequest(activeGeneration, durableRequest, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
       { responseMode: effectiveResponseMode, selectedConversationId },
@@ -759,6 +765,7 @@ export function createConversationStore(
     scheduleCompaction: () => undefined,
     recordBenchmark: () => undefined,
     checkpointAssistantText: () => undefined,
+    persistImage: async (_conversationId, sourcePath) => sourcePath,
     targetResolver: { resolve: () => ({ kind: 'active' }) },
     ...dependencies,
   });
@@ -802,6 +809,7 @@ function listLexicalCandidates(conversationIds: readonly string[]): RetrievalCan
 export const conversationStore: IConversationStore = createConversationStore({
   inferenceQueue,
   historyStore,
+  persistImage: (conversationId, sourcePath) => durableImageStorage.persist(conversationId, sourcePath),
   contextOrchestrator: createRuntimeContextOrchestrator(),
   getDefaultResponseMode: () => useSettingsStore.getState().defaultResponseMode,
   setPersistedResponseMode: (conversationId, mode) => {

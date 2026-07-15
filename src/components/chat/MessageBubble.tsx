@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { designTokens, haptics } from '../../constants/theme';
@@ -6,6 +7,7 @@ import type { ConversationMessage } from '../../types/models';
 
 import { ImagePromptCard } from './ImagePromptCard';
 import { MarkdownText } from './MarkdownText';
+import { copyText, shareText } from './MessageActions';
 import { StreamingMessage } from './StreamingMessage';
 
 interface MessageBubbleProps {
@@ -36,11 +38,16 @@ export function MessageBubble({
 }
 
 function UserMessage({ message }: { message: ConversationMessage }) {
-  const imagePath = message.attachments.find((attachment) => attachment.kind === 'image')?.path;
-  if (imagePath !== undefined) {
+  const imageAttachment = message.attachments.find((attachment) => attachment.kind === 'image');
+  if (imageAttachment !== undefined) {
     return (
       <View style={styles.userWrap}>
-        <ImagePromptCard imagePath={imagePath} question={message.text} />
+        <ImagePromptCard
+          imagePath={imageAttachment.path}
+          question={message.text}
+          available={imageAttachment.available}
+        />
+        <MessageActionRow text={message.text} />
       </View>
     );
   }
@@ -48,8 +55,9 @@ function UserMessage({ message }: { message: ConversationMessage }) {
   return (
     <View style={styles.userWrap}>
       <View style={styles.userBubble}>
-        <Text style={styles.userText}>{message.text}</Text>
+        <Text selectable style={styles.userText}>{message.text}</Text>
       </View>
+      <MessageActionRow text={message.text} />
     </View>
   );
 }
@@ -97,6 +105,7 @@ function AssistantMessage({
             </Pressable>
           ) : null}
           <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+          <MessageActionRow text={text} />
         </View>
       </View>
     );
@@ -122,6 +131,7 @@ function AssistantMessage({
             </Pressable>
           ) : null}
           <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+          <MessageActionRow text={text} />
         </View>
       </View>
     );
@@ -136,10 +146,78 @@ function AssistantMessage({
           <MarkdownText text={text} />
         )}
         {message.status !== 'generating' ? (
-          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+          <>
+            <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+            <MessageActionRow text={text} />
+          </>
         ) : null}
       </View>
     </View>
+  );
+}
+
+function MessageActionRow({ text }: { text: string }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'sharing' | 'copied' | 'failed'>('idle');
+  const busy = state === 'copying' || state === 'sharing';
+
+  const run = async (kind: 'copy' | 'share'): Promise<void> => {
+    if (busy) return;
+    setState(kind === 'copy' ? 'copying' : 'sharing');
+    try {
+      if (kind === 'copy') {
+        await copyText(text);
+        setState('copied');
+      } else {
+        await shareText(text);
+        setState('idle');
+      }
+    } catch {
+      setState('failed');
+    }
+  };
+
+  if (text.trim() === '') return null;
+  return (
+    <View style={styles.messageActions}>
+      <MessageActionButton
+        label={state === 'copied' ? 'Copied' : 'Copy'}
+        icon={state === 'copied' ? 'check' : 'content-copy'}
+        disabled={busy}
+        onPress={() => { void run('copy'); }}
+      />
+      <MessageActionButton
+        label="Share"
+        icon="share-variant-outline"
+        disabled={busy}
+        onPress={() => { void run('share'); }}
+      />
+      {state === 'failed' ? <Text style={styles.actionError}>Action failed</Text> : null}
+    </View>
+  );
+}
+
+function MessageActionButton({
+  label,
+  icon,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label} message`}
+      disabled={disabled}
+      style={({ pressed }) => [styles.messageAction, pressed && styles.retryButtonPressed, disabled && styles.actionDisabled]}
+      onPress={onPress}
+    >
+      <MaterialCommunityIcons name={icon} size={15} color={designTokens.color.textSecondary} />
+      <Text style={styles.messageActionLabel}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -254,4 +332,23 @@ const styles = StyleSheet.create({
     fontSize: designTokens.type.supporting.fontSize,
     marginLeft: designTokens.spacing.space4,
   },
+  messageActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: designTokens.spacing.space8,
+  },
+  messageAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: designTokens.spacing.space16,
+  },
+  messageActionLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    marginLeft: designTokens.spacing.space4,
+  },
+  actionDisabled: { opacity: 0.45 },
+  actionError: { color: designTokens.color.error, fontSize: designTokens.type.caption.fontSize },
 });
