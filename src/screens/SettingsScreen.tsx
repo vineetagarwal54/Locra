@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { designTokens, haptics } from '../constants/theme';
+import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import { RESPONSE_MODES, type ResponseMode } from '../inference/ResponseMode';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import { createQwenModelPresentation } from '../model/ModelPresentation';
@@ -12,6 +13,11 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useSettingsStore } from '../store/settingsStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
+
+const diagnosticsAvailable = isDiagnosticsExportAvailable({
+  isDevBuild: __DEV__,
+  isInternalBuild: process.env.EXPO_PUBLIC_INTERNAL_BETA === 'true',
+});
 
 export function SettingsScreen({ navigation }: Props) {
   const responseMode = useSettingsStore((state) => state.responseMode);
@@ -27,6 +33,11 @@ export function SettingsScreen({ navigation }: Props) {
     void haptics.tap();
     setResponseMode(mode);
   }, [setResponseMode]);
+
+  const onOpenDiagnostics = useCallback((): void => {
+    void haptics.tap();
+    navigation.navigate('DiagnosticsExport');
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -66,6 +77,32 @@ export function SettingsScreen({ navigation }: Props) {
             );
           })}
         </View>
+        {diagnosticsAvailable ? (
+          <>
+            <Text style={[styles.sectionLabel, styles.responseLabel]}>BETA TOOLS</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Export diagnostics"
+              style={({ pressed }) => [styles.betaRow, pressed && styles.betaRowPressed]}
+              onPress={onOpenDiagnostics}
+            >
+              <MaterialCommunityIcons
+                name="bug-outline"
+                size={22}
+                color={designTokens.color.primary}
+              />
+              <View style={styles.betaBody}>
+                <Text style={styles.betaTitle}>Export diagnostics</Text>
+                <Text style={styles.betaText}>Choose conversations and review what is included.</Text>
+              </View>
+              <MaterialCommunityIcons
+                name="chevron-right"
+                size={22}
+                color={designTokens.color.textSecondary}
+              />
+            </Pressable>
+          </>
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -89,4 +126,9 @@ const styles = StyleSheet.create({
   modeButtonSelected: { borderColor: designTokens.color.primary, backgroundColor: designTokens.color.surface },
   modeText: { color: designTokens.color.textSecondary, fontSize: designTokens.type.button.fontSize, fontWeight: designTokens.type.button.fontWeight },
   modeTextSelected: { color: designTokens.color.primary },
+  betaRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: designTokens.spacing.space16, paddingVertical: designTokens.spacing.space12, borderRadius: designTokens.radius.card, borderWidth: designTokens.borderWidth, borderColor: designTokens.color.border, backgroundColor: designTokens.color.surfaceStrong },
+  betaRowPressed: { opacity: 0.85 },
+  betaBody: { flex: 1, marginHorizontal: designTokens.spacing.space12 },
+  betaTitle: { color: designTokens.color.textPrimary, fontSize: designTokens.type.cardTitle.fontSize, fontWeight: designTokens.type.cardTitle.fontWeight },
+  betaText: { color: designTokens.color.textSecondary, fontSize: designTokens.type.supporting.fontSize, lineHeight: designTokens.type.supporting.lineHeight, marginTop: designTokens.spacing.space4 },
 });

@@ -1,4 +1,5 @@
 import { ConversationTargetResolver } from '../../../src/retrieval/ConversationTargetResolver';
+import { normalizeTitle } from '../../../src/persistence/ConversationRepository';
 
 function row(id: string, title: string, updatedAt = 2) {
   return { id, title, normalized_title: title.toLowerCase(), created_at: 1, updated_at: updatedAt };
@@ -93,5 +94,17 @@ describe('ConversationTargetResolver', () => {
     expect(
       resolver.resolve({ rawText: 'Use the budget chat.', activeConversationId: 'active' })
     ).toEqual({ kind: 'scoped', conversationId: 'other' });
+  });
+
+  it('normalizes and resolves Unicode conversation titles without dropping their words', () => {
+    expect(normalizeTitle('  Café résumé 日本  ')).toBe('café résumé 日本');
+    const findTargetCandidates = jest.fn(() => [row('cafe', 'Café résumé')]);
+    const resolver = new ConversationTargetResolver(makeRepo({ findTargetCandidates }));
+
+    expect(resolver.resolve({ rawText: 'Use my Café résumé chat.' })).toEqual({
+      kind: 'scoped',
+      conversationId: 'cafe',
+    });
+    expect(findTargetCandidates).toHaveBeenCalledWith(['café', 'résumé'], 10);
   });
 });

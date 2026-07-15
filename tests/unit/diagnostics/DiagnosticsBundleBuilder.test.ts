@@ -80,6 +80,12 @@ const APP_INFO: AppDiagnosticsInfo = {
   appBuildId: '1.0.0+1',
   deviceNameModel: 'Google Pixel 8',
   exportedAt: '2026-07-10T00:00:00.000Z',
+  modelDownloadStatus: 'downloaded',
+  modelDownloadProgress: 1,
+  modelIntegrityVerified: true,
+  storageAvailableBytes: 1_000,
+  storageTotalBytes: 2_000,
+  activeResourceOperation: null,
 };
 
 describe('DiagnosticsBundleBuilder', () => {
@@ -147,14 +153,31 @@ describe('DiagnosticsBundleBuilder', () => {
     expect(bundle.turns[0]?.refusalRecoveryTriggered).toBe(false);
   });
 
-  it('never inlines image bytes, only source paths', () => {
+  it('excludes images and sanitizes local paths by default', () => {
+    const conversation = makeConversation();
+    conversation.messages[1].errorMessage = 'Failed near C:\\Users\\me\\photo.jpg';
     const bundle = buildDiagnosticsBundleJson({
-      conversations: [makeConversation()],
-      turns: [],
+      conversations: [conversation],
+      turns: [makeTurn({
+        trace: {
+          id: 'turn-path',
+          createdAt: '2026-07-10T00:00:00.000Z',
+          stages: [{
+            stage: 'answer',
+            modelInput: [{ role: 'user', content: 'question', mediaPath: 'file:///data/photo.jpg' }],
+            rawOutput: 'answer',
+            processedOutput: 'answer',
+          }],
+          finalResponse: 'answer',
+        },
+      })],
       appInfo: APP_INFO,
     });
 
-    const attachment = bundle.conversations[0]?.messages[0]?.attachments[0];
-    expect(attachment).toEqual({ kind: 'image', path: '/tmp/photo.jpg' });
+    expect(bundle.conversations[0]?.messages[0]?.attachments).toEqual([]);
+    expect(JSON.stringify(bundle)).not.toContain('/tmp/photo.jpg');
+    expect(JSON.stringify(bundle)).not.toContain('C:\\Users\\me');
+    expect(JSON.stringify(bundle)).not.toContain('file:///data/photo.jpg');
+    expect(JSON.stringify(bundle)).toContain('[local path omitted]');
   });
 });

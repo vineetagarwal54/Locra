@@ -24,10 +24,11 @@ import { MessageBubble } from '../components/chat/MessageBubble';
 import { OfflineIndicator } from '../components/OfflineIndicator';
 import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
+import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
-import { useHistoryStore } from '../store/historyStore';
+import { listConversationTargets, useHistoryStore } from '../store/historyStore';
 import type {
   Conversation,
   ConversationMessage,
@@ -41,6 +42,10 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 // points of the bottom; beyond it we assume they scrolled up to re-read and never
 // force a jump back down.
 const AUTO_FOLLOW_THRESHOLD = 96;
+const diagnosticsAvailable = isDiagnosticsExportAvailable({
+  isDevBuild: __DEV__,
+  isInternalBuild: process.env.EXPO_PUBLIC_INTERNAL_BETA === 'true',
+});
 
 // Id of the most recent user turn, used to detect a freshly sent message
 // (text / image / voice all append a user message) so the list can reveal it.
@@ -67,6 +72,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const [responseMode, setResponseMode] = useState<ResponseMode>(() =>
     conversationStore.getResponseMode(conversationId)
   );
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const { confirm, dialog } = useConfirmSheet();
 
   const conversation = useMemo(
@@ -75,6 +81,10 @@ export function ChatScreen({ navigation, route }: Props) {
         ? null
         : useHistoryStore.getState().getConversation(conversationId),
     [conversationId, historyRevision]
+  );
+  const targetCandidates = useMemo(
+    () => listConversationTargets(conversationId),
+    [conversationId, historyRevision],
   );
 
   useEffect(() => {
@@ -86,6 +96,10 @@ export function ChatScreen({ navigation, route }: Props) {
     setDraft(conversationStore.getDraft(conversationId));
     setResponseMode(conversationStore.getResponseMode(conversationId));
   }, [conversationId, historyRevision]);
+
+  useEffect(() => {
+    setSelectedTargetId(null);
+  }, [conversationId]);
 
   // FR-031: switching away from and back to a conversation (including the
   // not-yet-created 'new' slot) restores its exact draft from conversationStore.
@@ -240,6 +254,16 @@ export function ChatScreen({ navigation, route }: Props) {
     [conversationId]
   );
 
+  const onReportIssue = useCallback(
+    (assistantMessageId: string): void => {
+      navigation.navigate('DiagnosticsExport', {
+        conversationId,
+        responseId: assistantMessageId,
+      });
+    },
+    [conversationId, navigation],
+  );
+
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>): void => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom =
@@ -274,11 +298,16 @@ export function ChatScreen({ navigation, route }: Props) {
       return (
         <View>
           {message.role === 'assistant' ? <AssistantIdentityRow /> : null}
-          <MessageBubble message={message} streamingText={streamingText} onRetry={onRetry} />
+          <MessageBubble
+            message={message}
+            streamingText={streamingText}
+            onRetry={onRetry}
+            {...(diagnosticsAvailable ? { onReportIssue } : {})}
+          />
         </View>
       );
     },
-    [onRetry, runtimeState?.assistantMessageId, runtimeState?.streamingText]
+    [onReportIssue, onRetry, runtimeState?.assistantMessageId, runtimeState?.streamingText]
   );
 
   if (isMissingConversation) {
@@ -339,6 +368,9 @@ export function ChatScreen({ navigation, route }: Props) {
         onOpenCamera={onOpenCamera}
         onDraftChange={setDraft}
         onConversationResolved={onConversationResolved}
+        targetCandidates={targetCandidates}
+        selectedTargetId={selectedTargetId}
+        onTargetChange={setSelectedTargetId}
         responseMode={responseMode}
         onResponseModeChange={(mode) => {
           conversationStore.setResponseMode(conversationId, mode);

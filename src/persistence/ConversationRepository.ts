@@ -54,7 +54,9 @@ const CONVERSATION_SELECT = `
             message.role = 'user'
             OR (message.role = 'assistant' AND message.is_active_attempt = 1 AND message.status = 'completed')
           )
-        ORDER BY message.created_at DESC, message.id DESC
+        ORDER BY message.created_at DESC,
+          CASE WHEN message.role = 'assistant' THEN 1 ELSE 0 END DESC,
+          message.id DESC
         LIMIT 1
       ),
       (
@@ -80,8 +82,9 @@ export function normalizeTitle(title: string | null | undefined): string | null 
     return null;
   }
   const normalized = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
   return normalized === '' ? null : normalized;
 }

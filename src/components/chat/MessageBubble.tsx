@@ -12,14 +12,27 @@ interface MessageBubbleProps {
   message: ConversationMessage;
   streamingText?: string;
   onRetry?: (assistantMessageId: string) => void;
+  onReportIssue?: (assistantMessageId: string) => void;
 }
 
-export function MessageBubble({ message, streamingText = '', onRetry }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  streamingText = '',
+  onRetry,
+  onReportIssue,
+}: MessageBubbleProps) {
   if (message.role === 'user') {
     return <UserMessage message={message} />;
   }
 
-  return <AssistantMessage message={message} streamingText={streamingText} onRetry={onRetry} />;
+  return (
+    <AssistantMessage
+      message={message}
+      streamingText={streamingText}
+      onRetry={onRetry}
+      onReportIssue={onReportIssue}
+    />
+  );
 }
 
 function UserMessage({ message }: { message: ConversationMessage }) {
@@ -45,10 +58,12 @@ function AssistantMessage({
   message,
   streamingText,
   onRetry,
+  onReportIssue,
 }: {
   message: ConversationMessage;
   streamingText: string;
   onRetry?: (assistantMessageId: string) => void;
+  onReportIssue?: (assistantMessageId: string) => void;
 }) {
   const text = message.status === 'generating' ? streamingText : message.text;
 
@@ -64,6 +79,7 @@ function AssistantMessage({
             />
             <Text style={styles.failedTitle}>Response failed</Text>
           </View>
+          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
           <Text style={styles.failedText}>
             {message.errorMessage ?? 'Locra could not finish that answer.'}
           </Text>
@@ -80,6 +96,7 @@ function AssistantMessage({
               <Text style={styles.retryButtonLabel}>Retry</Text>
             </Pressable>
           ) : null}
+          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
         </View>
       </View>
     );
@@ -89,7 +106,22 @@ function AssistantMessage({
     return (
       <View style={styles.assistantWrap}>
         <View style={styles.assistantBubble}>
+          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
           <Text style={styles.assistantMuted}>This response was stopped.</Text>
+          {onRetry !== undefined ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry interrupted response"
+              style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
+              onPress={() => {
+                void haptics.tap();
+                onRetry(message.id);
+              }}
+            >
+              <Text style={styles.retryButtonLabel}>Retry</Text>
+            </Pressable>
+          ) : null}
+          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
         </View>
       </View>
     );
@@ -103,8 +135,37 @@ function AssistantMessage({
         ) : (
           <MarkdownText text={text} />
         )}
+        {message.status !== 'generating' ? (
+          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+        ) : null}
       </View>
     </View>
+  );
+}
+
+function ReportIssueButton({
+  messageId,
+  onReportIssue,
+}: {
+  messageId: string;
+  onReportIssue?: (assistantMessageId: string) => void;
+}) {
+  if (onReportIssue === undefined) {
+    return null;
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Report issue with this response"
+      style={({ pressed }) => [styles.reportButton, pressed && styles.retryButtonPressed]}
+      onPress={() => {
+        void haptics.tap();
+        onReportIssue(messageId);
+      }}
+    >
+      <MaterialCommunityIcons name="flag-outline" size={16} color={designTokens.color.textSecondary} />
+      <Text style={styles.reportButtonLabel}>Report issue</Text>
+    </Pressable>
   );
 }
 
@@ -180,5 +241,17 @@ const styles = StyleSheet.create({
     color: designTokens.color.onPrimary,
     fontSize: designTokens.type.button.fontSize,
     fontWeight: designTokens.type.button.fontWeight,
+  },
+  reportButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: designTokens.spacing.space12,
+    minHeight: 44,
+  },
+  reportButtonLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginLeft: designTokens.spacing.space4,
   },
 });

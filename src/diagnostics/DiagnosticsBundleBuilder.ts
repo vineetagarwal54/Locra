@@ -14,6 +14,12 @@ export interface AppDiagnosticsInfo {
   readonly appBuildId: string;
   readonly deviceNameModel: string;
   readonly exportedAt: string;
+  readonly modelDownloadStatus: string;
+  readonly modelDownloadProgress: number;
+  readonly modelIntegrityVerified: boolean;
+  readonly storageAvailableBytes: number;
+  readonly storageTotalBytes: number;
+  readonly activeResourceOperation: string | null;
 }
 
 export interface DiagnosticsMessageJson {
@@ -92,10 +98,12 @@ function formatMessageLine(message: ConversationMessage): string {
   const speaker = message.role === 'user' ? '**User**' : '**Locra**';
   const attachments =
     message.attachments.length > 0
-      ? ` [attachments: ${message.attachments.map((attachment) => attachment.path).join(', ')}]`
+      ? ' [image omitted]'
       : '';
-  const error = message.errorMessage !== null ? ` (error: ${message.errorMessage})` : '';
-  const text = message.text.trim() === '' ? '(empty)' : message.text;
+  const error = message.errorMessage !== null
+    ? ` (error: ${sanitizeLocalPaths(message.errorMessage)})`
+    : '';
+  const text = message.text.trim() === '' ? '(empty)' : sanitizeLocalPaths(message.text);
   return `${speaker} [${isoTimestamp(message.createdAt)}] (${message.status})${attachments}${error}: ${text}`;
 }
 
@@ -105,7 +113,8 @@ function conversationTitle(conversation: Conversation): string {
   if (raw === '') {
     return `Conversation ${conversation.id}`;
   }
-  return raw.length > TITLE_MAX_CHARS ? `${raw.slice(0, TITLE_MAX_CHARS)}…` : raw;
+  const title = raw.length > TITLE_MAX_CHARS ? `${raw.slice(0, TITLE_MAX_CHARS)}…` : raw;
+  return sanitizeLocalPaths(title);
 }
 
 function toConversationJson(conversation: Conversation): DiagnosticsConversationJson {
@@ -122,14 +131,11 @@ function toMessageJson(message: ConversationMessage): DiagnosticsMessageJson {
   return {
     id: message.id,
     role: message.role,
-    text: message.text,
+    text: sanitizeLocalPaths(message.text),
     status: message.status,
-    errorMessage: message.errorMessage,
+    errorMessage: message.errorMessage === null ? null : sanitizeLocalPaths(message.errorMessage),
     createdAt: isoTimestamp(message.createdAt),
-    attachments: message.attachments.map((attachment) => ({
-      kind: attachment.kind,
-      path: attachment.path,
-    })),
+    attachments: [],
   };
 }
 
@@ -139,8 +145,21 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
     originatingUserMessageId: turn.originatingUserMessageId,
     assistantMessageId: turn.assistantMessageId,
     capturedAt: isoTimestamp(turn.capturedAt),
-    stages: turn.trace.stages,
-    finalResponse: turn.trace.finalResponse,
+    stages: turn.trace.stages.map((stage) => ({
+      ...stage,
+      modelInput: stage.modelInput.map((message) => ({
+        role: message.role,
+        content: sanitizeLocalPaths(message.content),
+      })),
+      rawOutput: sanitizeLocalPaths(stage.rawOutput),
+      parsedOutput: sanitizeUnknown(stage.parsedOutput),
+      processedOutput: stage.processedOutput === undefined
+        ? undefined
+        : sanitizeLocalPaths(stage.processedOutput),
+    })),
+    finalResponse: turn.trace.finalResponse === null
+      ? null
+      : sanitizeLocalPaths(turn.trace.finalResponse),
     refusalRecoveryTriggered: turn.trace.stages.some((stage) => stage.refusalRetry === true),
     objectiveResult: turn.objectiveResult,
     contextDiagnostics: turn.contextDiagnostics,
@@ -149,4 +168,26 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
 
 function isoTimestamp(epochMs: number): string {
   return new Date(epochMs).toISOString();
+}
+
+export function sanitizeLocalPaths(value: string): string {
+  return value.replace(
+    /(?:file:\/\/|[A-Za-z]:\\|\/(?:data|storage|cache|tmp|var)\/)[^\s"'<>]+/g,
+    '[local path omitted]',
+  );
+}
+
+function sanitizeUnknown(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return sanitizeLocalPaths(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeUnknown);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeUnknown(item)]),
+    );
+  }
+  return value;
 }
