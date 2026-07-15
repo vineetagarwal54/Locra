@@ -69,7 +69,11 @@ function makeHarness() {
   const cancelFetching = jest.fn(async () => {});
   const deleteResources = jest.fn(async () => {});
   const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
-  const verifyIntegrity = jest.fn(async (fileUri: string) => fileUri.length > 0);
+  const verifyIntegrity = jest.fn(async (
+    fileUri: string,
+    _expectedSha256: string,
+    _onProgress?: (progress: { bytesRead: number; totalBytes: number; progress: number }) => void,
+  ) => fileUri.length > 0);
   const getFileSize = jest.fn(
     async (path: string): Promise<number> => (path === PROJ_PATH ? PROJ_SIZE : LANG_SIZE)
   );
@@ -125,8 +129,8 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
 
     await manager.startDownload();
 
-    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA);
-    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA);
+    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA, expect.any(Function));
+    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.getState().integrityVerified).toBe(true);
     expect(manager.isReadyForInference()).toBe(true);
@@ -165,7 +169,8 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
     expect(phases).toEqual(expect.arrayContaining(['downloading', 'verifying', 'failed']));
     expect(phases).not.toContain('ready');
     expect(manager.isReadyForInference()).toBe(false);
-    expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
+    expect(deleteResources).not.toHaveBeenCalled();
+    expect(manager.getState().canRetryVerification).toBe(true);
     expect(writeVerificationRecord).not.toHaveBeenCalled();
     const states = manager.getArtifactStates();
     expect(states.find((s) => s.artifactId === 'qwen_multimodal_projector')?.integrityVerified).toBe(false);
@@ -182,7 +187,7 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
 
     expect(manager.getState().setupPhase).toBe('failed');
     expect(manager.isReadyForInference()).toBe(false);
-    expect(verifyIntegrity).not.toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA);
+    expect(verifyIntegrity).not.toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
   });
 
   it('reports aggregate 0..1 progress across both files', async () => {
@@ -257,8 +262,8 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
     downloadDeferred.resolve(bundleFetchResult());
     await flush();
 
-    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA);
-    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA);
+    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA, expect.any(Function));
+    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
     expect(manager.isReadyForInference()).toBe(true);
   });
 
@@ -268,6 +273,9 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
 
       await manager.reconcile();
+      expect(manager.getState().setupPhase).toBe('verifying');
+      expect(verifyIntegrity).not.toHaveBeenCalled();
+      await manager.verifyPendingArtifacts();
       expect(verifyIntegrity).toHaveBeenCalledTimes(2);
       expect(writeVerificationRecord).toHaveBeenCalledTimes(1);
       verifyIntegrity.mockClear();
@@ -284,6 +292,7 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       listDownloadedModels.mockResolvedValue([LANG_PATH]);
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(manager.isReadyForInference()).toBe(false);
       expect(manager.getState().downloadStatus).toBe('not_started');
@@ -299,6 +308,7 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       );
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
       expect(manager.isReadyForInference()).toBe(false);
@@ -310,6 +320,7 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       readVerificationRecord.mockResolvedValue('{broken');
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(clearVerificationRecord).toHaveBeenCalled();
       expect(verifyIntegrity).toHaveBeenCalledTimes(2);
@@ -328,6 +339,7 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       }));
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(clearVerificationRecord).toHaveBeenCalled();
       expect(verifyIntegrity).toHaveBeenCalledTimes(2);
@@ -362,6 +374,85 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       expect(manager.getState().setupPhase).toBe('downloading');
       download.resolve(bundleFetchResult());
       await downloading;
+    });
+
+    it('restarts verification after process death without redownloading valid files', async () => {
+      const { manager, listDownloadedModels, fetch, verifyIntegrity } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+
+      await manager.reconcile();
+
+      expect(manager.getState().setupPhase).toBe('verifying');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(verifyIntegrity).not.toHaveBeenCalled();
+
+      await manager.verifyPendingArtifacts();
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+      expect(manager.isReadyForInference()).toBe(true);
+    });
+
+    it('publishes per-artifact and weighted total verification progress', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockImplementation(async (_path, _sha, onProgress) => {
+        onProgress?.({ bytesRead: LANG_SIZE / 2, totalBytes: LANG_SIZE, progress: 0.5 });
+        return true;
+      });
+      const states: Array<{ total: number; artifact: number; name: string | null }> = [];
+      manager.subscribe((state) => states.push({
+        total: state.verificationProgress,
+        artifact: state.verificationArtifactProgress,
+        name: state.verificationArtifactName,
+      }));
+
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(states).toContainEqual(expect.objectContaining({
+        artifact: 0.5,
+        name: LANG_FILE,
+      }));
+      expect(states.some((state) => state.total > 0 && state.total < 1)).toBe(true);
+      expect(manager.getState().verificationProgress).toBe(1);
+    });
+
+    it('ignores a stale verification result after a newer delete action', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity } = makeHarness();
+      const hash = defer<boolean>();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockReturnValueOnce(hash.promise);
+      await manager.reconcile();
+      const verification = manager.verifyPendingArtifacts();
+      await flush();
+
+      await manager.cancelDownload();
+      hash.resolve(true);
+      await verification;
+
+      expect(manager.getState().setupPhase).toBe('not_installed');
+      expect(manager.getState().integrityVerified).toBe(false);
+    });
+
+    it('keeps failed hashes recoverable and can retry without redownloading', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity, deleteResources } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockResolvedValueOnce(false);
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(manager.getState()).toEqual(expect.objectContaining({
+        setupPhase: 'failed',
+        canRetryVerification: true,
+      }));
+      expect(deleteResources).not.toHaveBeenCalled();
+
+      verifyIntegrity.mockResolvedValue(true);
+      await manager.verifyPendingArtifacts();
+
+      expect(manager.isReadyForInference()).toBe(true);
+      expect(deleteResources).not.toHaveBeenCalled();
     });
   });
 });

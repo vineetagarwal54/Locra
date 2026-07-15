@@ -217,6 +217,10 @@ export interface ModelState {
   setupPhase: ModelSetupPhase;
   downloadStatus: ModelDownloadStatus;
   downloadProgress: number;
+  verificationProgress: number;
+  verificationArtifactProgress: number;
+  verificationArtifactName: string | null;
+  canRetryVerification: boolean;
   integrityVerified: boolean;
   error: string | null;
 }

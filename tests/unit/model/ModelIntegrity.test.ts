@@ -1,117 +1,59 @@
-import { File } from 'expo-file-system';
-
-// expo-file-system pulls in a native module unavailable under Jest, so File is
-// mocked. js-sha256 is pure JS, so it runs for real — the tests hash a known
-// vector end-to-end through the chunked-read path.
-jest.mock('expo-file-system', () => ({
-  File: jest.fn(),
-  FileMode: { ReadOnly: 'r' },
+jest.mock('../../../src/native/NativeModelIntegrity', () => ({
+  __esModule: true,
+  default: {
+    addListener: jest.fn(),
+    verifyFile: jest.fn(),
+  },
 }));
 
 import { verifyModelIntegrity } from '../../../src/model/ModelIntegrity';
+import NativeModelIntegrity from '../../../src/native/NativeModelIntegrity';
 
-const MockFile = File as unknown as jest.Mock;
+if (NativeModelIntegrity === null) throw new Error('Native integrity mock was not installed.');
+const mockAddListener = NativeModelIntegrity.addListener as jest.Mock;
+const mockVerifyFile = NativeModelIntegrity.verifyFile as jest.Mock;
+const mockRemove = jest.fn();
 
-interface FakeHandle {
-  readBytes: jest.Mock;
-  close: jest.Mock;
-  offset: number;
-  size: number;
-}
-
-// Serves at most 2 bytes per readBytes() call so even a tiny input exercises the
-// multi-chunk incremental-hash loop and the EOF boundary.
-function fakeHandle(bytes: Uint8Array): FakeHandle {
-  let offset = 0;
-  return {
-    readBytes: jest.fn((length: number): Uint8Array => {
-      const end = Math.min(offset + Math.min(length, 2), bytes.length);
-      const chunk = bytes.subarray(offset, end);
-      offset = end;
-      return chunk;
-    }),
-    close: jest.fn(),
-    offset: 0,
-    size: bytes.length,
-  };
-}
-
-function primeFile(opts: { exists: boolean; bytes?: Uint8Array; openError?: Error }): FakeHandle {
-  const bytes = opts.bytes ?? new Uint8Array();
-  const handle = fakeHandle(bytes);
-  MockFile.mockImplementation(() => ({
-    exists: opts.exists,
-    size: bytes.length,
-    open: jest.fn(() => {
-      if (opts.openError) {
-        throw opts.openError;
-      }
-      return handle;
-    }),
-  }));
-  return handle;
-}
-
-// SHA-256("abc") — the canonical NIST test vector.
-const ABC_BYTES = new Uint8Array([0x61, 0x62, 0x63]);
-const ABC_SHA256 = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
-
-describe('verifyModelIntegrity (streaming SHA-256)', () => {
+describe('verifyModelIntegrity native boundary', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockAddListener.mockReturnValue({ remove: mockRemove });
   });
 
-  it('verifies true when the streamed file hash matches the pinned SHA-256', async () => {
-    const handle = primeFile({ exists: true, bytes: ABC_BYTES });
+  it('delegates SHA-256 to native code and forwards only matching request progress', async () => {
+    let listener!: (event: {
+      requestId: string;
+      bytesRead: number;
+      totalBytes: number;
+      progress: number;
+    }) => void;
+    mockAddListener.mockImplementation((_eventName, next) => {
+      listener = next;
+      return { remove: mockRemove };
+    });
+    mockVerifyFile.mockImplementation(async (requestId: string) => {
+      listener({ requestId: 'stale', bytesRead: 1, totalBytes: 4, progress: 0.25 });
+      listener({ requestId, bytesRead: 2, totalBytes: 4, progress: 0.5 });
+      return true;
+    });
+    const progress = jest.fn();
 
-    await expect(verifyModelIntegrity('file:///model.pte', ABC_SHA256)).resolves.toBe(true);
+    await expect(verifyModelIntegrity('/models/model.gguf', 'ABCD', progress)).resolves.toBe(true);
 
-    // Proves it streamed in chunks (2 bytes at a time here) rather than reading
-    // the whole file at once, and always released the handle.
-    expect(handle.readBytes.mock.calls.length).toBeGreaterThan(1);
-    expect(handle.close).toHaveBeenCalled();
-  });
-
-  it('is case-insensitive about the pinned digest', async () => {
-    primeFile({ exists: true, bytes: ABC_BYTES });
-
-    await expect(verifyModelIntegrity('file:///model.pte', ABC_SHA256.toUpperCase())).resolves.toBe(
-      true
+    expect(mockVerifyFile).toHaveBeenCalledWith(
+      expect.stringMatching(/^model-integrity-/),
+      '/models/model.gguf',
+      'abcd',
     );
+    expect(progress).toHaveBeenCalledWith({ bytesRead: 2, totalBytes: 4, progress: 0.5 });
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(mockRemove).toHaveBeenCalled();
   });
 
-  it('verifies false when the streamed file hash does not match', async () => {
-    primeFile({ exists: true, bytes: ABC_BYTES });
+  it('returns false and removes the listener when native verification fails', async () => {
+    mockVerifyFile.mockRejectedValue(new Error('native unavailable'));
 
-    await expect(verifyModelIntegrity('file:///model.pte', 'ff'.repeat(32))).resolves.toBe(false);
-  });
-
-  it('verifies false for a missing file without throwing (and never opens it)', async () => {
-    const handle = primeFile({ exists: false });
-
-    await expect(verifyModelIntegrity('file:///gone.pte', ABC_SHA256)).resolves.toBe(false);
-    expect(handle.readBytes).not.toHaveBeenCalled();
-  });
-
-  it('verifies false without throwing if the file cannot be opened', async () => {
-    primeFile({ exists: true, openError: new Error('permission denied') });
-
-    await expect(verifyModelIntegrity('file:///unreadable.pte', ABC_SHA256)).resolves.toBe(false);
-  });
-
-  it('normalizes a raw filesystem path (as returned by fetch()) to a file:// URI', async () => {
-    primeFile({ exists: true, bytes: ABC_BYTES });
-
-    await verifyModelIntegrity('/data/user/0/com.locra.app/cache/model.pte', ABC_SHA256);
-
-    expect(MockFile).toHaveBeenCalledWith('file:///data/user/0/com.locra.app/cache/model.pte');
-  });
-
-  it('leaves an existing file:// URI unchanged', async () => {
-    primeFile({ exists: true, bytes: ABC_BYTES });
-
-    await verifyModelIntegrity('file:///already/a/uri/model.pte', ABC_SHA256);
-
-    expect(MockFile).toHaveBeenCalledWith('file:///already/a/uri/model.pte');
+    await expect(verifyModelIntegrity('/models/model.gguf', 'ff')).resolves.toBe(false);
+    expect(mockRemove).toHaveBeenCalled();
   });
 });

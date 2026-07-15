@@ -44,6 +44,10 @@ const INITIAL_MODEL_STATE: ModelState = {
   setupPhase: 'checking',
   downloadStatus: 'not_started',
   downloadProgress: 0,
+  verificationProgress: 0,
+  verificationArtifactProgress: 0,
+  verificationArtifactName: null,
+  canRetryVerification: false,
   integrityVerified: false,
   error: null,
 };
@@ -53,9 +57,14 @@ const INITIAL_MODEL_STATE: ModelState = {
 // `__DEV__` is `false` in a release build, so production always runs the full
 // SHA-256 + size checks. Wired here (not inside the unit-tested lifecycle modules)
 // because `__DEV__` is `true` under Jest.
-async function devSkipIntegrityCheck(): Promise<boolean> {
+async function devSkipIntegrityCheck(
+  _fileUri: string,
+  _expectedSha256: string,
+  onProgress?: (progress: { bytesRead: number; totalBytes: number; progress: number }) => void,
+): Promise<boolean> {
   // eslint-disable-next-line no-console
   console.warn('[Locra] DEV: skipping model integrity verification (SHA-256 + size checks).');
+  onProgress?.({ bytesRead: 1, totalBytes: 1, progress: 1 });
   return true;
 }
 
@@ -216,6 +225,10 @@ function syncManagerState(state: ModelState): void {
     setupPhase: state.setupPhase,
     downloadStatus: state.downloadStatus,
     downloadProgress: state.downloadProgress,
+    verificationProgress: state.verificationProgress,
+    verificationArtifactProgress: state.verificationArtifactProgress,
+    verificationArtifactName: state.verificationArtifactName,
+    canRetryVerification: state.canRetryVerification,
     integrityVerified: state.integrityVerified,
     error: state.error,
   });
@@ -240,6 +253,10 @@ export interface ModelStoreState extends ModelState {
   reattachExistingDownload: () => Promise<boolean>;
   /** Reconcile in-memory readiness against the model on disk (call once at launch). */
   reconcile: () => Promise<void>;
+  /** Run or restart the native integrity check after fast reconciliation. */
+  verifyPendingArtifacts: () => Promise<void>;
+  /** Delete model artifacts and start a fresh gated download. */
+  redownload: () => Promise<void>;
   failActiveCheck: (message: string) => void;
   startDownload: () => Promise<void>;
   confirmCellularDownload: () => Promise<void>;
@@ -269,6 +286,11 @@ export const useModelStore = create<ModelStoreState>(() => ({
     }),
   reattachExistingDownload: () => requireManager().reattachExistingDownload(),
   reconcile: () => requireManager().reconcile(),
+  verifyPendingArtifacts: () => requireManager().verifyPendingArtifacts(),
+  redownload: async () => {
+    await requireManager().cancelDownload();
+    await useModelStore.getState().startDownload();
+  },
   failActiveCheck: (message) => requireManager().failActiveCheck(message),
   startDownload: async () => {
     const gate = await evaluateNetworkGate({
