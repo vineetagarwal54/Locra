@@ -48,7 +48,11 @@ export interface VerifiedArtifact {
 
 export interface ModelDownloadManagerDeps {
   fetcher: ResourceFetcherLike;
-  verifyIntegrity: (fileUri: string, expectedSha256: string) => Promise<boolean>;
+  verifyIntegrity: (
+    fileUri: string,
+    expectedSha256: string,
+    onProgress?: (progress: { bytesRead: number; totalBytes: number; progress: number }) => void,
+  ) => Promise<boolean>;
   getFileSize: (fileUri: string) => Promise<number>;
   sources: ResourceSource[];
   artifacts: VerifiedArtifact[];
@@ -70,9 +74,20 @@ const INITIAL_STATE: ModelState = {
   setupPhase: 'not_installed',
   downloadStatus: 'not_started',
   downloadProgress: 0,
+  verificationProgress: 0,
+  verificationArtifactProgress: 0,
+  verificationArtifactName: null,
+  canRetryVerification: false,
   integrityVerified: false,
   error: null,
 };
+
+interface PendingVerification {
+  resolved: ReadonlyArray<ResolvedArtifactManifest>;
+  paths: ReadonlyMap<string, string>;
+  sizes: ReadonlyMap<string, number>;
+  fingerprint: string;
+}
 
 export class ModelDownloadManager {
   private state: ModelState = { ...INITIAL_STATE };
@@ -80,6 +95,8 @@ export class ModelDownloadManager {
   private readonly artifactProgress = new Map<string, ArtifactProgress>();
   private readonly expectedCache = new Map<string, ArtifactIntegrity>();
   private activeDownloadPromise: Promise<void> | null = null;
+  private activeVerification: { runId: number; promise: Promise<void> } | null = null;
+  private pendingVerification: PendingVerification | null = null;
   private runId = 0;
 
   constructor(private readonly deps: ModelDownloadManagerDeps) {
@@ -130,6 +147,10 @@ export class ModelDownloadManager {
       setupPhase: 'preparing',
       downloadStatus: 'downloading',
       downloadProgress: 0,
+      verificationProgress: 0,
+      verificationArtifactProgress: 0,
+      verificationArtifactName: null,
+      canRetryVerification: false,
       integrityVerified: false,
       error: null,
     });
@@ -215,15 +236,15 @@ export class ModelDownloadManager {
       if (rawRecord !== null && !recordCurrent) await this.clearVerificationRecord();
       if (!this.isCurrent(currentRun)) return;
       if (recordCurrent) {
+        this.pendingVerification = null;
         this.markAllArtifactsReady();
         this.publishReady();
         return;
       }
 
-      this.setState({ setupPhase: 'verifying', downloadProgress: 1 });
-      if (!await this.verifyArtifacts(resolved, paths, currentRun)) return;
-      await this.writeVerificationRecord(resolved, fingerprint, sizes);
-      if (this.isCurrent(currentRun)) this.publishReady();
+      this.prepareVerification(resolved, paths, sizes, fingerprint);
+      // Fast bootstrap stops here. DownloadProgress starts native hashing after
+      // navigation is mounted, so Splash never waits for a full-file digest.
     } catch {
       if (!this.isCurrent(currentRun)) return;
       await this.clearVerificationRecord();
@@ -233,8 +254,27 @@ export class ModelDownloadManager {
 
   failActiveCheck(message: string): void {
     this.runId += 1;
+    this.pendingVerification = null;
     this.resetArtifactProgress();
     this.fail(message);
+  }
+
+  verifyPendingArtifacts(): Promise<void> {
+    if (this.pendingVerification === null) return Promise.resolve();
+    if (this.activeVerification?.runId === this.runId) return this.activeVerification.promise;
+    const currentRun = this.nextRun();
+    this.markAllArtifactsDownloaded();
+    this.setState({
+      setupPhase: 'verifying',
+      downloadStatus: 'downloaded',
+      verificationProgress: 0,
+      verificationArtifactProgress: 0,
+      verificationArtifactName: null,
+      canRetryVerification: false,
+      integrityVerified: false,
+      error: null,
+    });
+    return this.runPendingVerification(this.pendingVerification, currentRun);
   }
 
   async pauseDownload(): Promise<void> {
@@ -270,6 +310,8 @@ export class ModelDownloadManager {
     await this.safeDelete();
     await this.clearVerificationRecord();
     if (this.activeDownloadPromise === cancelled) this.activeDownloadPromise = null;
+    this.pendingVerification = null;
+    this.activeVerification = null;
     this.resetArtifactProgress();
     this.setState({ ...INITIAL_STATE });
   }
@@ -301,17 +343,59 @@ export class ModelDownloadManager {
     const sizes = new Map<string, number>();
     for (const { artifact, integrity } of resolved) {
       const path = paths.find((candidate) => getFilename(candidate) === artifact.fileName);
-      if (path === undefined) return this.handleVerificationFailure(currentRun);
+      if (path === undefined) return this.handleInvalidArtifacts(currentRun);
       const size = await this.deps.getFileSize(path);
       if (!this.isCurrent(currentRun)) return;
-      if (size !== integrity.expectedSize) return this.handleVerificationFailure(currentRun);
+      if (size !== integrity.expectedSize) return this.handleInvalidArtifacts(currentRun);
       artifactPaths.set(artifact.artifactId, path);
       sizes.set(artifact.artifactId, size);
     }
-    if (!await this.verifyArtifacts(resolved, artifactPaths, currentRun)) return;
     const fingerprint = createManifestFingerprint(this.modelId(), resolved);
-    await this.writeVerificationRecord(resolved, fingerprint, sizes);
-    if (this.isCurrent(currentRun)) this.publishReady();
+    const verification = this.prepareVerification(resolved, artifactPaths, sizes, fingerprint);
+    await this.runPendingVerification(verification, currentRun);
+  }
+
+  private prepareVerification(
+    resolved: ReadonlyArray<ResolvedArtifactManifest>,
+    paths: ReadonlyMap<string, string>,
+    sizes: ReadonlyMap<string, number>,
+    fingerprint: string,
+  ): PendingVerification {
+    const pending = { resolved, paths, sizes, fingerprint };
+    this.pendingVerification = pending;
+    this.markAllArtifactsDownloaded();
+    this.setState({
+      setupPhase: 'verifying',
+      downloadStatus: 'downloaded',
+      downloadProgress: 1,
+      verificationProgress: 0,
+      verificationArtifactProgress: 0,
+      verificationArtifactName: null,
+      canRetryVerification: false,
+      integrityVerified: false,
+      error: null,
+    });
+    return pending;
+  }
+
+  private runPendingVerification(pending: PendingVerification, currentRun: number): Promise<void> {
+    const promise = this.completePendingVerification(pending, currentRun).finally(() => {
+      if (this.activeVerification?.promise === promise) this.activeVerification = null;
+    });
+    this.activeVerification = { runId: currentRun, promise };
+    return promise;
+  }
+
+  private async completePendingVerification(
+    pending: PendingVerification,
+    currentRun: number,
+  ): Promise<void> {
+    if (!await this.verifyArtifacts(pending.resolved, pending.paths, currentRun)) return;
+    if (!this.isCurrent(currentRun)) return;
+    await this.writeVerificationRecord(pending.resolved, pending.fingerprint, pending.sizes);
+    if (!this.isCurrent(currentRun)) return;
+    this.pendingVerification = null;
+    this.publishReady();
   }
 
   private async verifyArtifacts(
@@ -319,28 +403,67 @@ export class ModelDownloadManager {
     paths: ReadonlyMap<string, string>,
     currentRun: number,
   ): Promise<boolean> {
+    const totalBytes = resolved.reduce((sum, entry) => sum + entry.integrity.expectedSize, 0);
+    let completedBytes = 0;
     for (const { artifact, integrity } of resolved) {
       const path = paths.get(artifact.artifactId);
-      const verified = path !== undefined && await this.deps.verifyIntegrity(path, integrity.expectedSha256);
+      if (!this.isCurrent(currentRun)) return false;
+      this.setState({
+        verificationArtifactName: artifact.fileName,
+        verificationArtifactProgress: 0,
+        verificationProgress: completedBytes / totalBytes,
+      });
+      const verified = path !== undefined && await this.deps.verifyIntegrity(
+        path,
+        integrity.expectedSha256,
+        (progress) => {
+          if (!this.isCurrent(currentRun)) return;
+          const artifactBytes = Math.min(integrity.expectedSize, Math.max(0, progress.bytesRead));
+          this.setState({
+            verificationArtifactProgress: clampProgress(progress.progress),
+            verificationProgress: clampProgress((completedBytes + artifactBytes) / totalBytes),
+          });
+        },
+      );
       if (!this.isCurrent(currentRun)) return false;
       if (!verified) {
         await this.handleVerificationFailure(currentRun);
         return false;
       }
+      completedBytes += integrity.expectedSize;
       this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
     }
     return true;
   }
 
   private async handleVerificationFailure(currentRun: number): Promise<void> {
+    if (!this.isCurrent(currentRun)) return;
+    await this.clearVerificationRecord();
+    if (!this.isCurrent(currentRun)) return;
+    this.setState({
+      setupPhase: 'failed',
+      downloadStatus: 'failed',
+      integrityVerified: false,
+      canRetryVerification: true,
+      error: 'The model could not be verified. Retry the integrity check or redownload the model.',
+    });
+  }
+
+  private async handleInvalidArtifacts(currentRun: number): Promise<void> {
     await this.safeDelete();
     await this.clearVerificationRecord();
-    if (this.isCurrent(currentRun)) this.fail('The model could not be verified. Redownload it to try again.');
+    if (this.isCurrent(currentRun)) this.fail('Model files changed and need to be downloaded again.');
   }
 
   private fail(error: string): void {
     this.resetArtifactProgress();
-    this.setState({ setupPhase: 'failed', downloadStatus: 'failed', integrityVerified: false, error });
+    this.setState({
+      setupPhase: 'failed',
+      downloadStatus: 'failed',
+      canRetryVerification: false,
+      integrityVerified: false,
+      error,
+    });
   }
 
   private publishReady(): void {
@@ -348,12 +471,17 @@ export class ModelDownloadManager {
       setupPhase: 'ready',
       downloadStatus: 'downloaded',
       downloadProgress: 1,
+      verificationProgress: 1,
+      verificationArtifactProgress: 1,
+      verificationArtifactName: null,
+      canRetryVerification: false,
       integrityVerified: true,
       error: null,
     });
   }
 
   private markNotInstalled(): void {
+    this.pendingVerification = null;
     this.resetArtifactProgress();
     this.setState({ ...INITIAL_STATE });
   }
@@ -361,6 +489,12 @@ export class ModelDownloadManager {
   private markAllArtifactsReady(): void {
     for (const artifact of this.deps.artifacts) {
       this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
+    }
+  }
+
+  private markAllArtifactsDownloaded(): void {
+    for (const artifact of this.deps.artifacts) {
+      this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: false });
     }
   }
 
@@ -442,4 +576,9 @@ function toDownloadMessage(error: unknown): string {
 
 function getFilename(path: string): string {
   return path.split(/[\\/]/).at(-1) ?? '';
+}
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
 }
