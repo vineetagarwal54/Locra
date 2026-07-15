@@ -13,6 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
+import { runModelBootstrap } from '../model/ModelBootstrap';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -84,8 +85,7 @@ function resolveInitialRoute(): keyof RootStackParamList {
   const modelState = useModelStore.getState();
   return resolveLaunchRoute({
     welcomeCompleted: hasCompletedWelcome(),
-    modelReady: modelState.isReadyForTextInference(),
-    downloadStatus: modelState.downloadStatus,
+    setupPhase: modelState.setupPhase,
   });
 }
 
@@ -102,11 +102,12 @@ function foregroundDownloadRoute(): 'DownloadProgress' | null {
     return null;
   }
   const modelState = useModelStore.getState();
-  if (modelState.isReadyForTextInference()) {
+  if (modelState.setupPhase === 'ready') {
     return null;
   }
-  const status = modelState.downloadStatus;
-  return status === 'downloading' || status === 'paused' ? 'DownloadProgress' : null;
+  return modelState.setupPhase === 'downloading' || modelState.setupPhase === 'paused' || modelState.setupPhase === 'verifying'
+    ? 'DownloadProgress'
+    : null;
 }
 
 // The stack owns every screen and the onboarding launch gate; the drawer (T046)
@@ -133,9 +134,7 @@ function RootStack() {
 }
 
 export function AppNavigator() {
-  const engineReady = useModelStore(
-    (s) => s.isReadyForTextInference()
-  );
+  const engineReady = useModelStore((s) => s.setupPhase === 'ready' && s.integrityVerified);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -144,6 +143,7 @@ export function AppNavigator() {
   const [bootstrapped, setBootstrapped] = useState(false);
   useEffect(() => {
     let active = true;
+    let runId = 1;
     async function bootstrapModelState(): Promise<void> {
       reconcileAbandonedAttempts();
       const modelStore = useModelStore.getState();
@@ -154,13 +154,19 @@ export function AppNavigator() {
       }
     }
 
-    void bootstrapModelState().finally(() => {
-      if (active) {
-        setBootstrapped(true);
+    const operation = bootstrapModelState();
+    void runModelBootstrap({ operation, isCurrent: () => active && runId === 1 }).then((result) => {
+      if (!active || runId !== 1) return;
+      if (result.status === 'timeout') {
+        useModelStore.getState().failActiveCheck('Model setup is taking longer than expected.');
+      } else if (result.status === 'failed') {
+        useModelStore.getState().failActiveCheck('Model setup could not be checked. Try again.');
       }
+      setBootstrapped(true);
     });
     return () => {
       active = false;
+      runId += 1;
     };
   }, []);
 

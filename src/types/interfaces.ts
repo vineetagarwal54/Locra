@@ -3,6 +3,7 @@
 // module contracts in specs/001-camera-vlm-qa/contracts/*.contract.md.
 
 import type { ResponseMode } from '../inference/ResponseMode';
+import type { InferenceReadiness } from '../model/InferenceReadiness';
 
 import type {
   Conversation,
@@ -35,6 +36,7 @@ export interface IModelLifecycle {
   getState(): ModelState;
   subscribe(listener: (state: ModelState) => void): () => void;
   isReadyForInference(): boolean;
+  getInferenceReadiness(): InferenceReadiness;
   startDownload(): Promise<void>;
   pauseDownload(): Promise<void>;
   resumeDownload(): Promise<void>;

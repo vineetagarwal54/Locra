@@ -154,6 +154,15 @@ export interface ConversationRuntimeState {
 }
 
 export type ModelDownloadStatus = 'not_started' | 'downloading' | 'paused' | 'downloaded' | 'failed';
+export type ModelSetupPhase =
+  | 'checking'
+  | 'not_installed'
+  | 'preparing'
+  | 'downloading'
+  | 'paused'
+  | 'verifying'
+  | 'ready'
+  | 'failed';
 
 export interface OnDeviceModel {
   modelName: string;
@@ -204,6 +213,7 @@ export interface InferenceState {
 }
 
 export interface ModelState {
+  setupPhase: ModelSetupPhase;
   downloadStatus: ModelDownloadStatus;
   downloadProgress: number;
   integrityVerified: boolean;

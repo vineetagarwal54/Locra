@@ -20,7 +20,7 @@ import { createQwenModelPresentation } from '../model/ModelPresentation';
 import { getStorageAvailability, isStorageError } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useModelStore } from '../store/modelStore';
-import type { ModelDownloadStatus } from '../types/models';
+import type { ModelDownloadStatus, ModelSetupPhase } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DownloadProgress'>;
 
@@ -32,6 +32,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
   const autoStart = route.params?.autoStart ?? false;
 
   const downloadStatus = useModelStore((s) => s.downloadStatus);
+  const setupPhase = useModelStore((s) => s.setupPhase);
   const downloadProgress = useModelStore((s) => s.downloadProgress);
   const integrityVerified = useModelStore((s) => s.integrityVerified);
   const error = useModelStore((s) => s.error);
@@ -45,7 +46,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
 
   const progress = clampProgress(downloadProgress);
   const progressPercent = Math.round(progress * 100);
-  const isReady = downloadStatus === 'downloaded' && integrityVerified;
+  const isReady = setupPhase === 'ready' && integrityVerified;
   const reduceMotion = useReducedMotion();
 
   // Start from the real current progress so a reattached download never replays
@@ -73,7 +74,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
     const store = useModelStore.getState();
     if (
       autoStart &&
-      (store.downloadStatus === 'not_started' || store.downloadStatus === 'failed')
+      (store.setupPhase === 'not_installed' || store.setupPhase === 'failed')
     ) {
       void (async () => {
         // Pre-flight free-space gate: route to the recovery screen before
@@ -136,8 +137,8 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
     void confirmCellularDownload();
   }, [confirmCellularDownload]);
 
-  const isFailed = downloadStatus === 'failed';
-  const phase = getPhase(downloadStatus, integrityVerified);
+  const isFailed = setupPhase === 'failed';
+  const phase = getPhase(setupPhase);
 
   return (
     <OnboardingScreen
@@ -146,6 +147,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
         cellularWarningVisible ? undefined : (
           <SetupFooter
             status={downloadStatus}
+            setupPhase={setupPhase}
             onCancel={onCancel}
             onResume={onResume}
             onRetry={onRetry}
@@ -158,7 +160,13 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
       </View>
 
       <Text style={styles.title}>
-        {isFailed ? 'Download needs attention' : 'Downloading Intelligence…'}
+        {isFailed
+          ? 'Setup needs attention'
+          : setupPhase === 'verifying'
+            ? 'Verifying model…'
+            : setupPhase === 'preparing'
+              ? 'Preparing on-device AI…'
+              : 'Downloading model…'}
       </Text>
 
       <View style={styles.chip}>
@@ -229,12 +237,14 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
 
 interface SetupFooterProps {
   status: ModelDownloadStatus;
+  setupPhase: ModelSetupPhase;
   onCancel: () => void;
   onResume: () => void;
   onRetry: () => void;
 }
 
-function SetupFooter({ status, onCancel, onResume, onRetry }: SetupFooterProps) {
+function SetupFooter({ status, setupPhase, onCancel, onResume, onRetry }: SetupFooterProps) {
+  if (setupPhase === 'verifying' || setupPhase === 'preparing') return null;
   if (status === 'failed') {
     return (
       <View>
@@ -261,12 +271,13 @@ function clampProgress(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function getPhase(status: ModelDownloadStatus, integrityVerified: boolean): string {
-  if (status === 'downloading') return 'DOWNLOADING';
-  if (status === 'paused') return 'PAUSED';
-  if (status === 'failed') return 'FAILED';
-  if (status === 'downloaded') return integrityVerified ? 'COMPLETE' : 'VERIFYING BLOCKS';
-  return 'PREPARING';
+function getPhase(phase: ModelSetupPhase): string {
+  if (phase === 'downloading') return 'Downloading…';
+  if (phase === 'paused') return 'Download paused';
+  if (phase === 'verifying') return 'Verifying model…';
+  if (phase === 'failed') return 'Setup needs attention';
+  if (phase === 'ready') return 'Model ready';
+  return 'Preparing download…';
 }
 
 const styles = StyleSheet.create({

@@ -139,6 +139,7 @@ describe('Model lifecycle contract', () => {
     listDownloadedModels.mockResolvedValue([]);
     await manager.reconcile();
     expect(manager.getState().downloadStatus).toBe('not_started');
+    expect(manager.getState().setupPhase).toBe('not_installed');
     expect(manager.isReadyForInference()).toBe(false);
 
     listDownloadedModels.mockResolvedValue([MODEL_PATH]);
@@ -152,7 +153,8 @@ describe('Model lifecycle contract', () => {
     getFileSize.mockResolvedValue(EXPECTED_SIZE - 1);
     await manager.reconcile();
     expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
-    expect(manager.getState().downloadStatus).toBe('not_started');
+    expect(manager.getState().downloadStatus).toBe('failed');
+    expect(manager.getState().setupPhase).toBe('failed');
   });
 
   it('keeps the model lifecycle boundary free of screen and inference imports', () => {
