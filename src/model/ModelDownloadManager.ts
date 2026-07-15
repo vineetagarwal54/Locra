@@ -1,29 +1,21 @@
 import type { ModelState } from '../types/models';
 
 import type { ArtifactReadiness } from './ModelArtifactManifest';
+import {
+  createManifestFingerprint,
+  isRecordCurrent,
+  MODEL_VERIFICATION_SCHEMA_VERSION,
+  parseVerificationRecord,
+  type ModelVerificationRecord,
+  type ResolvedArtifactManifest,
+} from './ModelVerificationRecord';
+
 export interface ArtifactIntegrity {
   expectedSha256: string;
   expectedSize: number;
 }
 
-// Wraps a resource fetcher's download lifecycle and runs a SHA-256 integrity
-// check after every fetch. Constitution Principle X: self-contained model
-// lifecycle — no imports from inference or screens. Dependencies (the fetcher
-// and the integrity verifier) are INJECTED so this module never loads a native
-// package at import time; the real ExpoResourceFetcher/BackgroundDownloadFetcher
-// + verifyModelIntegrity are wired at the composition root (modelStore).
-//
-// Generalized (Spec 005, T017) into an exact-manifest artifact bundle. Each
-// artifact is located by its exact
-// filename and verified independently; the bundle is ready only when every
-// artifact is downloaded AND integrity-verified. Aggregate progress/status stays
-// the product-facing `ModelState`; per-artifact readiness is exposed separately
-// for internal bundle wiring.
-
-// Mirrors ExpoResourceFetcher's `ResourceSource` (string | number | object)
-// without importing the native package.
 export type ResourceSource = string | number | object;
-
 export type ReattachedDownloadStatus = 'downloading' | 'paused';
 
 export interface ReattachedDownload {
@@ -33,10 +25,10 @@ export interface ReattachedDownload {
 }
 
 export interface ResourceFetcherLike {
-  fetch(
-    callback?: (progress: number) => void,
-    ...sources: ResourceSource[]
-  ): Promise<{ paths: string[]; wasDownloaded: boolean[] }>;
+  fetch(callback?: (progress: number) => void, ...sources: ResourceSource[]): Promise<{
+    paths: string[];
+    wasDownloaded: boolean[];
+  }>;
   reattachExistingDownloads?(
     callback?: (progress: number) => void,
     ...sources: ResourceSource[]
@@ -45,29 +37,28 @@ export interface ResourceFetcherLike {
   resumeFetching(...sources: ResourceSource[]): Promise<void>;
   cancelFetching(...sources: ResourceSource[]): Promise<void>;
   deleteResources(...sources: ResourceSource[]): Promise<void>;
-  /** Local paths of already-downloaded model artifact files. */
   listDownloadedModels(): Promise<string[]>;
 }
 
-/** One independently-verified artifact in the bundle. */
 export interface VerifiedArtifact {
-  /** Stable internal id (mirrors the manifest descriptor). */
   readonly artifactId: string;
-  /** Exact expected filename, used to locate the file among fetch results / on disk. */
   readonly fileName: string;
-  /** Fetches (or returns pinned) expected SHA-256 + size for this artifact. */
   getExpectedIntegrity: () => Promise<ArtifactIntegrity>;
 }
 
 export interface ModelDownloadManagerDeps {
   fetcher: ResourceFetcherLike;
   verifyIntegrity: (fileUri: string, expectedSha256: string) => Promise<boolean>;
-  /** Bytes on disk for a given path (injected so this module stays native-free). */
   getFileSize: (fileUri: string) => Promise<number>;
-  /** All download sources for the bundle, in order (verified artifacts + auxiliary files). */
   sources: ResourceSource[];
-  /** Independently verified artifacts in this exact bundle. */
   artifacts: VerifiedArtifact[];
+  modelId?: string;
+  verificationRecord?: {
+    read: () => Promise<string | null>;
+    write: (value: string) => Promise<void>;
+    clear: () => Promise<void>;
+  };
+  now?: () => number;
 }
 
 interface ArtifactProgress {
@@ -76,6 +67,7 @@ interface ArtifactProgress {
 }
 
 const INITIAL_STATE: ModelState = {
+  setupPhase: 'not_installed',
   downloadStatus: 'not_started',
   downloadProgress: 0,
   integrityVerified: false,
@@ -85,29 +77,22 @@ const INITIAL_STATE: ModelState = {
 export class ModelDownloadManager {
   private state: ModelState = { ...INITIAL_STATE };
   private readonly listeners = new Set<(state: ModelState) => void>();
-  private readonly artifacts: VerifiedArtifact[];
   private readonly artifactProgress = new Map<string, ArtifactProgress>();
   private readonly expectedCache = new Map<string, ArtifactIntegrity>();
   private activeDownloadPromise: Promise<void> | null = null;
-  private downloadRunId = 0;
+  private runId = 0;
 
   constructor(private readonly deps: ModelDownloadManagerDeps) {
-    if (deps.artifacts.length === 0) {
-      throw new Error('ModelDownloadManager requires at least one artifact.');
-    }
-    this.artifacts = deps.artifacts;
-    for (const artifact of this.artifacts) {
-      this.artifactProgress.set(artifact.artifactId, { downloaded: false, verified: false });
-    }
+    if (deps.artifacts.length === 0) throw new Error('ModelDownloadManager requires at least one artifact.');
+    this.resetArtifactProgress();
   }
 
   getState(): ModelState {
     return this.state;
   }
 
-  /** Internal per-artifact readiness for the bundle wiring (not product-facing). */
   getArtifactStates(): ArtifactReadiness[] {
-    return this.artifacts.map((artifact) => {
+    return this.deps.artifacts.map((artifact) => {
       const progress = this.artifactProgress.get(artifact.artifactId);
       return {
         artifactId: artifact.artifactId,
@@ -119,99 +104,69 @@ export class ModelDownloadManager {
 
   subscribe(listener: (state: ModelState) => void): () => void {
     this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return () => this.listeners.delete(listener);
   }
 
   isReadyForInference(): boolean {
-    return this.artifacts.every(
-      (artifact) => this.artifactProgress.get(artifact.artifactId)?.verified === true
-    );
+    return this.state.setupPhase === 'ready' &&
+      this.state.integrityVerified &&
+      this.deps.artifacts.every((artifact) => this.artifactProgress.get(artifact.artifactId)?.verified === true);
   }
 
   startDownload(): Promise<void> {
-    if (this.activeDownloadPromise !== null) {
-      return this.activeDownloadPromise;
-    }
-    if (this.isReadyForInference()) {
-      return Promise.resolve();
-    }
-
-    const runId = this.nextDownloadRun();
-    const promise = this.runDownload(runId).finally(() => {
-      if (this.activeDownloadPromise === promise) {
-        this.activeDownloadPromise = null;
-      }
+    if (this.activeDownloadPromise !== null) return this.activeDownloadPromise;
+    if (this.isReadyForInference()) return Promise.resolve();
+    const currentRun = this.nextRun();
+    const promise = this.runDownload(currentRun).finally(() => {
+      if (this.activeDownloadPromise === promise) this.activeDownloadPromise = null;
     });
     this.activeDownloadPromise = promise;
     return promise;
   }
 
-  private async runDownload(runId: number): Promise<void> {
+  private async runDownload(currentRun: number): Promise<void> {
     this.resetArtifactProgress();
     this.setState({
+      setupPhase: 'preparing',
       downloadStatus: 'downloading',
       downloadProgress: 0,
       integrityVerified: false,
       error: null,
     });
     try {
-      const downloadPromise = this.deps.fetcher.fetch(
-        (progress) => {
-          if (this.isCurrentRun(runId)) {
-            this.setState({ downloadProgress: progress });
-          }
-        },
-        ...this.deps.sources
-      );
-      await this.finishDownload(downloadPromise, runId);
+      this.setState({ setupPhase: 'downloading' });
+      const pending = this.deps.fetcher.fetch((progress) => {
+        if (this.isCurrent(currentRun)) this.setState({ downloadProgress: progress });
+      }, ...this.deps.sources);
+      await this.finishDownload(pending, currentRun);
     } catch (error) {
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
+      if (!this.isCurrent(currentRun)) return;
       await this.safeDelete();
-      this.setState({
-        downloadStatus: 'failed',
-        integrityVerified: false,
-        error: toMessage(error),
-      });
+      await this.clearVerificationRecord();
+      this.fail(toDownloadMessage(error));
     }
   }
 
   async reattachExistingDownload(): Promise<boolean> {
-    if (this.activeDownloadPromise !== null) {
-      return true;
-    }
-    if (!this.deps.fetcher.reattachExistingDownloads) {
-      return false;
-    }
-
-    const runId = this.nextDownloadRun();
+    if (this.activeDownloadPromise !== null) return true;
+    if (!this.deps.fetcher.reattachExistingDownloads) return false;
+    const currentRun = this.nextRun();
     try {
-      const reattached = await this.deps.fetcher.reattachExistingDownloads(
-        (progress) => {
-          if (this.isCurrentRun(runId)) {
-            this.setState({ downloadProgress: progress });
-          }
-        },
-        ...this.deps.sources
-      );
-      if (!reattached) {
-        return false;
-      }
-
+      const reattached = await this.deps.fetcher.reattachExistingDownloads((progress) => {
+        if (this.isCurrent(currentRun)) this.setState({ downloadProgress: progress });
+      }, ...this.deps.sources);
+      if (!this.isCurrent(currentRun)) return false;
+      if (!reattached) return false;
       this.resetArtifactProgress();
       this.setState({
+        setupPhase: reattached.status === 'paused' ? 'paused' : 'downloading',
         downloadStatus: reattached.status,
         downloadProgress: reattached.progress,
         integrityVerified: false,
         error: null,
       });
-      const promise = this.finishReattachedDownload(reattached.promise, runId).finally(() => {
-        if (this.activeDownloadPromise === promise) {
-          this.activeDownloadPromise = null;
-        }
+      const promise = this.finishReattachedDownload(reattached.promise, currentRun).finally(() => {
+        if (this.activeDownloadPromise === promise) this.activeDownloadPromise = null;
       });
       this.activeDownloadPromise = promise;
       void promise;
@@ -221,166 +176,176 @@ export class ModelDownloadManager {
     }
   }
 
-  /**
-   * Launch-time reconciliation against the real filesystem. Each artifact left on
-   * disk was only ever kept AFTER passing its SHA-256 check at download time
-   * (startDownload deletes anything that fails), so presence + a cheap size check
-   * is a trustworthy cached result: present & big enough ⇒ ready, otherwise not
-   * ready. This deliberately does NOT re-hash multi-GB files on every cold start
-   * (Principle IV). Every manifest artifact must reconcile as ready for the
-   * bundle to be ready. Never downloads; never throws.
-   */
   async reconcile(): Promise<void> {
+    const currentRun = this.nextRun();
+    this.setState({ setupPhase: 'checking', integrityVerified: false, error: null });
     try {
       const files = await this.deps.fetcher.listDownloadedModels();
-      for (const artifact of this.artifacts) {
+      if (!this.isCurrent(currentRun)) return;
+      const resolved = await this.resolveManifest();
+      if (!this.isCurrent(currentRun)) return;
+      const paths = new Map<string, string>();
+      for (const { artifact } of resolved) {
         const path = files.find((file) => getFilename(file) === artifact.fileName);
         if (path === undefined) {
-          await this.markNotReady();
+          await this.clearVerificationRecord();
+          if (this.isCurrent(currentRun)) this.markNotInstalled();
           return;
         }
-        const expected = await this.resolveExpected(artifact);
-        const size = await this.deps.getFileSize(path);
-        if (size < expected.expectedSize) {
-          await this.safeDelete();
-          await this.markNotReady();
-          return;
-        }
-        this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
+        paths.set(artifact.artifactId, path);
       }
-      this.setState({
-        downloadStatus: 'downloaded',
-        downloadProgress: 1,
-        integrityVerified: true,
-        error: null,
-      });
+
+      const sizes = new Map<string, number>();
+      for (const { artifact, integrity } of resolved) {
+        const size = await this.deps.getFileSize(paths.get(artifact.artifactId) as string);
+        if (!this.isCurrent(currentRun)) return;
+        if (size !== integrity.expectedSize) {
+          await this.safeDelete();
+          await this.clearVerificationRecord();
+          if (this.isCurrent(currentRun)) this.fail('Model files changed and need to be downloaded again.');
+          return;
+        }
+        sizes.set(artifact.artifactId, size);
+      }
+
+      const fingerprint = createManifestFingerprint(this.modelId(), resolved);
+      const rawRecord = await this.deps.verificationRecord?.read() ?? null;
+      const record = parseVerificationRecord(rawRecord);
+      const recordCurrent = record !== null && isRecordCurrent(record, this.modelId(), fingerprint, resolved);
+      if (rawRecord !== null && !recordCurrent) await this.clearVerificationRecord();
+      if (!this.isCurrent(currentRun)) return;
+      if (recordCurrent) {
+        this.markAllArtifactsReady();
+        this.publishReady();
+        return;
+      }
+
+      this.setState({ setupPhase: 'verifying', downloadProgress: 1 });
+      if (!await this.verifyArtifacts(resolved, paths, currentRun)) return;
+      await this.writeVerificationRecord(resolved, fingerprint, sizes);
+      if (this.isCurrent(currentRun)) this.publishReady();
     } catch {
-      await this.markNotReady();
+      if (!this.isCurrent(currentRun)) return;
+      await this.clearVerificationRecord();
+      this.fail('Model setup could not be checked. Retry the check or redownload the model.');
     }
+  }
+
+  failActiveCheck(message: string): void {
+    this.runId += 1;
+    this.resetArtifactProgress();
+    this.fail(message);
   }
 
   async pauseDownload(): Promise<void> {
     if (this.state.downloadStatus !== 'downloading') {
-      try {
-        await this.deps.fetcher.pauseFetching(...this.deps.sources);
-      } catch {
-        // Nothing active to pause.
-      }
+      try { await this.deps.fetcher.pauseFetching(...this.deps.sources); } catch { /* no active task */ }
       return;
     }
-
-    this.setState({ downloadStatus: 'paused' });
+    this.setState({ setupPhase: 'paused', downloadStatus: 'paused' });
     try {
       await this.deps.fetcher.pauseFetching(...this.deps.sources);
     } catch {
-      this.setState({ downloadStatus: 'downloading' });
+      this.setState({ setupPhase: 'downloading', downloadStatus: 'downloading' });
     }
   }
 
   async resumeDownload(): Promise<void> {
     if (this.state.downloadStatus !== 'paused') {
-      try {
-        await this.deps.fetcher.resumeFetching(...this.deps.sources);
-      } catch {
-        // Nothing paused to resume.
-      }
+      try { await this.deps.fetcher.resumeFetching(...this.deps.sources); } catch { /* no paused task */ }
       return;
     }
-
-    this.setState({ downloadStatus: 'downloading' });
+    this.setState({ setupPhase: 'downloading', downloadStatus: 'downloading' });
     try {
       await this.deps.fetcher.resumeFetching(...this.deps.sources);
     } catch {
-      this.setState({ downloadStatus: 'paused' });
+      this.setState({ setupPhase: 'paused', downloadStatus: 'paused' });
     }
   }
 
   async cancelDownload(): Promise<void> {
-    const cancelledPromise = this.activeDownloadPromise;
-    this.downloadRunId += 1;
-    try {
-      await this.deps.fetcher.cancelFetching(...this.deps.sources);
-    } catch {
-      // Nothing active to cancel.
-    }
+    const cancelled = this.activeDownloadPromise;
+    this.runId += 1;
+    try { await this.deps.fetcher.cancelFetching(...this.deps.sources); } catch { /* no active task */ }
     await this.safeDelete();
-    if (this.activeDownloadPromise === cancelledPromise) {
-      this.activeDownloadPromise = null;
-    }
+    await this.clearVerificationRecord();
+    if (this.activeDownloadPromise === cancelled) this.activeDownloadPromise = null;
     this.resetArtifactProgress();
     this.setState({ ...INITIAL_STATE });
   }
 
-  private async safeDelete(): Promise<void> {
-    try {
-      await this.deps.fetcher.deleteResources(...this.deps.sources);
-    } catch {
-      // Best-effort cleanup; a delete failure must not mask the real outcome.
-    }
-  }
-
   private async finishReattachedDownload(
-    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
-    runId: number
+    pending: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
+    currentRun: number,
   ): Promise<void> {
     try {
-      await this.finishDownload(downloadPromise, runId);
+      await this.finishDownload(pending, currentRun);
     } catch (error) {
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
-      try {
-        await this.deps.fetcher.cancelFetching(...this.deps.sources);
-      } catch {
-        // Nothing active to cancel.
-      }
+      if (!this.isCurrent(currentRun)) return;
+      try { await this.deps.fetcher.cancelFetching(...this.deps.sources); } catch { /* already complete */ }
       await this.safeDelete();
-      this.setState({
-        downloadStatus: 'failed',
-        integrityVerified: false,
-        error: toMessage(error),
-      });
+      await this.clearVerificationRecord();
+      this.fail(toDownloadMessage(error));
     }
   }
 
   private async finishDownload(
-    downloadPromise: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
-    runId: number
+    pending: Promise<{ paths: string[]; wasDownloaded: boolean[] }>,
+    currentRun: number,
   ): Promise<void> {
-    const { paths } = await downloadPromise;
-    if (!this.isCurrentRun(runId)) {
-      return;
-    }
-
-    // Verify each artifact independently — a match on one artifact never implies
-    // verification of another.
-    for (const artifact of this.artifacts) {
-      const expected = await this.resolveExpected(artifact);
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
+    const { paths } = await pending;
+    if (!this.isCurrent(currentRun)) return;
+    this.setState({ setupPhase: 'verifying', downloadProgress: 1 });
+    const resolved = await this.resolveManifest();
+    const artifactPaths = new Map<string, string>();
+    const sizes = new Map<string, number>();
+    for (const { artifact, integrity } of resolved) {
       const path = paths.find((candidate) => getFilename(candidate) === artifact.fileName);
-      const verified =
-        path !== undefined && (await this.deps.verifyIntegrity(path, expected.expectedSha256));
-      if (!this.isCurrentRun(runId)) {
-        return;
-      }
+      if (path === undefined) return this.handleVerificationFailure(currentRun);
+      const size = await this.deps.getFileSize(path);
+      if (!this.isCurrent(currentRun)) return;
+      if (size !== integrity.expectedSize) return this.handleVerificationFailure(currentRun);
+      artifactPaths.set(artifact.artifactId, path);
+      sizes.set(artifact.artifactId, size);
+    }
+    if (!await this.verifyArtifacts(resolved, artifactPaths, currentRun)) return;
+    const fingerprint = createManifestFingerprint(this.modelId(), resolved);
+    await this.writeVerificationRecord(resolved, fingerprint, sizes);
+    if (this.isCurrent(currentRun)) this.publishReady();
+  }
+
+  private async verifyArtifacts(
+    resolved: ReadonlyArray<ResolvedArtifactManifest>,
+    paths: ReadonlyMap<string, string>,
+    currentRun: number,
+  ): Promise<boolean> {
+    for (const { artifact, integrity } of resolved) {
+      const path = paths.get(artifact.artifactId);
+      const verified = path !== undefined && await this.deps.verifyIntegrity(path, integrity.expectedSha256);
+      if (!this.isCurrent(currentRun)) return false;
       if (!verified) {
-        this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: false });
-        // Corrupt/missing bytes: clear the partial files BEFORE reporting 'failed'
-        // so the next startDownload() is always a clean re-download.
-        await this.safeDelete();
-        this.setState({
-          downloadStatus: 'failed',
-          integrityVerified: false,
-          error: 'The downloaded model failed its integrity check.',
-        });
-        return;
+        await this.handleVerificationFailure(currentRun);
+        return false;
       }
       this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
     }
+    return true;
+  }
 
+  private async handleVerificationFailure(currentRun: number): Promise<void> {
+    await this.safeDelete();
+    await this.clearVerificationRecord();
+    if (this.isCurrent(currentRun)) this.fail('The model could not be verified. Redownload it to try again.');
+  }
+
+  private fail(error: string): void {
+    this.resetArtifactProgress();
+    this.setState({ setupPhase: 'failed', downloadStatus: 'failed', integrityVerified: false, error });
+  }
+
+  private publishReady(): void {
     this.setState({
+      setupPhase: 'ready',
       downloadStatus: 'downloaded',
       downloadProgress: 1,
       integrityVerified: true,
@@ -388,48 +353,91 @@ export class ModelDownloadManager {
     });
   }
 
+  private markNotInstalled(): void {
+    this.resetArtifactProgress();
+    this.setState({ ...INITIAL_STATE });
+  }
+
+  private markAllArtifactsReady(): void {
+    for (const artifact of this.deps.artifacts) {
+      this.artifactProgress.set(artifact.artifactId, { downloaded: true, verified: true });
+    }
+  }
+
+  private async resolveManifest(): Promise<ResolvedArtifactManifest[]> {
+    return Promise.all(this.deps.artifacts.map(async (artifact) => ({
+      artifact,
+      integrity: await this.resolveExpected(artifact),
+    })));
+  }
+
   private async resolveExpected(artifact: VerifiedArtifact): Promise<ArtifactIntegrity> {
     const cached = this.expectedCache.get(artifact.artifactId);
-    if (cached !== undefined) {
-      return cached;
-    }
+    if (cached !== undefined) return cached;
     const expected = await artifact.getExpectedIntegrity();
     this.expectedCache.set(artifact.artifactId, expected);
     return expected;
   }
 
+  private async writeVerificationRecord(
+    resolved: ReadonlyArray<ResolvedArtifactManifest>,
+    fingerprint: string,
+    sizes: ReadonlyMap<string, number>,
+  ): Promise<void> {
+    if (!this.deps.verificationRecord) return;
+    const record: ModelVerificationRecord = {
+      schemaVersion: MODEL_VERIFICATION_SCHEMA_VERSION,
+      modelId: this.modelId(),
+      manifestFingerprint: fingerprint,
+      verifiedAt: (this.deps.now ?? Date.now)(),
+      artifacts: resolved.map(({ artifact, integrity }) => ({
+        artifactId: artifact.artifactId,
+        fileName: artifact.fileName,
+        expectedSize: integrity.expectedSize,
+        expectedSha256: integrity.expectedSha256,
+        verifiedSize: sizes.get(artifact.artifactId) ?? integrity.expectedSize,
+      })),
+    };
+    await this.deps.verificationRecord.write(JSON.stringify(record));
+  }
+
+  private async clearVerificationRecord(): Promise<void> {
+    try { await this.deps.verificationRecord?.clear(); } catch { /* stale records are rejected */ }
+  }
+
+  private async safeDelete(): Promise<void> {
+    try { await this.deps.fetcher.deleteResources(...this.deps.sources); } catch { /* best effort */ }
+  }
+
   private resetArtifactProgress(): void {
-    for (const artifact of this.artifacts) {
+    for (const artifact of this.deps.artifacts) {
       this.artifactProgress.set(artifact.artifactId, { downloaded: false, verified: false });
     }
   }
 
-  private async markNotReady(): Promise<void> {
-    this.resetArtifactProgress();
-    this.setState({ ...INITIAL_STATE });
-  }
-
   private setState(patch: Partial<ModelState>): void {
     this.state = { ...this.state, ...patch };
-    for (const listener of this.listeners) {
-      listener(this.state);
-    }
+    for (const listener of this.listeners) listener(this.state);
   }
 
-  private nextDownloadRun(): number {
-    this.downloadRunId += 1;
-    return this.downloadRunId;
+  private nextRun(): number {
+    this.runId += 1;
+    return this.runId;
   }
 
-  private isCurrentRun(runId: number): boolean {
-    return runId === this.downloadRunId;
+  private isCurrent(currentRun: number): boolean {
+    return currentRun === this.runId;
+  }
+
+  private modelId(): string {
+    return this.deps.modelId ?? 'model-bundle';
   }
 }
 
-function toMessage(error: unknown): string {
+function toDownloadMessage(error: unknown): string {
   return error instanceof Error && error.message.trim() !== ''
-    ? error.message
-    : 'Model download failed.';
+    ? 'Model download failed. Check your connection and try again.'
+    : 'Model download failed. Try again.';
 }
 
 function getFilename(path: string): string {

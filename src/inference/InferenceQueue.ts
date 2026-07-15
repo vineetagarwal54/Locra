@@ -4,6 +4,7 @@
 
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
+import type { InferenceReadiness } from '../model/InferenceReadiness';
 import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -75,6 +76,7 @@ export interface InferenceSubmitOptions {
 export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
   isReadyForInference: (requiresVision: boolean) => boolean;
+  getInferenceReadiness?: (requiresVision: boolean) => InferenceReadiness;
   engine: InferenceEngineAdapter;
   getResponseMode?: () => ResponseMode;
   createRecorder?: () => InferenceMetricsRecorder;
@@ -232,8 +234,12 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
 
-      if (!this.deps.isReadyForInference(processed !== null)) {
-        throw new Error('The model is not downloaded and verified yet.');
+      const readiness = this.deps.getInferenceReadiness?.(processed !== null);
+      if (readiness?.ready === false) {
+        throw new Error(readiness.message);
+      }
+      if (readiness === undefined && !this.deps.isReadyForInference(processed !== null)) {
+        throw new Error('Model setup needs attention before inference can start.');
       }
 
       this.setState({ status: 'loading_model' });

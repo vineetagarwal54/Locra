@@ -9,10 +9,8 @@ import { inferenceEngineAdapter } from './InferenceEngineRegistry';
 import { createInferenceQueue } from './InferenceQueue';
 
 const queue = createInferenceQueue(inferenceEngineAdapter, {
-  isReadyForInference: (requiresVision) => requiresVision
-    ? useModelStore.getState().isReadyForInference()
-    : useModelStore.getState().isReadyForTextInference?.()
-      ?? useModelStore.getState().isReadyForInference(),
+  isReadyForInference: () => useModelStore.getState().isReadyForInference(),
+  getInferenceReadiness: () => useModelStore.getState().getInferenceReadiness(),
   getResponseMode: () => useSettingsStore.getState().responseMode,
   resourcePolicy: deviceResourcePolicy,
   getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,

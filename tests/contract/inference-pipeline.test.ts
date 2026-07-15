@@ -113,7 +113,7 @@ describe('Inference pipeline contract', () => {
     expect(order).toEqual(['preprocess', 'readiness']);
     expect(loadModel).not.toHaveBeenCalled();
     expect(queue.getState().status).toBe('errored');
-    expect(queue.getState().error).toMatch(/not downloaded and verified/i);
+    expect(queue.getState().error).toMatch(/model setup needs attention/i);
   });
 
   it('notifies cancellation, discards partial output, and releases the queue lock', async () => {

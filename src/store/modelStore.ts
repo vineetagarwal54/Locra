@@ -11,6 +11,10 @@ import type { ModelCandidate, ModelCandidateId } from '../model/ActiveModel';
 import { BackgroundDownloadFetcher, type BgDownloadTask } from '../model/BackgroundDownloadFetcher';
 import { checkActiveModelCompatibility, checkDeviceCompatibility } from '../model/DeviceCompatibility';
 import {
+  getInferenceReadiness,
+  type InferenceReadiness,
+} from '../model/InferenceReadiness';
+import {
   QWEN3_VL_2B_INSTRUCT_BUNDLE,
   type ModelArtifactBundleManifest,
 } from '../model/ModelArtifactManifest';
@@ -37,14 +41,15 @@ import type { DeviceCompatibilityResult, ModelState } from '../types/models';
 // ─────────────────────────────────────────────────────────────────────────────
 
 const INITIAL_MODEL_STATE: ModelState = {
+  setupPhase: 'checking',
   downloadStatus: 'not_started',
   downloadProgress: 0,
   integrityVerified: false,
   error: null,
 };
 
-// Development escape hatch: skip post-download AND launch-time verification so
-// iterating on inference doesn't require hashing multi-GB files on every relaunch.
+// Development escape hatch: skip SHA hashing only. Exact sizes still apply, and
+// development never writes a durable record that a production build could trust.
 // `__DEV__` is `false` in a release build, so production always runs the full
 // SHA-256 + size checks. Wired here (not inside the unit-tested lifecycle modules)
 // because `__DEV__` is `true` under Jest.
@@ -57,6 +62,7 @@ async function devSkipIntegrityCheck(): Promise<boolean> {
 // Locra's writable model directory. The Qwen bundle (language GGUF + projector)
 // is downloaded here; llama.rn loads the artifacts from these exact paths.
 const MODEL_DOWNLOAD_DIR = `${(documentDirectory ?? '').replace(/^file:\/\//, '')}locra-models/`;
+const MODEL_VERIFICATION_RECORD_KEY = 'model:qwen3-vl-2b:verification-v1';
 
 setConfig({
   showNotificationsEnabled: true,
@@ -68,7 +74,7 @@ setConfig({
       downloadStarting: 'Preparing your on-device AI…',
       downloadProgress: 'Downloading AI model · {progress}%',
       downloadPaused: 'Download paused',
-      downloadFinished: 'Locra is ready',
+      downloadFinished: 'Download complete — open Locra to verify',
       groupTitle: 'Locra',
       groupText: 'Setting up your on-device AI',
     },
@@ -144,6 +150,18 @@ function buildQwenManager(manifest: ModelArtifactBundleManifest): ModelDownloadM
     getFileSize: (fileUri: string) => Promise.resolve(new File(toFileUri(fileUri)).size),
     sources: manifest.artifacts.map((artifact) => artifact.sourceUri),
     artifacts,
+    modelId: manifest.activeModelId,
+    verificationRecord: __DEV__ ? undefined : {
+      read: () => Promise.resolve(storage.getString(MODEL_VERIFICATION_RECORD_KEY) ?? null),
+      write: (value) => {
+        storage.set(MODEL_VERIFICATION_RECORD_KEY, value);
+        return Promise.resolve();
+      },
+      clear: () => {
+        storage.remove(MODEL_VERIFICATION_RECORD_KEY);
+        return Promise.resolve();
+      },
+    },
   });
 }
 
@@ -185,15 +203,6 @@ function isQwenReady(): boolean {
   });
 }
 
-function isQwenLanguageReady(): boolean {
-  return manager?.getArtifactStates().some(
-    (artifact) =>
-      artifact.artifactId === 'qwen_language_model' &&
-      artifact.downloaded &&
-      artifact.integrityVerified,
-  ) ?? false;
-}
-
 function requireManager(): ModelDownloadManager {
   if (manager === null) {
     // The Qwen bundle is the only model; initialize it on demand.
@@ -204,6 +213,7 @@ function requireManager(): ModelDownloadManager {
 
 function syncManagerState(state: ModelState): void {
   useModelStore.setState({
+    setupPhase: state.setupPhase,
     downloadStatus: state.downloadStatus,
     downloadProgress: state.downloadProgress,
     integrityVerified: state.integrityVerified,
@@ -230,6 +240,7 @@ export interface ModelStoreState extends ModelState {
   reattachExistingDownload: () => Promise<boolean>;
   /** Reconcile in-memory readiness against the model on disk (call once at launch). */
   reconcile: () => Promise<void>;
+  failActiveCheck: (message: string) => void;
   startDownload: () => Promise<void>;
   confirmCellularDownload: () => Promise<void>;
   dismissCellularDownloadWarning: () => void;
@@ -239,6 +250,7 @@ export interface ModelStoreState extends ModelState {
   isReadyForInference: () => boolean;
   /** Text generation needs only the verified language GGUF, not the projector. */
   isReadyForTextInference: () => boolean;
+  getInferenceReadiness: () => InferenceReadiness;
 }
 
 export const useModelStore = create<ModelStoreState>(() => ({
@@ -257,6 +269,7 @@ export const useModelStore = create<ModelStoreState>(() => ({
     }),
   reattachExistingDownload: () => requireManager().reattachExistingDownload(),
   reconcile: () => requireManager().reconcile(),
+  failActiveCheck: (message) => requireManager().failActiveCheck(message),
   startDownload: async () => {
     const gate = await evaluateNetworkGate({
       storage,
@@ -282,7 +295,8 @@ export const useModelStore = create<ModelStoreState>(() => ({
   resumeDownload: () => requireManager().resumeDownload(),
   cancelDownload: () => requireManager().cancelDownload(),
   isReadyForInference: () => manager?.isReadyForInference() ?? false,
-  isReadyForTextInference: isQwenLanguageReady,
+  isReadyForTextInference: () => manager?.isReadyForInference() ?? false,
+  getInferenceReadiness: () => getInferenceReadiness(manager?.getState() ?? INITIAL_MODEL_STATE),
 }));
 
 // The imperative IModelLifecycle surface for non-React consumers, e.g. the
@@ -292,6 +306,7 @@ export const modelLifecycle: IModelLifecycle = {
   getState: () => manager?.getState() ?? INITIAL_MODEL_STATE,
   subscribe: (listener) => requireManager().subscribe(listener),
   isReadyForInference: () => manager?.isReadyForInference() ?? false,
+  getInferenceReadiness: () => getInferenceReadiness(manager?.getState() ?? INITIAL_MODEL_STATE),
   startDownload: () => requireManager().startDownload(),
   pauseDownload: () => requireManager().pauseDownload(),
   resumeDownload: () => requireManager().resumeDownload(),
