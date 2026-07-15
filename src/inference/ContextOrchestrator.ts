@@ -29,6 +29,8 @@ const DEFAULT_MAX_FACT_ITEMS = 6;
 const DEFAULT_MAX_SUMMARY_ENTRIES = 6;
 const TURN_ROLE_OVERHEAD_UNITS = 32;
 const CANDIDATE_PREVIEW_MAX_CHARS = 240;
+const VISUAL_REFERENCE_PATTERN =
+  /\b(?:image|photo|picture|shown|visible|look|label|screen|sign|color|colour|read|it|that)\b/i;
 const TOKEN_STOP_WORDS = new Set([
   'about',
   'again',
@@ -206,7 +208,11 @@ export class ContextOrchestrator {
     const memory = rebuildDerivedMemory(snapshot, olderTurns);
     let usedUnits = selection.usedUnits;
 
-    const persistedEvidence = this.resolvePersistedEvidence(snapshot.conversationId, options);
+    const persistedEvidence = this.resolvePersistedEvidence(
+      snapshot.conversationId,
+      snapshot.currentMessage.text,
+      options,
+    );
     const mediaEvidence = persistedEvidence === null
       ? selectMediaEvidenceWithinBudget(
           memory.mediaEvidence,
@@ -313,15 +319,20 @@ export class ContextOrchestrator {
 
   private resolvePersistedEvidence(
     conversationId: string,
+    query: string,
     options: ContextOrchestrationOptions,
   ): VisualEvidenceRow | null {
     const repository = this.sources.evidenceRepository;
     if (repository === undefined) {
       return null;
     }
-    return options.referencedImage === undefined
+    const evidence = options.referencedImage === undefined
       ? repository.getActiveImageEvidence(conversationId)
       : repository.resolveReferencedImageEvidence({ conversationId, ...options.referencedImage });
+    if (evidence === null || options.referencedImage !== undefined) {
+      return evidence;
+    }
+    return isMediaEvidenceRelevant(visualEvidenceRowToContext(evidence), query) ? evidence : null;
   }
 
   private retrieve(
@@ -439,7 +450,7 @@ function selectRecentTurns(
 } {
   const selected: CanonicalContextTurn[] = [];
   const selectedDiagnostics: RecentTurnDiagnostic[] = [];
-  let usedUnits = policy.measure(currentRequest);
+  let usedUnits = Math.min(policy.measure(currentRequest), policy.maximumUnits);
   const candidates = policy.recentExactTurnLimit === 0
     ? []
     : turns.slice(-policy.recentExactTurnLimit);
@@ -450,6 +461,9 @@ function selectRecentTurns(
       policy.measure(turn.question) +
       policy.measure(turn.answer ?? '') +
       TURN_ROLE_OVERHEAD_UNITS;
+    if (usedUnits + cost > policy.maximumUnits) {
+      continue;
+    }
     selected.unshift({ question: turn.question, answer: turn.answer });
     usedUnits += cost;
     if (collectDiagnostics) {
@@ -495,7 +509,24 @@ function selectProtectedEvidence(
   candidates: RankedCandidateDiagnostic[];
 } {
   const item = visualEvidenceRowToContext(row);
-  const usedUnits = initialUsedUnits + policy.measure(formatMediaEvidence(item)) + TURN_ROLE_OVERHEAD_UNITS;
+  const cost = policy.measure(formatMediaEvidence(item)) + TURN_ROLE_OVERHEAD_UNITS;
+  if (initialUsedUnits + cost > policy.maximumUnits) {
+    return {
+      items: [],
+      usedUnits: initialUsedUnits,
+      candidates: collectDiagnostics
+        ? [{
+            stableId: item.id,
+            relevance: 1,
+            createdAt: item.createdAt,
+            selected: false,
+            exclusionReason: 'budget',
+            preview: truncatePreview(formatMediaEvidence(item)),
+          }]
+        : [],
+    };
+  }
+  const usedUnits = initialUsedUnits + cost;
   return {
     items: [item],
     usedUnits,
@@ -538,9 +569,10 @@ function selectRetrievedWithinBudget(
   const items: ContextMemoryFact[] = [];
   let usedUnits = initialUsedUnits;
   for (const item of retrieved) {
-    const text = selectedConversation
-      ? `[Selected conversation ${item.sourceConversationId}] ${item.text}`
-      : item.text;
+    const sourceKind = selectedConversation ? 'Untrusted selected source' : 'Untrusted source';
+    const text =
+      `[${sourceKind}: conversation ${item.sourceConversationId}, message ${item.sourceMessageId}] ` +
+      item.text;
     const cost = policy.measure(text) + TURN_ROLE_OVERHEAD_UNITS;
     if (usedUnits + cost > policy.maximumUnits) {
       continue;
@@ -681,7 +713,15 @@ function rankMediaEvidence(
   evidence: ReadonlyArray<ContextMediaEvidence>,
   query: string,
 ): RankedItem<ContextMediaEvidence>[] {
-  return rankItems(evidence, query, formatMediaEvidence, (item) => item.createdAt, (item) => item.id);
+  return rankItems(evidence, query, formatMediaEvidence, (item) => item.createdAt, (item) => item.id)
+    .filter((ranked) => ranked.relevance > 0 || VISUAL_REFERENCE_PATTERN.test(query));
+}
+
+function isMediaEvidenceRelevant(evidence: ContextMediaEvidence, query: string): boolean {
+  if (VISUAL_REFERENCE_PATTERN.test(query)) {
+    return true;
+  }
+  return lexicalOverlap(tokenSet(query), tokenSet(formatMediaEvidence(evidence))) > 0;
 }
 
 function selectMediaEvidenceWithinBudget(

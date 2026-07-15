@@ -343,15 +343,15 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 
 - [X] T083 [US1] Fix bounded History and message windows so evicted pages can be fetched in both directions. Move History search to indexed SQL across titles, user messages and active completed attempts; return accurate latest-message previews and image indicators without loading complete chats. (FR-A01, SC-A01/A02)
 
-- [ ] T084 [US2] Add throttled SQLite checkpoints for streaming assistant text; flush before completion, stop, failure and cancellation; preserve partial text with `Stopped`/`Failed` status; reconcile abandoned `generating` attempts on startup; allow retry from failed and interrupted attempts without overwriting history. (FR-A02, SC-A03)
+- [X] T084 [US2] Add throttled SQLite checkpoints for streaming assistant text; flush before completion, stop, failure and cancellation; preserve partial text with `Stopped`/`Failed` status; reconcile abandoned `generating` attempts on startup; allow retry from failed and interrupted attempts without overwriting history. (FR-A02, SC-A03)
 
 - [ ] T085 Stabilize model setup: explicit downloading/verifying/preparing/ready states, final progress completion, exact-size and SHA-256 verification, durable manifest-bound verification records, correct notification wording, startup timeout/recovery, and no onboarding completion or usable Chat state before the model is ready. (FR-A03, SC-A04)
 
 - [ ] T086 [US5] Copy gallery and camera images into durable conversation-scoped application storage before SQL persistence; keep preprocessing files temporary; clean temp files; reconcile missing source files; preserve reusable evidence; add preview/remove/retake and reopen-original behavior using existing design components. (FR-A04, SC-A05)
 
-- [ ] T087 [US3/US7] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, use Unicode-safe conversation-title normalization, and ensure the real bounded past-chat picker and transient target state are wired end to end. (FR-A05, SC-A06)
+- [X] T087 [US3/US7] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, use Unicode-safe conversation-title normalization, and ensure the real bounded past-chat picker and transient target state are wired end to end. (FR-A05, SC-A06)
 
-- [ ] T088 Restore diagnostics for internal production APKs under `Settings → Beta Tools`: export complete selected conversations and attempts directly from repositories, include app/model/download/storage/resource state, disclose included content, sanitize local paths, exclude images by default, delete temporary ZIPs, and add a response-level Report Issue action. (FR-A06, SC-A07)
+- [X] T088 Restore diagnostics for internal production APKs under `Settings → Beta Tools`: export complete selected conversations and attempts directly from repositories, include app/model/download/storage/resource state, disclose included content, sanitize local paths, exclude images by default, delete temporary ZIPs, and add a response-level Report Issue action. (FR-A06, SC-A07)
 
 - [ ] T089 Replace production schema mismatch failure with ordered transactional migrations and controlled asynchronous database bootstrap. Add a recoverable database-error screen with restart, diagnostics export and explicit local reset; never silently reset production conversations. (FR-A07)
 

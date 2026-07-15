@@ -12,9 +12,11 @@ import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { designTokens, haptics } from '../../constants/theme';
 import type { ResponseMode } from '../../inference/ResponseMode';
+import type { ConversationCandidate } from '../../retrieval/ConversationTargetResolver';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
+import { LocraSheet } from '../LocraSheet';
 
 import { ResponseModeSelector } from './ResponseModeSelector';
 import { VoiceControl } from './VoiceControl';
@@ -35,6 +37,9 @@ interface ChatComposerProps {
   onOpenCamera: () => void;
   onDraftChange: (draft: Draft) => void;
   onConversationResolved: (conversationId: string) => void;
+  targetCandidates: readonly ConversationCandidate[];
+  selectedTargetId: string | null;
+  onTargetChange: (conversationId: string | null) => void;
   responseMode: ResponseMode;
   onResponseModeChange: (mode: ResponseMode) => void;
 }
@@ -51,17 +56,22 @@ export function ChatComposer({
   onOpenCamera,
   onDraftChange,
   onConversationResolved,
+  targetCandidates,
+  selectedTargetId,
+  onTargetChange,
   responseMode,
   onResponseModeChange,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [targetPickerVisible, setTargetPickerVisible] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const canSend =
     !locked && !submitting && (draft.text.trim() !== '' || draft.imagePath !== null);
   const controlsDisabled = locked || submitting;
+  const selectedTarget = targetCandidates.find((candidate) => candidate.id === selectedTargetId);
 
   const onChangeText = useCallback(
     (text: string): void => {
@@ -112,9 +122,14 @@ export function ChatComposer({
     setSendError(null);
     void haptics.tap();
     void conversationStore
-      .submit(conversationId, { question, imagePath })
+      .submit(conversationId, {
+        question,
+        imagePath,
+        ...(selectedTargetId === null ? {} : { conversationTargetId: selectedTargetId }),
+      })
       .then((result) => {
         setSendError(result.targetNotice ?? null);
+        onTargetChange(null);
         onDraftChange(conversationStore.getDraft(conversationId));
         onConversationResolved(result.conversationId);
       })
@@ -132,6 +147,8 @@ export function ChatComposer({
     draft.text,
     onConversationResolved,
     onDraftChange,
+    onTargetChange,
+    selectedTargetId,
   ]);
 
   return (
@@ -163,6 +180,29 @@ export function ChatComposer({
               void haptics.tap();
               setDraftImage(null);
             }}
+          >
+            <MaterialCommunityIcons name="close" size={16} color={designTokens.color.primary} />
+          </Pressable>
+        </View>
+      ) : null}
+
+      {selectedTarget !== undefined ? (
+        <View style={styles.attachmentPill}>
+          <MaterialCommunityIcons name="message-text-outline" size={16} color={designTokens.color.primary} />
+          <Text style={styles.attachmentText} numberOfLines={1}>
+            Using: {selectedTarget.title}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Remove past conversation target"
+            disabled={controlsDisabled}
+            hitSlop={designTokens.spacing.space8}
+            style={({ pressed }) => [
+              styles.attachmentRemove,
+              pressed && !controlsDisabled && styles.attachmentRemovePressed,
+              controlsDisabled && styles.disabled,
+            ]}
+            onPress={() => onTargetChange(null)}
           >
             <MaterialCommunityIcons name="close" size={16} color={designTokens.color.primary} />
           </Pressable>
@@ -222,6 +262,25 @@ export function ChatComposer({
             onChange={onResponseModeChange}
           />
 
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Use a past conversation"
+            accessibilityState={{ disabled: controlsDisabled || targetCandidates.length === 0 }}
+            disabled={controlsDisabled || targetCandidates.length === 0}
+            style={({ pressed }) => [
+              styles.iconButton,
+              pressed && !controlsDisabled && styles.iconButtonPressed,
+              (controlsDisabled || targetCandidates.length === 0) && styles.disabled,
+            ]}
+            onPress={() => setTargetPickerVisible(true)}
+          >
+            <MaterialCommunityIcons
+              name="message-text-outline"
+              size={22}
+              color={designTokens.color.primary}
+            />
+          </Pressable>
+
           <View style={styles.controlsSpacer} />
 
           <VoiceControl
@@ -275,6 +334,24 @@ export function ChatComposer({
           setSourceModalVisible(false);
         }}
       />
+      <LocraSheet
+        visible={targetPickerVisible}
+        title="Use a past conversation"
+        message="Choose one conversation to use for this request only."
+        onRequestClose={() => setTargetPickerVisible(false)}
+      >
+        {targetCandidates.map((candidate) => (
+          <SourceButton
+            key={candidate.id}
+            icon="message-text-outline"
+            label={candidate.title}
+            onPress={() => {
+              onTargetChange(candidate.id);
+              setTargetPickerVisible(false);
+            }}
+          />
+        ))}
+      </LocraSheet>
     </KeyboardStickyView>
   );
 }

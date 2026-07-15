@@ -73,6 +73,7 @@ export interface ConversationStoreDependencies {
     metrics: PerformanceMetrics;
   }) => void;
   targetResolver?: Pick<ConversationTargetResolver, 'resolve'>;
+  checkpointAssistantText?: (assistantMessageId: string, text: string) => void;
 }
 
 interface ActiveGeneration {
@@ -81,7 +82,12 @@ interface ActiveGeneration {
   assistantMessageId: string;
   contextDiagnostics?: ContextSelectionDiagnostics;
   responseMode: ResponseMode;
+  lastObservedText: string;
+  lastCheckpointText: string;
+  lastCheckpointAt: number;
 }
+
+const STREAM_CHECKPOINT_INTERVAL_MS = 1000;
 
 interface SubmitResult {
   conversationId: string;
@@ -195,6 +201,9 @@ export class ConversationStore implements IConversationStore {
       originatingUserMessageId,
       assistantMessageId,
       responseMode: effectiveResponseMode,
+      lastObservedText: '',
+      lastCheckpointText: '',
+      lastCheckpointAt: 0,
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, request, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
@@ -244,7 +253,10 @@ export class ConversationStore implements IConversationStore {
 
     const assistantMessage = conversation.messages[assistantIndex];
     const userMessage = findPairedUserMessage(conversation.messages, assistantIndex);
-    if (assistantMessage?.status !== 'failed' || userMessage === null) {
+    if (
+      (assistantMessage?.status !== 'failed' && assistantMessage?.status !== 'interrupted') ||
+      userMessage === null
+    ) {
       throw new Error(`Assistant message ${assistantMessageId} cannot be retried.`);
     }
 
@@ -254,6 +266,9 @@ export class ConversationStore implements IConversationStore {
       originatingUserMessageId: userMessage.id,
       assistantMessageId: replacementAssistantMessageId,
       responseMode: conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
+      lastObservedText: assistantMessage.text,
+      lastCheckpointText: assistantMessage.text,
+      lastCheckpointAt: this.dependencies.now(),
     };
     const requestId = this.dependencies.createId('request');
     const messages: ConversationMessage[] = [
@@ -465,6 +480,10 @@ export class ConversationStore implements IConversationStore {
     }
 
     if (isInProgressStatus(state.status)) {
+      if (state.response !== '') {
+        activeGeneration.lastObservedText = state.response;
+      }
+      this.checkpointIfDue(activeGeneration, activeGeneration.lastObservedText);
       this.setRuntimeState({
         ...this.runtimeStateFor(activeGeneration),
         streamingText: state.response,
@@ -493,6 +512,10 @@ export class ConversationStore implements IConversationStore {
     state: InferenceState,
     messageStatus: Exclude<MessageStatus, 'generating'>
   ): void {
+    if (state.response !== '') {
+      activeGeneration.lastObservedText = state.response;
+    }
+    this.flushCheckpoint(activeGeneration, activeGeneration.lastObservedText);
     const conversation = this.dependencies.historyStore.get(activeGeneration.conversationId);
     if (conversation !== null) {
       const errorMessage = state.status === 'errored' ? state.error ?? 'Inference failed.' : null;
@@ -514,7 +537,10 @@ export class ConversationStore implements IConversationStore {
           message.id === activeGeneration.assistantMessageId
             ? {
                 ...message,
-                text: state.status === 'completed' ? state.response : message.text,
+                text:
+                  state.status === 'completed'
+                    ? (state.response !== '' ? state.response : activeGeneration.lastObservedText)
+                    : activeGeneration.lastObservedText || message.text,
                 status: messageStatus,
                 errorMessage,
               }
@@ -659,6 +685,28 @@ export class ConversationStore implements IConversationStore {
     });
   }
 
+  private checkpointIfDue(activeGeneration: ActiveGeneration, text: string): void {
+    if (text === activeGeneration.lastCheckpointText) {
+      return;
+    }
+    const now = this.dependencies.now();
+    if (now - activeGeneration.lastCheckpointAt < STREAM_CHECKPOINT_INTERVAL_MS) {
+      return;
+    }
+    this.dependencies.checkpointAssistantText(activeGeneration.assistantMessageId, text);
+    activeGeneration.lastCheckpointText = text;
+    activeGeneration.lastCheckpointAt = now;
+  }
+
+  private flushCheckpoint(activeGeneration: ActiveGeneration, text: string): void {
+    if (text === activeGeneration.lastCheckpointText) {
+      return;
+    }
+    this.dependencies.checkpointAssistantText(activeGeneration.assistantMessageId, text);
+    activeGeneration.lastCheckpointText = text;
+    activeGeneration.lastCheckpointAt = this.dependencies.now();
+  }
+
   private runtimeStateFor(activeGeneration: ActiveGeneration): ConversationRuntimeState {
     return (
       this.runtimeStates.get(activeGeneration.conversationId) ?? {
@@ -710,6 +758,7 @@ export function createConversationStore(
     persistRetrievalUnits: () => undefined,
     scheduleCompaction: () => undefined,
     recordBenchmark: () => undefined,
+    checkpointAssistantText: () => undefined,
     targetResolver: { resolve: () => ({ kind: 'active' }) },
     ...dependencies,
   });
@@ -795,6 +844,9 @@ export const conversationStore: IConversationStore = createConversationStore({
   },
   recordBenchmark: ({ conversationId, assistantMessageId, kind, metrics }) => {
     benchmarkRepository.record({ conversationId, messageId: assistantMessageId, kind, metrics });
+  },
+  checkpointAssistantText: (assistantMessageId, text) => {
+    messageRepository.updateAssistantStreamingText(assistantMessageId, text);
   },
   targetResolver: new ConversationTargetResolver(conversationRepository),
 });

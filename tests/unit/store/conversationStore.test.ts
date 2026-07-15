@@ -413,6 +413,34 @@ describe('conversationStore', () => {
     expect(store.getConversationRuntimeState('conversation-b')).toBeNull();
   });
 
+  it('checkpoints streaming text on a throttle and flushes the latest text on stop', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    let now = 1_000;
+    const checkpoints: Array<{ id: string; text: string }> = [];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => now,
+      checkpointAssistantText: (id, text) => checkpoints.push({ id, text }),
+    });
+
+    const result = await store.submit('new', { question: 'A question', imagePath: null });
+    queue.emit(makeInferenceState('streaming', 'first partial'));
+    queue.emit(makeInferenceState('streaming', 'second partial'));
+    expect(checkpoints).toEqual([{ id: result.assistantMessageId, text: 'first partial' }]);
+
+    now += 1_000;
+    queue.emit(makeInferenceState('cancelled'));
+    expect(checkpoints).toEqual([
+      { id: result.assistantMessageId, text: 'first partial' },
+      { id: result.assistantMessageId, text: 'second partial' },
+    ]);
+    expect(history.get(result.conversationId)?.messages[1]).toEqual(
+      expect.objectContaining({ status: 'interrupted', text: 'second partial' })
+    );
+  });
+
   it('retryFailedMessage preserves the failed attempt and appends a new active attempt', async () => {
     const { store, queue, history } = makeStore();
     await store.submit('new', { question: 'A question', imagePath: null });
@@ -441,6 +469,22 @@ describe('conversationStore', () => {
         originatingUserMessageId: 'user-a',
         assistantMessageId: 'request-b',
       })
+    );
+  });
+
+  it('retries an interrupted attempt without overwriting its partial text', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'A question', imagePath: null });
+    queue.emit(makeInferenceState('streaming', 'partial before stop'));
+    queue.emit(makeInferenceState('cancelled'));
+
+    await store.retryFailedMessage('conversation-a', 'assistant-a');
+
+    expect(history.get('conversation-a')?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'assistant-a', status: 'interrupted', text: 'partial before stop' }),
+        expect.objectContaining({ status: 'generating' }),
+      ])
     );
   });
 

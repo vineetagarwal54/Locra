@@ -2,10 +2,11 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { strToU8, zipSync } from 'fflate';
 
+import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
 import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
-import { historyStore } from '../store/historyStore';
-import type { Conversation } from '../types/models';
+import { conversationRepository, messageRepository } from '../store/historyStore';
+import { useModelStore } from '../store/modelStore';
 
 import { getCurrentDeviceBuildMetadata } from './DeviceBuildMetadataProvider';
 import {
@@ -13,6 +14,7 @@ import {
   buildDiagnosticsMarkdown,
   type AppDiagnosticsInfo,
 } from './DiagnosticsBundleBuilder';
+import { DiagnosticsRepositoryReader } from './DiagnosticsRepositoryReader';
 import { diagnosticsTraceStore, type DiagnosticTurnRecord } from './DiagnosticsTraceStore';
 
 const EXPORT_DIR_NAME = 'locra-diagnostics';
@@ -24,11 +26,21 @@ export interface DiagnosticsExportResult {
   readonly turnCount: number;
 }
 
+export interface DiagnosticsExportOptions {
+  readonly responseId?: string;
+}
+
 export async function exportDiagnosticsBundle(
   conversationIds: ReadonlyArray<string>,
+  options: DiagnosticsExportOptions = {},
 ): Promise<DiagnosticsExportResult> {
-  const conversations = collectConversations(conversationIds);
-  const turns = diagnosticsTraceStore.list(conversationIds);
+  const conversations = new DiagnosticsRepositoryReader(
+    conversationRepository,
+    messageRepository,
+  ).read(conversationIds);
+  const turns = diagnosticsTraceStore.list(conversationIds).filter(
+    (turn) => options.responseId === undefined || turn.assistantMessageId === options.responseId,
+  );
   const appInfo = resolveAppDiagnosticsInfo(turns);
 
   const markdown = buildDiagnosticsMarkdown(conversations);
@@ -49,20 +61,20 @@ export async function exportDiagnosticsBundle(
   zipFile.create({ overwrite: true });
   zipFile.write(zipBytes);
 
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(zipFile.uri, {
-      mimeType: 'application/zip',
-      dialogTitle: 'Export Locra diagnostics',
-    });
+  try {
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(zipFile.uri, {
+        mimeType: 'application/zip',
+        dialogTitle: 'Export Locra diagnostics',
+      });
+    }
+  } finally {
+    if (zipFile.exists) {
+      zipFile.delete();
+    }
   }
 
   return { uri: zipFile.uri, conversationCount: conversations.length, turnCount: turns.length };
-}
-
-function collectConversations(conversationIds: ReadonlyArray<string>): Conversation[] {
-  return conversationIds
-    .map((id) => historyStore.get(id))
-    .filter((conversation): conversation is Conversation => conversation !== null);
 }
 
 function cleanPreviousExports(directory: Directory): void {
@@ -79,6 +91,7 @@ function resolveAppDiagnosticsInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): 
     .find((turn) => turn.objectiveResult !== null)?.objectiveResult;
   const deviceMetadata = getCurrentDeviceBuildMetadata();
   const attribution = resolveDiagnosticsModelAttribution();
+  const modelState = useModelStore.getState();
   return {
     modelId: mostRecentObjectiveResult?.modelId ?? attribution.modelId,
     generationConfigId:
@@ -87,6 +100,12 @@ function resolveAppDiagnosticsInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): 
     appBuildId: deviceMetadata.appBuildId,
     deviceNameModel: deviceMetadata.deviceNameModel,
     exportedAt: new Date().toISOString(),
+    modelDownloadStatus: modelState.downloadStatus,
+    modelDownloadProgress: modelState.downloadProgress,
+    modelIntegrityVerified: modelState.integrityVerified,
+    storageAvailableBytes: Paths.availableDiskSpace,
+    storageTotalBytes: Paths.totalDiskSpace,
+    activeResourceOperation: deviceResourcePolicy.current(),
   };
 }
 

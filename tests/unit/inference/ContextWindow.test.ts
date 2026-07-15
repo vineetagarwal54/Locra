@@ -27,4 +27,18 @@ describe('Qwen context window trimming', () => {
     const estimated = bounded.reduce((total, message) => total + estimateMessageTokens(message), 0);
     expect(estimated + getResponseTokenBudget('High')).toBeLessThan(QWEN_CONTEXT_TOKEN_LIMIT);
   });
+
+  it('safely caps one oversized current question instead of overflowing the model input', () => {
+    const messages: ModelRequestMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: '🙂'.repeat(50_000) },
+    ];
+
+    const bounded = trimMessagesToContext(messages, 'Low');
+    const estimated = bounded.reduce((total, message) => total + estimateMessageTokens(message), 0);
+
+    expect(bounded).toHaveLength(2);
+    expect(bounded[1]?.content.length).toBeLessThan(messages[1].content.length);
+    expect(estimated + getResponseTokenBudget('Low')).toBeLessThan(QWEN_CONTEXT_TOKEN_LIMIT);
+  });
 });

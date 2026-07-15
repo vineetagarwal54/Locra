@@ -19,7 +19,7 @@ export function trimMessagesToContext(
   messages: ReadonlyArray<ModelRequestMessage>,
   responseMode: ResponseMode,
 ): ModelRequestMessage[] {
-  if (messages.length <= 2) {
+  if (messages.length < 2) {
     return messages.map(cloneMessage);
   }
 
@@ -32,8 +32,12 @@ export function trimMessagesToContext(
     return [];
   }
 
-  const selected: ModelRequestMessage[] = [cloneMessage(currentQuestion)];
-  let used = estimateMessageTokens(system) + estimateMessageTokens(currentQuestion);
+  const boundedQuestion = capMessageToTokenBudget(
+    currentQuestion,
+    Math.max(0, inputBudget - estimateMessageTokens(system)),
+  );
+  const selected: ModelRequestMessage[] = [boundedQuestion];
+  let used = estimateMessageTokens(system) + estimateMessageTokens(boundedQuestion);
   const history = messages.slice(1, -1);
 
   for (let index = history.length - 1; index >= 0;) {
@@ -55,4 +59,24 @@ export function trimMessagesToContext(
 
 function cloneMessage(message: ModelRequestMessage): ModelRequestMessage {
   return { ...message };
+}
+
+function capMessageToTokenBudget(
+  message: ModelRequestMessage,
+  maximumTokens: number,
+): ModelRequestMessage {
+  if (estimateMessageTokens(message) <= maximumTokens) {
+    return cloneMessage(message);
+  }
+  const imageTokens = message.mediaPath === undefined ? 0 : IMAGE_RESERVE_TOKENS;
+  const maximumCodeUnits = Math.max(
+    0,
+    (maximumTokens - MESSAGE_OVERHEAD_TOKENS - imageTokens) * 3,
+  );
+  let content = message.content.slice(0, maximumCodeUnits);
+  const lastCodeUnit = content.charCodeAt(content.length - 1);
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    content = content.slice(0, -1);
+  }
+  return { ...message, content };
 }

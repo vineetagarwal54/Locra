@@ -13,6 +13,7 @@ import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
 import { SummaryRepository } from '../persistence/SummaryRepository';
+import type { ConversationCandidate } from '../retrieval/ConversationTargetResolver';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
@@ -48,6 +49,39 @@ export const embeddingRepository = new EmbeddingRepository(driver);
 export const summaryRepository = new SummaryRepository(driver);
 export const factRepository = new FactRepository(driver);
 export const benchmarkRepository = new BenchmarkRepository(driver);
+
+export function reconcileAbandonedAttempts(): number {
+  const reconciled = messageRepository.reconcileGeneratingAttempts();
+  if (reconciled > 0) {
+    messageCaches.clear();
+    conversationCache = createConversationListCache(conversationRepository);
+  }
+  return reconciled;
+}
+
+/** Bounded metadata-only candidates for the request-scoped past-chat picker. */
+export function listConversationTargets(activeConversationId: string): ConversationCandidate[] {
+  return conversationRepository.findTargetCandidates([], 10)
+    .filter((row) => row.id !== activeConversationId)
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+}
+
+/** Complete repository-backed headers for diagnostics selection, independent of UI cache eviction. */
+export function listAllConversationHeadersForDiagnostics(): Conversation[] {
+  const rows: ConversationRow[] = [];
+  let page = conversationRepository.listConversations({ limit: 50 });
+  rows.push(...page.items);
+  while (page.nextCursor !== null) {
+    page = conversationRepository.listConversations({ before: page.nextCursor, limit: 50 });
+    rows.push(...page.items);
+  }
+  return rowsToConversationHeaders(rows);
+}
 
 let conversationCache = createConversationListCache(conversationRepository);
 const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();

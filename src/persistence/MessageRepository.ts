@@ -67,6 +67,16 @@ export class MessageRepository {
     return row?.n ?? 0;
   }
 
+  /** Converts rows left generating by a terminated process into recoverable attempts. */
+  reconcileGeneratingAttempts(errorMessage = 'Response interrupted before completion.'): number {
+    return this.driver.runSync(
+      `UPDATE message
+       SET status = 'interrupted', error_message = ?, finalized_at = ?
+       WHERE role = 'assistant' AND status = 'generating'`,
+      [errorMessage, this.now()],
+    ).changes;
+  }
+
   getMessage(id: string): MessageRow | null {
     return this.driver.getFirstSync<MessageRow>('SELECT * FROM message WHERE id = ?', [id]);
   }

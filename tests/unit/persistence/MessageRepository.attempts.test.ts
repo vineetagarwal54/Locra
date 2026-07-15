@@ -119,6 +119,18 @@ describe('MessageRepository — immutable messages and retries', () => {
     expect(repo.listAllAttempts('c1').map((m) => m.id)).toEqual(['a1', 'a2']);
   });
 
+  it('reconciles abandoned generating attempts as interrupted without changing user rows', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+
+    expect(repo.reconcileGeneratingAttempts()).toBe(1);
+    expect(statusOf(db.driver, 'a1')).toMatchObject({
+      status: 'interrupted',
+      is_active_attempt: 1,
+    });
+    expect(statusOf(db.driver, 'u1')).toMatchObject({ status: 'submitted' });
+  });
+
   it('projects the active attempt for UI while keeping every prior attempt diagnostic-only', () => {
     repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
     repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });

@@ -26,6 +26,7 @@ import { PrivacyScreen } from '../screens/PrivacyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
+import { reconcileAbandonedAttempts } from '../store/historyStore';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 
@@ -44,7 +45,7 @@ export type RootStackParamList = {
   Capture: { conversationId: string };
   History: undefined;
   Benchmark: undefined;
-  DiagnosticsExport: undefined;
+  DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
   Settings: undefined;
 };
 
@@ -144,6 +145,7 @@ export function AppNavigator() {
   useEffect(() => {
     let active = true;
     async function bootstrapModelState(): Promise<void> {
+      reconcileAbandonedAttempts();
       const modelStore = useModelStore.getState();
       modelStore.initializeQwenBundle();
       const reattached = await modelStore.reattachExistingDownload();

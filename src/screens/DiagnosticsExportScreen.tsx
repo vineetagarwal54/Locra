@@ -8,7 +8,10 @@ import { ConversationListItem } from '../components/ConversationListItem';
 import { designTokens, haptics } from '../constants/theme';
 import { exportDiagnosticsBundle } from '../diagnostics/DiagnosticsExportService';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { useHistoryStore } from '../store/historyStore';
+import {
+  listAllConversationHeadersForDiagnostics,
+  useHistoryStore,
+} from '../store/historyStore';
 import type { Conversation } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DiagnosticsExport'>;
@@ -19,10 +22,12 @@ type ExportStatus =
   | { kind: 'success'; conversationCount: number; turnCount: number }
   | { kind: 'error'; message: string };
 
-export function DiagnosticsExportScreen({ navigation }: Props) {
+export function DiagnosticsExportScreen({ navigation, route }: Props) {
   const revision = useHistoryStore((s) => s.conversations);
   const refresh = useHistoryStore((s) => s.refresh);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(route.params?.conversationId === undefined ? [] : [route.params.conversationId]),
+  );
   const [status, setStatus] = useState<ExportStatus>({ kind: 'idle' });
 
   useEffect(() => {
@@ -31,7 +36,7 @@ export function DiagnosticsExportScreen({ navigation }: Props) {
 
   const conversations = useMemo<Conversation[]>(() => {
     void revision;
-    return useHistoryStore.getState().listConversations();
+    return listAllConversationHeadersForDiagnostics();
   }, [revision]);
 
   const allSelected = conversations.length > 0 && selectedIds.size === conversations.length;
@@ -65,7 +70,11 @@ export function DiagnosticsExportScreen({ navigation }: Props) {
   const onExport = useCallback((): void => {
     void haptics.tap();
     setStatus({ kind: 'exporting' });
-    void exportDiagnosticsBundle(Array.from(selectedIds))
+    void exportDiagnosticsBundle(Array.from(selectedIds), {
+      ...(route.params?.responseId === undefined
+        ? {}
+        : { responseId: route.params.responseId }),
+    })
       .then((result) => {
         setStatus({
           kind: 'success',
@@ -79,7 +88,7 @@ export function DiagnosticsExportScreen({ navigation }: Props) {
           message: error instanceof Error ? error.message : 'Export failed for an unknown reason.',
         });
       });
-  }, [selectedIds]);
+  }, [route.params?.responseId, selectedIds]);
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -131,6 +140,10 @@ export function DiagnosticsExportScreen({ navigation }: Props) {
       )}
 
       <View style={styles.footer}>
+        <Text style={styles.disclosure}>
+          The bundle includes the selected conversation text, all response attempts, and app,
+          model, download, storage, and resource state. Images and local file paths are excluded.
+        </Text>
         {status.kind === 'success' ? (
           <Text style={styles.statusSuccess}>
             Exported {status.conversationCount} conversation
@@ -222,6 +235,12 @@ const styles = StyleSheet.create({
   statusSuccess: {
     color: designTokens.color.primary,
     fontSize: designTokens.type.caption.fontSize,
+    marginBottom: designTokens.spacing.space8,
+  },
+  disclosure: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    lineHeight: designTokens.type.supporting.lineHeight,
     marginBottom: designTokens.spacing.space8,
   },
   statusError: {
