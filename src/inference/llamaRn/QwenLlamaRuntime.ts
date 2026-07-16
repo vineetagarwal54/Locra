@@ -12,9 +12,10 @@
 // leaks between extraction, retries, visible answers, or later turns. Each
 // generation is a fresh stateless completion over the supplied messages.
 
+import type { GenerationFinishReason } from '../../types/models';
 import type { ModelRequestMessage } from '../ContextBuilder';
-import { trimMessagesToContext } from '../ContextWindow';
-import { getResponseTokenBudget, type ResponseMode } from '../ResponseMode';
+import { trimMessagesToContextWithReport } from '../ContextWindow';
+import { getResponseGenerationLimit, type ResponseMode } from '../ResponseMode';
 
 import {
   convertToQwenMessages,
@@ -53,6 +54,12 @@ export interface QwenNativeCompletionResult {
   tokens_predicted?: number;
   tokens_evaluated?: number;
   timings?: QwenNativeTimings;
+  // llama.rn stop-reason flags. When present they are authoritative for the
+  // finish reason; otherwise it is inferred from the generated token count.
+  stopped_eos?: boolean;
+  stopped_word?: boolean;
+  stopped_limit?: boolean;
+  truncated?: boolean;
 }
 
 export interface QwenNativeTokenData {
@@ -110,6 +117,10 @@ export interface QwenGenerateResult {
   tokensPerSecond: number;
   firstTokenLatencyMs: number;
   totalWallTimeMs: number;
+  /** `natural` when the model stopped on its own; `length` when the output cap was hit. */
+  finishReason: GenerationFinishReason;
+  /** Set when the supplied input had to be shortened to fit the context window. */
+  inputShortenedWarning: string | null;
 }
 
 // ── Typed errors (surfaced to the queue/store boundary) ──────────────────────
@@ -273,10 +284,11 @@ export class QwenLlamaRuntime {
 
     // Convert BEFORE flipping to 'generating' so an unreadable image leaves the
     // runtime cleanly 'loaded'. Only the supplied messages are used.
-    const boundedMessages = trimMessagesToContext(request.messages, request.responseMode);
-    const messages = convertToQwenMessages(boundedMessages, {
+    const bounded = trimMessagesToContextWithReport(request.messages, request.responseMode);
+    const messages = convertToQwenMessages(bounded.messages, {
       isReadableFile: this.deps.isReadableFile,
     });
+    const inputShortenedWarning = bounded.inputShortenedWarning;
 
     if (request.signal.aborted) {
       throw new QwenGenerationCancelledError();
@@ -289,6 +301,9 @@ export class QwenLlamaRuntime {
     let firstTokenAt: number | null = null;
     let cumulativeRaw = '';
     let streamedTokenCount = 0;
+    // Hard output cap handed to the native runtime. Reaching it means the answer
+    // is length-truncated (finishReason === 'length'), never a natural stop.
+    const generationLimit = getResponseGenerationLimit(request.responseMode);
 
     const onAbort = (): void => {
       this.cancel();
@@ -299,7 +314,7 @@ export class QwenLlamaRuntime {
       const result = await context.completion(
         {
           messages,
-          n_predict: getResponseTokenBudget(request.responseMode),
+          n_predict: generationLimit,
           temperature: this.config.temperature,
         },
         (data) => {
@@ -319,7 +334,15 @@ export class QwenLlamaRuntime {
 
       const text = stripControlTags(result.content ?? result.text ?? cumulativeRaw).trim();
       this.status = 'loaded';
-      return this.buildResult(text, result, startedAt, firstTokenAt, streamedTokenCount);
+      return this.buildResult(
+        text,
+        result,
+        startedAt,
+        firstTokenAt,
+        streamedTokenCount,
+        generationLimit,
+        inputShortenedWarning,
+      );
     } catch (error) {
       if (error instanceof QwenGenerationCancelledError) {
         this.status = 'loaded';
@@ -373,7 +396,9 @@ export class QwenLlamaRuntime {
     result: QwenNativeCompletionResult,
     startedAt: number,
     firstTokenAt: number | null,
-    streamedTokenCount: number
+    streamedTokenCount: number,
+    generationLimit: number,
+    inputShortenedWarning: string | null,
   ): QwenGenerateResult {
     const totalWallTimeMs = this.now() - startedAt;
     const timings = result.timings ?? {};
@@ -397,8 +422,30 @@ export class QwenLlamaRuntime {
       tokensPerSecond,
       firstTokenLatencyMs,
       totalWallTimeMs,
+      finishReason: resolveFinishReason(result, generatedTokens, generationLimit),
+      inputShortenedWarning,
     };
   }
+}
+
+/**
+ * Prefers the native stop-reason flags when llama.rn reports them; otherwise
+ * infers a length stop by comparing generated tokens against the hard cap. The
+ * count comparison uses `>=` because a run that produced the full cap could not
+ * have also emitted a stop token.
+ */
+function resolveFinishReason(
+  result: QwenNativeCompletionResult,
+  generatedTokens: number,
+  generationLimit: number,
+): GenerationFinishReason {
+  if (result.stopped_limit === true || result.truncated === true) {
+    return 'length';
+  }
+  if (result.stopped_eos === true || result.stopped_word === true) {
+    return 'natural';
+  }
+  return generationLimit > 0 && generatedTokens >= generationLimit ? 'length' : 'natural';
 }
 
 export { QwenImageUnreadableError };

@@ -73,6 +73,24 @@ describe('MessageRepository — immutable messages and retries', () => {
     expect(statusOf(db.driver, 'a2').is_active_attempt).toBe(1);
   });
 
+  it('persists the finish reason on finalize and reads it back', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'cut off here');
+    repo.finalizeAttempt('a1', 'completed', null, 'length');
+
+    expect(repo.getMessage('a1')?.finish_reason).toBe('length');
+    // A user row never carries a finish reason.
+    expect(repo.getMessage('u1')?.finish_reason).toBeNull();
+  });
+
+  it('records a cancelled finish reason when reconciling abandoned attempts', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.reconcileGeneratingAttempts();
+    expect(repo.getMessage('a1')?.finish_reason).toBe('cancelled');
+  });
+
   it('switches the active attempt as selection metadata only', () => {
     repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
     repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });

@@ -69,6 +69,8 @@ export interface IConversationStore {
     targetNotice?: string;
   }>;
   retryFailedMessage(conversationId: string, assistantMessageId: string): Promise<void>;
+  regenerateResponse(conversationId: string, assistantMessageId: string): Promise<void>;
+  continueTruncatedMessage(conversationId: string, assistantMessageId: string): Promise<void>;
   cancelActiveGeneration(conversationId: string): void;
   isAnyGenerationInFlight(): boolean;
   getActiveGenerationOwner(): string | null;

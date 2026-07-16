@@ -13,7 +13,7 @@ function message(index: number, text = `message ${index}`): MessageRow {
     id: `m${index}`, conversation_id: 'c1', role: index % 2 === 0 ? 'assistant' : 'user',
     reply_to_message_id: null, attempt_number: null, is_active_attempt: 0, text,
     status: index % 2 === 0 ? 'completed' : 'submitted', error_message: null,
-    finalized_at: null, created_at: index,
+    finish_reason: null, finalized_at: null, created_at: index,
   };
 }
 

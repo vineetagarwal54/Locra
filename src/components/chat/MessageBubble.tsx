@@ -14,6 +14,8 @@ interface MessageBubbleProps {
   message: ConversationMessage;
   streamingText?: string;
   onRetry?: (assistantMessageId: string) => void;
+  onRegenerate?: (assistantMessageId: string) => void;
+  onContinue?: (assistantMessageId: string) => void;
   onReportIssue?: (assistantMessageId: string) => void;
 }
 
@@ -21,6 +23,8 @@ export function MessageBubble({
   message,
   streamingText = '',
   onRetry,
+  onRegenerate,
+  onContinue,
   onReportIssue,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
@@ -32,6 +36,8 @@ export function MessageBubble({
       message={message}
       streamingText={streamingText}
       onRetry={onRetry}
+      onRegenerate={onRegenerate}
+      onContinue={onContinue}
       onReportIssue={onReportIssue}
     />
   );
@@ -66,14 +72,19 @@ function AssistantMessage({
   message,
   streamingText,
   onRetry,
+  onRegenerate,
+  onContinue,
   onReportIssue,
 }: {
   message: ConversationMessage;
   streamingText: string;
   onRetry?: (assistantMessageId: string) => void;
+  onRegenerate?: (assistantMessageId: string) => void;
+  onContinue?: (assistantMessageId: string) => void;
   onReportIssue?: (assistantMessageId: string) => void;
 }) {
   const text = message.status === 'generating' ? streamingText : message.text;
+  const isTruncated = message.status === 'completed' && message.finishReason === 'length';
 
   if (message.status === 'failed') {
     return (
@@ -145,6 +156,46 @@ function AssistantMessage({
         ) : (
           <MarkdownText text={text} />
         )}
+        {isTruncated ? (
+          <Text style={styles.assistantMuted}>
+            This answer was cut off at the length limit.
+          </Text>
+        ) : null}
+        {message.status === 'completed' ? (
+          <View style={styles.followUpActions}>
+            {isTruncated && onContinue !== undefined ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Continue this answer"
+                style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
+                onPress={() => {
+                  void haptics.tap();
+                  onContinue(message.id);
+                }}
+              >
+                <Text style={styles.retryButtonLabel}>Continue</Text>
+              </Pressable>
+            ) : null}
+            {onRegenerate !== undefined ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Regenerate this response"
+                style={({ pressed }) => [styles.regenerateButton, pressed && styles.retryButtonPressed]}
+                onPress={() => {
+                  void haptics.tap();
+                  onRegenerate(message.id);
+                }}
+              >
+                <MaterialCommunityIcons
+                  name="refresh"
+                  size={15}
+                  color={designTokens.color.textSecondary}
+                />
+                <Text style={styles.messageActionLabel}>Regenerate</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {message.status !== 'generating' ? (
           <>
             <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
@@ -331,6 +382,20 @@ const styles = StyleSheet.create({
     color: designTokens.color.textSecondary,
     fontSize: designTokens.type.supporting.fontSize,
     marginLeft: designTokens.spacing.space4,
+  },
+  followUpActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexWrap: 'wrap',
+    marginTop: designTokens.spacing.space8,
+  },
+  regenerateButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: designTokens.spacing.space12,
+    marginRight: designTokens.spacing.space16,
   },
   messageActions: {
     flexDirection: 'row',

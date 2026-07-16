@@ -34,6 +34,7 @@ import type {
   ConversationMessage,
   ConversationRuntimeState,
   Draft,
+  GenerationFinishReason,
   InferenceRequest,
   InferenceState,
   MessageStatus,
@@ -87,6 +88,12 @@ interface ActiveGeneration {
   lastObservedText: string;
   lastCheckpointText: string;
   lastCheckpointAt: number;
+  /**
+   * Non-empty only for a continuation: the already-shown truncated text that the
+   * new attempt continues from. It is prepended to everything the engine streams
+   * so the visible/persisted answer is seamless while the model never re-emits it.
+   */
+  seedText: string;
 }
 
 const STREAM_CHECKPOINT_INTERVAL_MS = 1000;
@@ -210,6 +217,7 @@ export class ConversationStore implements IConversationStore {
       lastObservedText: '',
       lastCheckpointText: '',
       lastCheckpointAt: 0,
+      seedText: '',
     };
     const inferenceRequest = this.createInferenceRequest(activeGeneration, durableRequest, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
@@ -266,19 +274,122 @@ export class ConversationStore implements IConversationStore {
       throw new Error(`Assistant message ${assistantMessageId} cannot be retried.`);
     }
 
-    const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
-    const activeGeneration: ActiveGeneration = {
+    // A retry is a fresh, independent attempt: it starts from EMPTY streaming and
+    // checkpoint text (seedText '') so it can never inherit or resurrect the prior
+    // attempt's partial output if this one produces less (or errors early).
+    this.launchLinkedAttempt({
       conversationId,
-      originatingUserMessageId: userMessage.id,
-      assistantMessageId: replacementAssistantMessageId,
-      responseMode: conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
-      lastObservedText: assistantMessage.text,
-      lastCheckpointText: assistantMessage.text,
-      lastCheckpointAt: this.dependencies.now(),
-    };
+      conversation,
+      userMessageId: userMessage.id,
+      question: userMessage.text,
+      imagePath: firstImagePath(userMessage),
+      seedText: '',
+    });
+  }
+
+  /**
+   * Regenerates a completed assistant response as a NEW immutable attempt linked
+   * to the same user message. Prior attempts are preserved (never overwritten);
+   * the new attempt becomes the active one shown.
+   */
+  async regenerateResponse(conversationId: string, assistantMessageId: string): Promise<void> {
+    this.assertCanStartGeneration();
+
+    const conversation = this.dependencies.historyStore.get(conversationId);
+    if (conversation === null) {
+      throw new Error(`Conversation ${conversationId} was not found.`);
+    }
+    const assistantIndex = conversation.messages.findIndex(
+      (message) => message.id === assistantMessageId && message.role === 'assistant',
+    );
+    if (assistantIndex < 1) {
+      throw new Error(`Assistant message ${assistantMessageId} was not found.`);
+    }
+    const assistantMessage = conversation.messages[assistantIndex];
+    const userMessage = findPairedUserMessage(conversation.messages, assistantIndex);
+    if (assistantMessage?.status !== 'completed' || userMessage === null) {
+      throw new Error(`Assistant message ${assistantMessageId} cannot be regenerated.`);
+    }
+
+    this.launchLinkedAttempt({
+      conversationId,
+      conversation,
+      userMessageId: userMessage.id,
+      question: userMessage.text,
+      imagePath: firstImagePath(userMessage),
+      seedText: '',
+    });
+  }
+
+  /**
+   * Continues a length-truncated answer as a NEW immutable attempt linked to the
+   * same user message. The truncated text is carried forward as the continuation
+   * seed so the model continues seamlessly WITHOUT repeating what is already shown.
+   */
+  async continueTruncatedMessage(conversationId: string, assistantMessageId: string): Promise<void> {
+    this.assertCanStartGeneration();
+
+    const conversation = this.dependencies.historyStore.get(conversationId);
+    if (conversation === null) {
+      throw new Error(`Conversation ${conversationId} was not found.`);
+    }
+    const assistantIndex = conversation.messages.findIndex(
+      (message) => message.id === assistantMessageId && message.role === 'assistant',
+    );
+    if (assistantIndex < 1) {
+      throw new Error(`Assistant message ${assistantMessageId} was not found.`);
+    }
+    const assistantMessage = conversation.messages[assistantIndex];
+    const userMessage = findPairedUserMessage(conversation.messages, assistantIndex);
+    if (
+      assistantMessage?.status !== 'completed' ||
+      assistantMessage.finishReason !== 'length' ||
+      userMessage === null
+    ) {
+      throw new Error(`Assistant message ${assistantMessageId} cannot be continued.`);
+    }
+
+    this.launchLinkedAttempt({
+      conversationId,
+      conversation,
+      userMessageId: userMessage.id,
+      // A continuation is a text turn: the original image evidence already lives in
+      // the conversation's context memory, so it is not reprocessed here.
+      question: buildContinuationPrompt(userMessage.text, assistantMessage.text),
+      imagePath: null,
+      seedText: assistantMessage.text,
+    });
+  }
+
+  /**
+   * Shared tail for retry / regenerate / continue: appends a fresh generating
+   * assistant attempt for `userMessageId`, orchestrates context, persists, and
+   * starts the queue. The new attempt supersedes the prior active attempt for
+   * that user message while every prior attempt is preserved in history.
+   */
+  private launchLinkedAttempt(input: {
+    conversationId: string;
+    conversation: Conversation;
+    userMessageId: string;
+    question: string;
+    imagePath: string | null;
+    seedText: string;
+  }): void {
+    const now = this.dependencies.now();
+    const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
     const requestId = this.dependencies.createId('request');
+    const activeGeneration: ActiveGeneration = {
+      conversationId: input.conversationId,
+      originatingUserMessageId: input.userMessageId,
+      assistantMessageId: replacementAssistantMessageId,
+      responseMode: input.conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
+      lastObservedText: '',
+      lastCheckpointText: '',
+      lastCheckpointAt: 0,
+      seedText: input.seedText,
+    };
     const messages: ConversationMessage[] = [
-      ...conversation.messages,
+      ...input.conversation.messages,
       {
         id: replacementAssistantMessageId,
         role: 'assistant',
@@ -286,18 +397,18 @@ export class ConversationStore implements IConversationStore {
         attachments: [],
         status: 'generating',
         errorMessage: null,
-        createdAt: this.dependencies.now(),
+        createdAt: now,
       },
     ];
     const updatedConversationWithoutMemory: Conversation = {
-      ...conversation,
-      updatedAt: this.dependencies.now(),
+      ...input.conversation,
+      updatedAt: now,
       status: 'streaming',
       errorMessage: null,
       messages,
     };
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
-      createCanonicalConversationSnapshot(updatedConversationWithoutMemory, userMessage.id),
+      createCanonicalConversationSnapshot(updatedConversationWithoutMemory, input.userMessageId),
       { responseMode: activeGeneration.responseMode },
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
@@ -309,10 +420,12 @@ export class ConversationStore implements IConversationStore {
     this.dependencies.historyStore.save(updatedConversation);
     this.activeGeneration = activeGeneration;
     this.setRuntimeState({
-      conversationId,
-      originatingUserMessageId: userMessage.id,
+      conversationId: input.conversationId,
+      originatingUserMessageId: input.userMessageId,
       assistantMessageId: replacementAssistantMessageId,
-      streamingText: '',
+      // Show the carried-forward truncated text immediately so a continuation does
+      // not appear to restart from an empty bubble.
+      streamingText: input.seedText,
       isOwnerOfActiveInference: true,
     });
 
@@ -320,13 +433,10 @@ export class ConversationStore implements IConversationStore {
       activeGeneration,
       this.createInferenceRequest(
         activeGeneration,
-        {
-          question: userMessage.text,
-          imagePath: firstImagePath(userMessage),
-        },
-        requestId
+        { question: input.question, imagePath: input.imagePath },
+        requestId,
       ),
-      orchestration.context
+      orchestration.context,
     );
   }
 
@@ -486,13 +596,14 @@ export class ConversationStore implements IConversationStore {
     }
 
     if (isInProgressStatus(state.status)) {
-      if (state.response !== '') {
-        activeGeneration.lastObservedText = state.response;
+      const composed = this.composeStreamedText(activeGeneration, state.response);
+      if (composed !== '') {
+        activeGeneration.lastObservedText = composed;
       }
       this.checkpointIfDue(activeGeneration, activeGeneration.lastObservedText);
       this.setRuntimeState({
         ...this.runtimeStateFor(activeGeneration),
-        streamingText: state.response,
+        streamingText: composed,
         isOwnerOfActiveInference: true,
       });
       return;
@@ -518,10 +629,12 @@ export class ConversationStore implements IConversationStore {
     state: InferenceState,
     messageStatus: Exclude<MessageStatus, 'generating'>
   ): void {
-    if (state.response !== '') {
-      activeGeneration.lastObservedText = state.response;
+    const composedResponse = this.composeStreamedText(activeGeneration, state.response);
+    if (composedResponse !== '') {
+      activeGeneration.lastObservedText = composedResponse;
     }
     this.flushCheckpoint(activeGeneration, activeGeneration.lastObservedText);
+    const finishReason = resolveMessageFinishReason(state, messageStatus);
     const conversation = this.dependencies.historyStore.get(activeGeneration.conversationId);
     if (conversation !== null) {
       const errorMessage = state.status === 'errored' ? state.error ?? 'Inference failed.' : null;
@@ -545,10 +658,11 @@ export class ConversationStore implements IConversationStore {
                 ...message,
                 text:
                   state.status === 'completed'
-                    ? (state.response !== '' ? state.response : activeGeneration.lastObservedText)
+                    ? (composedResponse !== '' ? composedResponse : activeGeneration.lastObservedText)
                     : activeGeneration.lastObservedText || message.text,
                 status: messageStatus,
                 errorMessage,
+                finishReason,
               }
             : message
         ),
@@ -589,7 +703,17 @@ export class ConversationStore implements IConversationStore {
 
     this.recordDiagnosticTurn(activeGeneration, state);
     this.activeGeneration = null;
-    this.setRuntimeState(this.idleRuntimeState(activeGeneration, state.response));
+    this.setRuntimeState(
+      this.idleRuntimeState(activeGeneration, composedResponse, state.limitWarning ?? null),
+    );
+  }
+
+  /** Prepends a continuation's seed so streamed/final text stays seamless. */
+  private composeStreamedText(activeGeneration: ActiveGeneration, streamed: string): string {
+    if (activeGeneration.seedText === '') {
+      return streamed;
+    }
+    return streamed === '' ? activeGeneration.seedText : `${activeGeneration.seedText}${streamed}`;
   }
 
   private recordDiagnosticTurn(activeGeneration: ActiveGeneration, state: InferenceState): void {
@@ -727,7 +851,8 @@ export class ConversationStore implements IConversationStore {
 
   private idleRuntimeState(
     activeGeneration: ActiveGeneration,
-    streamingText = ''
+    streamingText = '',
+    limitWarning: string | null = null,
   ): ConversationRuntimeState {
     return {
       conversationId: activeGeneration.conversationId,
@@ -735,6 +860,7 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId: activeGeneration.assistantMessageId,
       streamingText,
       isOwnerOfActiveInference: false,
+      limitWarning,
     };
   }
 
@@ -933,6 +1059,23 @@ function titleTokens(title: string | null | undefined): string[] {
     .filter((token) => token.length >= 3 && !stopWords.has(token));
 }
 
+/**
+ * Builds the prompt for a continuation attempt. It gives the model the original
+ * question and the answer so far, then asks it to continue seamlessly WITHOUT
+ * repeating any already-shown text — the shown text is re-attached as the seed by
+ * the store, so the model only needs to produce what comes next.
+ */
+function buildContinuationPrompt(originalQuestion: string, partialAnswer: string): string {
+  return [
+    'You are continuing your own previous answer that was cut off before it finished.',
+    `Original question: ${originalQuestion.trim()}`,
+    'Answer so far (already shown to the user — do NOT repeat any of it):',
+    partialAnswer.trim(),
+    'Continue directly from where the answer stops, picking up mid-sentence if needed, ' +
+      'and finish the answer cleanly. Do not restate the question or re-summarize earlier points.',
+  ].join('\n\n');
+}
+
 function createEmptyDraft(conversationId: string | 'new'): Draft {
   return {
     conversationId: conversationId === 'new' ? null : conversationId,
@@ -968,6 +1111,21 @@ function isInProgressStatus(status: InferenceState['status']): boolean {
     // owning conversation stays locked until the terminal 'cancelled' arrives.
     status === 'cancelling'
   );
+}
+
+/**
+ * The durable finish reason stored on a terminal assistant message. Completed
+ * turns carry the engine's reported reason (`natural`/`length`); non-completed
+ * terminal states map to `cancelled`/`failed` regardless of what the engine said.
+ */
+function resolveMessageFinishReason(
+  state: InferenceState,
+  messageStatus: Exclude<MessageStatus, 'generating'>,
+): GenerationFinishReason {
+  if (messageStatus === 'completed') {
+    return state.finishReason ?? 'natural';
+  }
+  return messageStatus === 'interrupted' ? 'cancelled' : 'failed';
 }
 
 function conversationStatusForMessageStatus(

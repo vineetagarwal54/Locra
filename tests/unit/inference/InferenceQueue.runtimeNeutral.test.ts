@@ -81,6 +81,59 @@ describe('InferenceQueue runtime neutrality', () => {
     expect(state.metrics).not.toBeNull();
   });
 
+  it('propagates a length finish reason and both notices into completed state', async () => {
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_request, onToken) => {
+        onToken('A cut off answer that keeps going', 320);
+        return Promise.resolve<EngineGenerateResult>({
+          response: 'A cut off answer that keeps going',
+          tokenCount: 320,
+          finishReason: 'length',
+          inputShortenedWarning: 'Your message was long, so Locra trimmed it.',
+        });
+      },
+    };
+    const queue = new InferenceQueue({
+      preprocess: makePreprocess(),
+      isReadyForInference: () => true,
+      engine,
+    });
+
+    await queue.submit(TEXT_REQUEST);
+
+    const state = queue.getState();
+    expect(state.status).toBe('completed');
+    expect(state.finishReason).toBe('length');
+    // Both the input-shortened warning and the truncation notice are surfaced.
+    expect(state.limitWarning).toContain('Locra trimmed it');
+    expect(state.limitWarning).toContain('cut off');
+  });
+
+  it('reports a natural finish reason for a clean completion', async () => {
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_request, onToken) => {
+        onToken('All done here.', 4);
+        return Promise.resolve<EngineGenerateResult>({
+          response: 'All done here.',
+          tokenCount: 4,
+          finishReason: 'natural',
+        });
+      },
+    };
+    const queue = new InferenceQueue({
+      preprocess: makePreprocess(),
+      isReadyForInference: () => true,
+      engine,
+    });
+
+    await queue.submit(TEXT_REQUEST);
+
+    expect(queue.getState().finishReason).toBe('natural');
+    expect(queue.getState().limitWarning).toBeNull();
+  });
+
   it('forwards cancellation to the neutral adapter via the abort signal', async () => {
     const generateDeferred = defer<EngineGenerateResult>();
     let receivedSignal: AbortSignal | null = null;
