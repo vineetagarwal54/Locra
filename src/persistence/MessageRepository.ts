@@ -5,7 +5,7 @@
 // terminal states freeze (FR-008/009/010) — the attempt lifecycle (create/
 // activate/projection) lands in US2 (T026/T027).
 
-import type { AttemptStatus, MessageRow } from '../types/models';
+import type { AttemptStatus, GenerationFinishReason, MessageRow } from '../types/models';
 
 import { clampLimit, toPage } from './paging';
 import { runInTransaction } from './sqlite/Transactions';
@@ -71,7 +71,7 @@ export class MessageRepository {
   reconcileGeneratingAttempts(errorMessage = 'Response interrupted before completion.'): number {
     return this.driver.runSync(
       `UPDATE message
-       SET status = 'interrupted', error_message = ?, finalized_at = ?
+       SET status = 'interrupted', error_message = ?, finish_reason = 'cancelled', finalized_at = ?
        WHERE role = 'assistant' AND status = 'generating'`,
       [errorMessage, this.now()],
     ).changes;
@@ -94,14 +94,15 @@ export class MessageRepository {
       text: input.text,
       status: 'submitted',
       error_message: null,
+      finish_reason: null,
       finalized_at: null,
       created_at: timestamp,
     };
     this.driver.runSync(
       `INSERT INTO message
          (id, conversation_id, role, reply_to_message_id, attempt_number, is_active_attempt,
-          text, status, error_message, finalized_at, created_at)
-       VALUES (?, ?, 'user', NULL, NULL, 0, ?, 'submitted', NULL, NULL, ?)`,
+          text, status, error_message, finish_reason, finalized_at, created_at)
+       VALUES (?, ?, 'user', NULL, NULL, 0, ?, 'submitted', NULL, NULL, NULL, ?)`,
       [row.id, row.conversation_id, row.text, row.created_at],
     );
     return row;
@@ -121,11 +122,12 @@ export class MessageRepository {
     attemptId: string,
     status: Exclude<AttemptStatus, 'submitted' | 'generating'>,
     errorMessage: string | null = null,
+    finishReason: GenerationFinishReason | null = null,
   ): void {
     this.driver.runSync(
-      `UPDATE message SET status = ?, error_message = ?, finalized_at = ?
+      `UPDATE message SET status = ?, error_message = ?, finish_reason = ?, finalized_at = ?
          WHERE id = ? AND role = 'assistant' AND status = 'generating'`,
-      [status, errorMessage, this.now(), attemptId],
+      [status, errorMessage, finishReason, this.now(), attemptId],
     );
   }
 
@@ -167,14 +169,15 @@ export class MessageRepository {
         text: '',
         status: 'generating',
         error_message: null,
+        finish_reason: null,
         finalized_at: null,
         created_at: input.createdAt ?? this.now(),
       };
       this.driver.runSync(
         `INSERT INTO message
            (id, conversation_id, role, reply_to_message_id, attempt_number, is_active_attempt,
-            text, status, error_message, finalized_at, created_at)
-         VALUES (?, ?, 'assistant', ?, ?, 1, '', 'generating', NULL, NULL, ?)`,
+            text, status, error_message, finish_reason, finalized_at, created_at)
+         VALUES (?, ?, 'assistant', ?, ?, 1, '', 'generating', NULL, NULL, NULL, ?)`,
         [row.id, row.conversation_id, row.reply_to_message_id, row.attempt_number, row.created_at],
       );
       return row;

@@ -38,7 +38,26 @@ export function applyAdditiveSchema(driver: SqliteDriver): void {
     for (const statement of ADDITIVE_SCHEMA_STATEMENTS) {
       driver.execSync(statement);
     }
+    addColumnIfMissing(driver, 'message', 'finish_reason', 'TEXT');
   });
+}
+
+/**
+ * Idempotently adds a column to an existing table. `ALTER TABLE ADD COLUMN` is not
+ * `IF NOT EXISTS`-aware, so the column is only added when absent — letting existing
+ * stores gain the column without a destructive schema-version reset.
+ */
+function addColumnIfMissing(
+  driver: SqliteDriver,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const columns = driver.getAllSync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((existing) => existing.name === column)) {
+    return;
+  }
+  driver.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 /**
@@ -73,6 +92,7 @@ export const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     text TEXT NOT NULL,
     status TEXT NOT NULL,
     error_message TEXT,
+    finish_reason TEXT,
     finalized_at INTEGER,
     created_at INTEGER NOT NULL,
     CHECK (

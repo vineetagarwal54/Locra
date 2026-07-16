@@ -26,6 +26,7 @@ function messageRow(id: string, createdAt: number, role: 'user' | 'assistant'): 
     text: id,
     status: role === 'user' ? 'submitted' : 'completed',
     error_message: null,
+    finish_reason: role === 'assistant' ? 'natural' : null,
     finalized_at: role === 'assistant' ? createdAt : null,
     created_at: createdAt,
   };

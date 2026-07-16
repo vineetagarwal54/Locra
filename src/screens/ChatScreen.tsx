@@ -254,6 +254,36 @@ export function ChatScreen({ navigation, route }: Props) {
     [conversationId]
   );
 
+  const onRegenerate = useCallback(
+    (assistantMessageId: string): void => {
+      setScreenError(null);
+      void conversationStore
+        .regenerateResponse(conversationId, assistantMessageId)
+        .catch((error: unknown) => {
+          setScreenError(
+            error instanceof Error ? error.message : 'Could not regenerate that response.',
+          );
+          void haptics.error();
+        });
+    },
+    [conversationId],
+  );
+
+  const onContinue = useCallback(
+    (assistantMessageId: string): void => {
+      setScreenError(null);
+      void conversationStore
+        .continueTruncatedMessage(conversationId, assistantMessageId)
+        .catch((error: unknown) => {
+          setScreenError(
+            error instanceof Error ? error.message : 'Could not continue that response.',
+          );
+          void haptics.error();
+        });
+    },
+    [conversationId],
+  );
+
   const onReportIssue = useCallback(
     (assistantMessageId: string): void => {
       navigation.navigate('DiagnosticsExport', {
@@ -302,12 +332,21 @@ export function ChatScreen({ navigation, route }: Props) {
             message={message}
             streamingText={streamingText}
             onRetry={onRetry}
+            onRegenerate={onRegenerate}
+            onContinue={onContinue}
             {...(diagnosticsAvailable ? { onReportIssue } : {})}
           />
         </View>
       );
     },
-    [onReportIssue, onRetry, runtimeState?.assistantMessageId, runtimeState?.streamingText]
+    [
+      onContinue,
+      onRegenerate,
+      onReportIssue,
+      onRetry,
+      runtimeState?.assistantMessageId,
+      runtimeState?.streamingText,
+    ]
   );
 
   if (isMissingConversation) {
@@ -332,6 +371,9 @@ export function ChatScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <AppHeader onMenu={onOpenDrawer} onSettings={onOpenSettings} />
       {screenError !== null ? <Text style={styles.screenError}>{screenError}</Text> : null}
+      {screenError === null && runtimeState?.limitWarning != null && runtimeState.limitWarning !== '' ? (
+        <Text style={styles.limitWarning}>{runtimeState.limitWarning}</Text>
+      ) : null}
       <FlatList
         ref={listRef}
         data={conversation?.messages ?? []}
@@ -562,6 +604,12 @@ const styles = StyleSheet.create({
   },
   screenError: {
     color: designTokens.color.error,
+    fontSize: designTokens.type.supporting.fontSize,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space8,
+  },
+  limitWarning: {
+    color: designTokens.color.textSecondary,
     fontSize: designTokens.type.supporting.fontSize,
     paddingHorizontal: designTokens.spacing.space16,
     paddingTop: designTokens.spacing.space8,

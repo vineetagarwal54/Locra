@@ -261,6 +261,7 @@ function toConversationMessage(row: MessageRow): ConversationMessage {
     status: row.role === 'user' ? 'completed' : row.status === 'submitted' ? 'completed' : row.status,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+    finishReason: row.role === 'assistant' ? row.finish_reason : null,
   };
 }
 
@@ -294,7 +295,12 @@ function persistConversationSnapshot(conversation: Conversation): void {
     }
     messageRepository.updateAssistantStreamingText(message.id, message.text);
     if (message.status !== 'generating') {
-      messageRepository.finalizeAttempt(message.id, message.status, message.errorMessage);
+      messageRepository.finalizeAttempt(
+        message.id,
+        message.status,
+        message.errorMessage,
+        message.finishReason ?? null,
+      );
     }
   }
   conversationRepository.updateConversation(conversation.id, {

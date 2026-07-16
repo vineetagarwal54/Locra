@@ -513,6 +513,110 @@ describe('conversationStore', () => {
     );
   });
 
+  it('starts a retry from empty streaming text and never resurrects the prior partial', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'A question', imagePath: null });
+    queue.emit(makeInferenceState('streaming', 'old partial'));
+    queue.emit(makeInferenceState('errored'));
+
+    await store.retryFailedMessage('conversation-a', 'assistant-a');
+
+    // The new attempt begins blank and the runtime shows no carried-over text.
+    expect(history.get('conversation-a')?.messages.at(-1)?.text).toBe('');
+    expect(store.getConversationRuntimeState('conversation-a')?.streamingText).toBe('');
+
+    // A retry that errors before producing anything must not inherit 'old partial'.
+    queue.emit(makeInferenceState('errored'));
+    const newAttempt = history.get('conversation-a')?.messages.at(-1);
+    expect(newAttempt?.status).toBe('failed');
+    expect(newAttempt?.text).toBe('');
+    // The original failed attempt still keeps its own partial (immutable history).
+    expect(
+      history.get('conversation-a')?.messages.find((message) => message.id === 'assistant-a')?.text,
+    ).toBe('old partial');
+  });
+
+  it('persists the completed finish reason on the assistant message', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'A question', imagePath: null });
+
+    queue.emit({ ...makeInferenceState('completed', 'Answer'), finishReason: 'length' });
+
+    expect(history.get('conversation-a')?.messages[1]).toEqual(
+      expect.objectContaining({ status: 'completed', finishReason: 'length' }),
+    );
+  });
+
+  it('maps a cancelled turn to a cancelled finish reason regardless of engine report', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'A question', imagePath: null });
+
+    queue.emit(makeInferenceState('cancelled'));
+
+    expect(history.get('conversation-a')?.messages[1]?.finishReason).toBe('cancelled');
+  });
+
+  it('continues a length-truncated answer as a linked attempt seeded with the shown text', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'Explain X', imagePath: null });
+    queue.emit({
+      ...makeInferenceState('completed', 'Partial answer that was cut'),
+      finishReason: 'length',
+    });
+
+    await store.continueTruncatedMessage('conversation-a', 'assistant-a');
+
+    // A new linked attempt is appended; the truncated attempt is preserved.
+    const conversation = history.get('conversation-a');
+    expect(conversation?.messages.map((message) => message.id)).toEqual([
+      'user-a', 'assistant-a', 'request-b',
+    ]);
+    // The runtime shows the already-visible text immediately (no empty restart).
+    expect(store.getConversationRuntimeState('conversation-a')?.streamingText).toBe(
+      'Partial answer that was cut',
+    );
+    // The continuation prompt embeds the original question + partial, as a text turn.
+    const submitted = queue.submitted.at(-1);
+    expect(submitted?.imagePath).toBeNull();
+    expect(submitted?.question).toMatch(/continuing your own previous answer/i);
+    expect(submitted?.question).toContain('Partial answer that was cut');
+
+    // The completed continuation stitches seed + new text without repetition.
+    queue.emit(makeInferenceState('completed', ' and here is the rest.'));
+    expect(history.get('conversation-a')?.messages.at(-1)?.text).toBe(
+      'Partial answer that was cut and here is the rest.',
+    );
+  });
+
+  it('refuses to continue an answer that stopped naturally', async () => {
+    const { store, queue } = makeStore();
+    await store.submit('new', { question: 'Explain X', imagePath: null });
+    queue.emit({ ...makeInferenceState('completed', 'Complete answer.'), finishReason: 'natural' });
+
+    await expect(
+      store.continueTruncatedMessage('conversation-a', 'assistant-a'),
+    ).rejects.toThrow(/cannot be continued/i);
+  });
+
+  it('regenerates a completed answer as a fresh linked attempt, preserving the original', async () => {
+    const { store, queue, history } = makeStore();
+    await store.submit('new', { question: 'Explain X', imagePath: null });
+    queue.emit(makeInferenceState('completed', 'First answer'));
+
+    await store.regenerateResponse('conversation-a', 'assistant-a');
+
+    const conversation = history.get('conversation-a');
+    // The original completed attempt is preserved unchanged.
+    expect(
+      conversation?.messages.find((message) => message.id === 'assistant-a'),
+    ).toEqual(expect.objectContaining({ text: 'First answer', status: 'completed' }));
+    // The new attempt is a fresh generation: blank, original question, no seed.
+    expect(conversation?.messages.at(-1)?.status).toBe('generating');
+    expect(conversation?.messages.at(-1)?.text).toBe('');
+    expect(store.getConversationRuntimeState('conversation-a')?.streamingText).toBe('');
+    expect(queue.submitted.at(-1)?.question).toBe('Explain X');
+  });
+
   it('persists a bounded diagnostic turn record when a dev trace completes', async () => {
     const setSpy = jest.spyOn(storage, 'set');
     setSpy.mockClear();

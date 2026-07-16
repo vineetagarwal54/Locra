@@ -304,6 +304,70 @@ describe('ContextOrchestrator', () => {
     );
   });
 
+  it('does not pull prior image evidence into a bare-pronoun follow-up', () => {
+    // "that"/"it" used to match the visual-reference pattern and dragged stale
+    // image evidence into plainly non-visual turns. It must no longer qualify.
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      currentMessage(2, 'Can you clarify that earlier point?'),
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toEqual([]);
+  });
+
+  it('includes image evidence on an active image turn even without visual keywords', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      {
+        id: 'user-2',
+        role: 'user' as const,
+        text: 'And now?',
+        attachments: [{ kind: 'image' as const, path: '/images/label.jpg' }],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: 1_700_000_000_010,
+      },
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toHaveLength(1);
+  });
+
+  it('still includes image evidence for explicit visual language', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      currentMessage(2, 'What color was shown in the image?'),
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toHaveLength(1);
+  });
+
   it('advances the rolling summary boundary as completed turns age out of the exact window', () => {
     const firstMessages = [
       ...completedTurn(1, 'First question', 'First answer'),

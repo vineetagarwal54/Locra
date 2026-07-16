@@ -4,6 +4,7 @@
 // Real-SQLite deletion/orphan behavior is validated once on-device (Polish/T079).
 
 import {
+  applyAdditiveSchema,
   initializeSchema,
   readSchemaVersion,
   SCHEMA_STATEMENTS,
@@ -11,8 +12,15 @@ import {
   SCHEMA_VERSION,
 } from '../../../src/persistence/sqlite/Schema';
 import type { SqliteDriver } from '../../../src/persistence/types';
+import { createTestDatabase } from '../../helpers/nodeSqliteDriver';
 
 const DDL = SCHEMA_STATEMENTS.join('\n');
+
+function columnNames(driver: SqliteDriver): string[] {
+  return driver
+    .getAllSync<{ name: string }>('PRAGMA table_info(message)')
+    .map((column) => column.name);
+}
 
 const REQUIRED_TABLES = [
   'conversation',
@@ -115,6 +123,36 @@ describe('SQL schema contract', () => {
     expect(executed.length).toBe(SCHEMA_STATEMENTS.length);
     expect(stampedVersion).toBe(SCHEMA_VERSION);
     expect(inTransaction).toBe(false);
+  });
+
+  it('declares the assistant finish_reason column on the message table', () => {
+    expect(DDL).toMatch(/CREATE TABLE IF NOT EXISTS message[\s\S]*finish_reason TEXT/);
+  });
+
+  it('additively backfills finish_reason onto an existing message table without it', () => {
+    const database = createTestDatabase();
+    try {
+      // Simulate a pre-existing store whose message table predates finish_reason
+      // by replacing the freshly-initialized table with the older shape.
+      database.driver.execSync('DROP TABLE message');
+      database.driver.execSync(
+        `CREATE TABLE message (
+          id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+          reply_to_message_id TEXT, attempt_number INTEGER, is_active_attempt INTEGER NOT NULL DEFAULT 0,
+          text TEXT NOT NULL, status TEXT NOT NULL, error_message TEXT, finalized_at INTEGER,
+          created_at INTEGER NOT NULL
+        )`,
+      );
+      expect(columnNames(database.driver)).not.toContain('finish_reason');
+
+      applyAdditiveSchema(database.driver);
+      expect(columnNames(database.driver)).toContain('finish_reason');
+
+      // Idempotent: a second pass must not throw (column already present).
+      expect(() => applyAdditiveSchema(database.driver)).not.toThrow();
+    } finally {
+      database.close();
+    }
   });
 
   it('readSchemaVersion returns 0 for a never-initialized database', () => {

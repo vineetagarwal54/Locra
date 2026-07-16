@@ -51,10 +51,10 @@ const MESSAGES: ModelRequestMessage[] = [{ role: 'user', content: 'Describe this
 
 describe('QwenLlamaRuntime streaming and cancellation', () => {
   it.each([
-    ['Low', 192],
-    ['Medium', 384],
-    ['High', 768],
-  ] as const)('passes the %s response budget to llama.rn', async (responseMode, expected) => {
+    ['Low', 320],
+    ['Medium', 640],
+    ['High', 1024],
+  ] as const)('passes the %s hard generation limit as n_predict', async (responseMode, expected) => {
     const completion = jest.fn(
       async (): Promise<QwenNativeCompletionResult> => ({ content: 'done' }),
     );
@@ -68,10 +68,75 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
       onToken: () => {},
     });
 
+    // n_predict is the HARD generationLimit, not the soft answerTargetTokens.
     expect(completion).toHaveBeenCalledWith(
       expect.objectContaining({ n_predict: expected }),
       expect.any(Function),
     );
+  });
+
+  it('reports a natural finish when the model stops on its own', async () => {
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({
+        content: 'done',
+        tokens_predicted: 5,
+        stopped_eos: true,
+      }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'Low',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(result.finishReason).toBe('natural');
+  });
+
+  it('reports a length finish when the hard output cap is reached', async () => {
+    // Low's generationLimit is 320; a run that produced exactly the cap and did
+    // not emit a stop token is a length truncation.
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({
+        content: 'x'.repeat(10),
+        tokens_predicted: 320,
+      }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'Low',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(result.finishReason).toBe('length');
+  });
+
+  it('honors the native stopped_limit flag over the token count', async () => {
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({
+        content: 'partial',
+        tokens_predicted: 3,
+        stopped_limit: true,
+      }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'High',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(result.finishReason).toBe('length');
   });
 
   it('streams cumulative text and returns metrics from native timings', async () => {
