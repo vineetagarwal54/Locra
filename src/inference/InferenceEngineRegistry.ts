@@ -86,6 +86,8 @@ export const inferenceEngineAdapter: InferenceEngineAdapter = {
         promptTokenCount: handle.getPromptTokenCount(),
         totalTokenCount: handle.getTotalTokenCount(),
         pinnedExtraction: null,
+        finishReason: handle.getFinishReason?.() ?? null,
+        inputShortenedWarning: handle.getInputShortenedWarning?.() ?? null,
       };
     } finally {
       unsubscribe();

@@ -14,6 +14,12 @@ export interface AppDiagnosticsInfo {
   readonly appBuildId: string;
   readonly deviceNameModel: string;
   readonly exportedAt: string;
+  readonly modelDownloadStatus: string;
+  readonly modelDownloadProgress: number;
+  readonly modelIntegrityVerified: boolean;
+  readonly storageAvailableBytes: number;
+  readonly storageTotalBytes: number;
+  readonly activeResourceOperation: string | null;
 }
 
 export interface DiagnosticsMessageJson {
@@ -67,9 +73,25 @@ export function buildDiagnosticsBundleJson(input: {
   appInfo: AppDiagnosticsInfo;
 }): DiagnosticsBundleJson {
   return {
-    appInfo: input.appInfo,
+    appInfo: sanitizeAppInfo(input.appInfo),
     conversations: input.conversations.map(toConversationJson),
     turns: input.turns.map(toTurnJson),
+  };
+}
+
+/** Runs the free-text metadata fields through the same secret/path sanitizer. */
+function sanitizeAppInfo(appInfo: AppDiagnosticsInfo): AppDiagnosticsInfo {
+  return {
+    ...appInfo,
+    modelId: sanitizeSensitive(appInfo.modelId),
+    generationConfigId: sanitizeSensitive(appInfo.generationConfigId),
+    pipelineVariantId: sanitizeSensitive(appInfo.pipelineVariantId),
+    appBuildId: sanitizeSensitive(appInfo.appBuildId),
+    deviceNameModel: sanitizeSensitive(appInfo.deviceNameModel),
+    activeResourceOperation:
+      appInfo.activeResourceOperation === null
+        ? null
+        : sanitizeSensitive(appInfo.activeResourceOperation),
   };
 }
 
@@ -92,10 +114,12 @@ function formatMessageLine(message: ConversationMessage): string {
   const speaker = message.role === 'user' ? '**User**' : '**Locra**';
   const attachments =
     message.attachments.length > 0
-      ? ` [attachments: ${message.attachments.map((attachment) => attachment.path).join(', ')}]`
+      ? ' [image omitted]'
       : '';
-  const error = message.errorMessage !== null ? ` (error: ${message.errorMessage})` : '';
-  const text = message.text.trim() === '' ? '(empty)' : message.text;
+  const error = message.errorMessage !== null
+    ? ` (error: ${sanitizeSensitive(message.errorMessage)})`
+    : '';
+  const text = message.text.trim() === '' ? '(empty)' : sanitizeSensitive(message.text);
   return `${speaker} [${isoTimestamp(message.createdAt)}] (${message.status})${attachments}${error}: ${text}`;
 }
 
@@ -105,7 +129,8 @@ function conversationTitle(conversation: Conversation): string {
   if (raw === '') {
     return `Conversation ${conversation.id}`;
   }
-  return raw.length > TITLE_MAX_CHARS ? `${raw.slice(0, TITLE_MAX_CHARS)}…` : raw;
+  const title = raw.length > TITLE_MAX_CHARS ? `${raw.slice(0, TITLE_MAX_CHARS)}…` : raw;
+  return sanitizeSensitive(title);
 }
 
 function toConversationJson(conversation: Conversation): DiagnosticsConversationJson {
@@ -122,14 +147,11 @@ function toMessageJson(message: ConversationMessage): DiagnosticsMessageJson {
   return {
     id: message.id,
     role: message.role,
-    text: message.text,
+    text: sanitizeSensitive(message.text),
     status: message.status,
-    errorMessage: message.errorMessage,
+    errorMessage: message.errorMessage === null ? null : sanitizeSensitive(message.errorMessage),
     createdAt: isoTimestamp(message.createdAt),
-    attachments: message.attachments.map((attachment) => ({
-      kind: attachment.kind,
-      path: attachment.path,
-    })),
+    attachments: [],
   };
 }
 
@@ -139,8 +161,21 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
     originatingUserMessageId: turn.originatingUserMessageId,
     assistantMessageId: turn.assistantMessageId,
     capturedAt: isoTimestamp(turn.capturedAt),
-    stages: turn.trace.stages,
-    finalResponse: turn.trace.finalResponse,
+    stages: turn.trace.stages.map((stage) => ({
+      ...stage,
+      modelInput: stage.modelInput.map((message) => ({
+        role: message.role,
+        content: sanitizeSensitive(message.content),
+      })),
+      rawOutput: sanitizeSensitive(stage.rawOutput),
+      parsedOutput: sanitizeUnknown(stage.parsedOutput),
+      processedOutput: stage.processedOutput === undefined
+        ? undefined
+        : sanitizeSensitive(stage.processedOutput),
+    })),
+    finalResponse: turn.trace.finalResponse === null
+      ? null
+      : sanitizeSensitive(turn.trace.finalResponse),
     refusalRecoveryTriggered: turn.trace.stages.some((stage) => stage.refusalRetry === true),
     objectiveResult: turn.objectiveResult,
     contextDiagnostics: turn.contextDiagnostics,
@@ -149,4 +184,54 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
 
 function isoTimestamp(epochMs: number): string {
   return new Date(epochMs).toISOString();
+}
+
+export function sanitizeLocalPaths(value: string): string {
+  return value.replace(
+    /(?:file:\/\/|[A-Za-z]:\\|\/(?:data|storage|cache|tmp|var)\/)[^\s"'<>]+/g,
+    '[local path omitted]',
+  );
+}
+
+// Ordered redactions applied before local-path stripping. Each targets a class of
+// secret so a diagnostics bundle never carries credentials, tokens, or keys even
+// when they leak into model I/O, error strings, or metadata.
+const SECRET_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Authorization headers / bearer tokens: "Authorization: Bearer <token>".
+  [/\b(bearer)\s+[A-Za-z0-9._~+/-]{8,}=*/gi, '$1 [redacted]'],
+  // JWT-style tokens (three base64url segments).
+  [/\beyJ[A-Za-z0-9._-]{10,}\b/g, '[redacted token]'],
+  // key/value style secrets: token=..., api_key: ..., secret="...", password ...
+  [
+    /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization|auth[_-]?token|client[_-]?secret|private[_-]?key)\b(\s*[:=]\s*|\s+)["']?[^\s"'<>&]{4,}["']?/gi,
+    '$1=[redacted]',
+  ],
+];
+
+/**
+ * Sanitizes free text before it is written to a diagnostics bundle: first redacts
+ * credential-like secrets/tokens, then strips absolute local file paths. Applied to
+ * every user/model string, error message, and string metadata value.
+ */
+export function sanitizeSensitive(value: string): string {
+  const withoutSecrets = SECRET_PATTERNS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    value,
+  );
+  return sanitizeLocalPaths(withoutSecrets);
+}
+
+function sanitizeUnknown(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return sanitizeSensitive(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeUnknown);
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeUnknown(item)]),
+    );
+  }
+  return value;
 }

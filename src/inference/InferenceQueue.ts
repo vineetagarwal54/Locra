@@ -4,6 +4,7 @@
 
 import { createActor, fromPromise, type ActorRefFrom } from 'xstate';
 
+import type { InferenceReadiness } from '../model/InferenceReadiness';
 import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -74,7 +75,9 @@ export interface InferenceSubmitOptions {
 
 export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
+  cleanupProcessedImage?: (processedPath: string, sourcePath: string) => Promise<void>;
   isReadyForInference: (requiresVision: boolean) => boolean;
+  getInferenceReadiness?: (requiresVision: boolean) => InferenceReadiness;
   engine: InferenceEngineAdapter;
   getResponseMode?: () => ResponseMode;
   createRecorder?: () => InferenceMetricsRecorder;
@@ -109,6 +112,7 @@ const IDLE_STATE: InferenceState = {
   metrics: null,
   error: null,
   limitWarning: null,
+  finishReason: null,
   pinnedExtraction: null,
   hiddenEvidence: null,
   objectiveResult: null,
@@ -208,6 +212,7 @@ export class InferenceQueue implements IInferenceQueue {
     const responseMode = options.responseMode
       ?? this.deps.getResponseMode?.()
       ?? DEFAULT_RESPONSE_MODE;
+    let processed: PreprocessedImage | null = null;
 
     this.setState({
       status: 'preprocessing',
@@ -225,15 +230,19 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markRequestStart();
       recorder.markPreprocessingStart();
       const requestImagePath = this.resolveRequestImagePath(request, options);
-      const processed = requestImagePath === null
+      processed = requestImagePath === null
         ? null
         : await this.deps.preprocess(requestImagePath);
       lifecycleGates.prepare.resolve(undefined);
       recorder.markPreprocessingEnd();
       if (active.cancelled) return;
 
-      if (!this.deps.isReadyForInference(processed !== null)) {
-        throw new Error('The model is not downloaded and verified yet.');
+      const readiness = this.deps.getInferenceReadiness?.(processed !== null);
+      if (readiness?.ready === false) {
+        throw new Error(readiness.message);
+      }
+      if (readiness === undefined && !this.deps.isReadyForInference(processed !== null)) {
+        throw new Error('Model setup needs attention before inference can start.');
       }
 
       this.setState({ status: 'loading_model' });
@@ -272,12 +281,18 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markInferenceEnd();
       const processedAnswer = postProcessAnswer(result.response);
       this.recordFinalTraceResponse(active, processedAnswer.text);
-      const notice = resolveCompletionNotice(processedAnswer.verdict);
+      const finishReason = result.finishReason ?? 'natural';
+      const notice = resolveCompletionNotice(
+        processedAnswer.verdict,
+        finishReason,
+        result.inputShortenedWarning ?? null,
+      );
       this.setState({
         status: 'completed',
         response: processedAnswer.text,
         metrics: recorder.build(),
         limitWarning: notice,
+        finishReason,
         pinnedExtraction: result.pinnedExtraction ?? null,
         hiddenEvidence: result.hiddenEvidence ?? null,
         objectiveResult: this.buildObjectiveResult(
@@ -301,6 +316,7 @@ export class InferenceQueue implements IInferenceQueue {
         metrics: null,
         error: toMessage(error),
         limitWarning: null,
+        finishReason: 'failed',
         pinnedExtraction: null,
         hiddenEvidence: null,
         objectiveResult: null,
@@ -313,6 +329,13 @@ export class InferenceQueue implements IInferenceQueue {
       }
       if (this.lifecycleGates === lifecycleGates) {
         this.lifecycleGates = null;
+      }
+      if (processed !== null && request.imagePath !== null) {
+        try {
+          await this.deps.cleanupProcessedImage?.(processed.path, request.imagePath);
+        } catch {
+          // Temporary derivative cleanup is best-effort and never changes the turn result.
+        }
       }
       // Release the device gate ONLY after the native call has truly settled, so
       // a queued/next generation cannot start while resources are still held.
@@ -354,6 +377,7 @@ export class InferenceQueue implements IInferenceQueue {
       metrics: null,
       error: null,
       limitWarning: null,
+      finishReason: 'cancelled',
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
@@ -369,6 +393,7 @@ export class InferenceQueue implements IInferenceQueue {
       metrics: null,
       error: null,
       limitWarning: null,
+      finishReason: 'cancelled',
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
@@ -742,6 +767,7 @@ export function createInferenceQueue(
 ): InferenceQueue {
   return new InferenceQueue({
     preprocess: prepareImageForInference,
+    cleanupProcessedImage: async () => undefined,
     isReadyForInference: () => false,
     getModelAttribution: () => ({
       modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
@@ -752,14 +778,20 @@ export function createInferenceQueue(
   });
 }
 
-function resolveCompletionNotice(verdict: 'complete' | 'truncated' | 'looping'): string | null {
-  if (verdict === 'truncated') {
-    return TRUNCATED_ANSWER_NOTICE;
-  }
-  if (verdict === 'looping') {
-    return LOOPING_ANSWER_NOTICE;
-  }
-  return null;
+function resolveCompletionNotice(
+  verdict: 'complete' | 'truncated' | 'looping',
+  finishReason: 'natural' | 'length' | 'cancelled' | 'failed',
+  inputShortenedWarning: string | null,
+): string | null {
+  // The authoritative hard-cap stop, or the heuristic mid-sentence tail check,
+  // both mean the answer was cut off. A looping tail is its own notice.
+  const answerNotice =
+    finishReason === 'length' || verdict === 'truncated'
+      ? TRUNCATED_ANSWER_NOTICE
+      : verdict === 'looping'
+        ? LOOPING_ANSWER_NOTICE
+        : null;
+  return [inputShortenedWarning, answerNotice].filter((notice) => notice !== null).join(' ') || null;
 }
 
 function toMessage(error: unknown): string {

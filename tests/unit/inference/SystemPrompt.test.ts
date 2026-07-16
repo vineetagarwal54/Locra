@@ -24,6 +24,14 @@ describe('SystemPrompt', () => {
     expect(LOCRA_SYSTEM_PROMPT).toMatch(/explain how the user can verify/i);
   });
 
+  it('asks for cautious counts and identifications when the image is unclear', () => {
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/counting objects or identifying/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/best estimate/i);
+    expect(LOCRA_SYSTEM_PROMPT).toMatch(/approximate or uncertain/i);
+    // It must NOT hardcode any specific image answer.
+    expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/there are \d+/i);
+  });
+
   it('drops the older personality-heavy companion framing', () => {
     expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/endlessly resourceful companion/i);
     expect(LOCRA_SYSTEM_PROMPT).not.toMatch(/trusted friend/i);

@@ -13,10 +13,18 @@ import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
 import { SummaryRepository } from '../persistence/SummaryRepository';
+import type { ConversationCandidate } from '../retrieval/ConversationTargetResolver';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
-import { createConversationListCache, createMessageHistoryCache, loadMoreConversations, loadOlderMessages } from './conversationHistoryCache';
+import {
+  createConversationListCache,
+  createMessageHistoryCache,
+  loadMoreConversations,
+  loadNewerConversations,
+  loadNewerMessages,
+  loadOlderMessages,
+} from './conversationHistoryCache';
 import { useSettingsStore } from './settingsStore';
 
 const EMPTY_METRICS: MetricsSummary = {
@@ -35,12 +43,46 @@ export const conversationRepository = new ConversationRepository(driver, {
 });
 export const messageRepository = new MessageRepository(driver);
 export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
+imageRepository.reconcileAvailability(fileExists);
 export const evidenceRepository = new EvidenceRepository(driver);
 export const chunkRepository = new ChunkRepository(driver);
 export const embeddingRepository = new EmbeddingRepository(driver);
 export const summaryRepository = new SummaryRepository(driver);
 export const factRepository = new FactRepository(driver);
 export const benchmarkRepository = new BenchmarkRepository(driver);
+
+export function reconcileAbandonedAttempts(): number {
+  const reconciled = messageRepository.reconcileGeneratingAttempts();
+  if (reconciled > 0) {
+    messageCaches.clear();
+    conversationCache = createConversationListCache(conversationRepository);
+  }
+  return reconciled;
+}
+
+/** Bounded metadata-only candidates for the request-scoped past-chat picker. */
+export function listConversationTargets(activeConversationId: string): ConversationCandidate[] {
+  return conversationRepository.findTargetCandidates([], 10)
+    .filter((row) => row.id !== activeConversationId)
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+}
+
+/** Complete repository-backed headers for diagnostics selection, independent of UI cache eviction. */
+export function listAllConversationHeadersForDiagnostics(): Conversation[] {
+  const rows: ConversationRow[] = [];
+  let page = conversationRepository.listConversations({ limit: 50 });
+  rows.push(...page.items);
+  while (page.nextCursor !== null) {
+    page = conversationRepository.listConversations({ before: page.nextCursor, limit: 50 });
+    rows.push(...page.items);
+  }
+  return rowsToConversationHeaders(rows);
+}
 
 let conversationCache = createConversationListCache(conversationRepository);
 const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();
@@ -52,7 +94,11 @@ export interface HistoryStoreState {
   refresh: () => void;
   loadMore: () => void;
   loadOlderMessages: (conversationId: string) => void;
+  loadNewer: () => void;
+  loadNewerMessages: (conversationId: string) => void;
+  search: (query: string) => Conversation[];
   delete: (id: string) => void;
+  rename: (id: string, title: string) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
   getMetricsSummary: () => MetricsSummary;
@@ -73,14 +119,32 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
     loadMoreConversations(conversationCache, conversationRepository);
     set(listSnapshot());
   },
+  loadNewer: (): void => {
+    loadNewerConversations(conversationCache, conversationRepository);
+    set(listSnapshot());
+  },
   loadOlderMessages: (conversationId: string): void => {
     const cache = getMessageCache(conversationId);
     loadOlderMessages(cache, messageRepository, conversationId);
     set({ conversations: [...get().conversations] });
   },
+  loadNewerMessages: (conversationId: string): void => {
+    const cache = getMessageCache(conversationId);
+    loadNewerMessages(cache, messageRepository, conversationId);
+    set({ conversations: [...get().conversations] });
+  },
+  search: (query: string): Conversation[] =>
+    rowsToConversationHeaders(conversationRepository.searchConversations(query)),
   delete: (id: string): void => {
     conversationRepository.deleteConversation(id);
     messageCaches.delete(id);
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
+  },
+  rename: (id: string, title: string): void => {
+    const trimmed = title.trim();
+    if (trimmed === '') return;
+    conversationRepository.updateConversation(id, { title: trimmed, touch: true });
     conversationCache = createConversationListCache(conversationRepository);
     set(listSnapshot());
   },
@@ -143,6 +207,8 @@ function rowsToConversationHeaders(rows: ConversationRow[]): Conversation[] {
     flagNote: null,
     contextMemory: null,
     responseMode: fromStoredMode(row.response_mode),
+    latestMessagePreview: row.latest_message_preview,
+    hasImage: row.has_image === 1,
   }));
 }
 
@@ -186,11 +252,16 @@ function toConversationMessage(row: MessageRow): ConversationMessage {
     role: row.role,
     text: row.text,
     attachments: row.role === 'user'
-      ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({ kind: 'image' as const, path: asset.local_path }))
+      ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({
+          kind: 'image' as const,
+          path: asset.local_path,
+          available: asset.available === 1,
+        }))
       : [],
     status: row.role === 'user' ? 'completed' : row.status === 'submitted' ? 'completed' : row.status,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+    finishReason: row.role === 'assistant' ? row.finish_reason : null,
   };
 }
 
@@ -224,7 +295,12 @@ function persistConversationSnapshot(conversation: Conversation): void {
     }
     messageRepository.updateAssistantStreamingText(message.id, message.text);
     if (message.status !== 'generating') {
-      messageRepository.finalizeAttempt(message.id, message.status, message.errorMessage);
+      messageRepository.finalizeAttempt(
+        message.id,
+        message.status,
+        message.errorMessage,
+        message.finishReason ?? null,
+      );
     }
   }
   conversationRepository.updateConversation(conversation.id, {
@@ -254,5 +330,13 @@ function unlinkFile(path: string): void {
   const file = new File(path.startsWith('file://') ? path : `file://${path}`);
   if (file.exists) {
     file.delete();
+  }
+}
+
+function fileExists(path: string): boolean {
+  try {
+    return new File(path.startsWith('file://') ? path : `file://${path}`).exists;
+  } catch {
+    return false;
   }
 }

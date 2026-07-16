@@ -1,6 +1,7 @@
 import {
   DEFAULT_RESPONSE_MODE,
   fromStoredMode,
+  getResponseGenerationLimit,
   getResponseModeConfig,
   getResponseModeInstruction,
   getResponseTokenBudget,
@@ -29,9 +30,33 @@ describe('response modes', () => {
     expect(getResponseTokenBudget('High')).toBe(768);
   });
 
-  it.each(['Low', 'Medium', 'High'] as const)('asks %s responses to finish cleanly', (mode) => {
-    expect(getResponseModeInstruction(mode)).toMatch(/finish the answer cleanly/i);
-    expect(getResponseModeInstruction(mode)).toContain(String(getResponseTokenBudget(mode)));
+  it('exposes the hard generation limit separately from the soft target', () => {
+    // n_predict is the hard cap; it is always >= the soft prompt-level target so
+    // the model has room to finish past the target.
+    expect(getResponseGenerationLimit('Low')).toBe(320);
+    expect(getResponseGenerationLimit('Medium')).toBe(640);
+    expect(getResponseGenerationLimit('High')).toBe(1_024);
+    for (const mode of ['Low', 'Medium', 'High'] as const) {
+      expect(getResponseGenerationLimit(mode)).toBeGreaterThan(getResponseTokenBudget(mode));
+    }
+  });
+
+  it.each(['Low', 'Medium', 'High'] as const)(
+    'treats %s answerTargetTokens as a soft target and asks to finish cleanly',
+    (mode) => {
+      const instruction = getResponseModeInstruction(mode);
+      expect(instruction).toContain(String(getResponseTokenBudget(mode)));
+      expect(instruction).toMatch(/soft target/i);
+      expect(instruction).toMatch(/finish the current sentence and section cleanly/i);
+      // A soft target must never read as a requirement to fill space.
+      expect(instruction).toMatch(/never add filler/i);
+    },
+  );
+
+  it('gives each mode a distinct focus', () => {
+    expect(getResponseModeInstruction('Low')).toMatch(/briefest|essential/i);
+    expect(getResponseModeInstruction('Medium')).toMatch(/actionable steps/i);
+    expect(getResponseModeInstruction('High')).toMatch(/comprehensive|edge cases/i);
   });
 
   it('pins monotonic character-budget profiles', () => {

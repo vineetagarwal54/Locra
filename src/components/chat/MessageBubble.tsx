@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { designTokens, haptics } from '../../constants/theme';
@@ -6,28 +7,53 @@ import type { ConversationMessage } from '../../types/models';
 
 import { ImagePromptCard } from './ImagePromptCard';
 import { MarkdownText } from './MarkdownText';
+import { copyText, shareText } from './MessageActions';
 import { StreamingMessage } from './StreamingMessage';
 
 interface MessageBubbleProps {
   message: ConversationMessage;
   streamingText?: string;
   onRetry?: (assistantMessageId: string) => void;
+  onRegenerate?: (assistantMessageId: string) => void;
+  onContinue?: (assistantMessageId: string) => void;
+  onReportIssue?: (assistantMessageId: string) => void;
 }
 
-export function MessageBubble({ message, streamingText = '', onRetry }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  streamingText = '',
+  onRetry,
+  onRegenerate,
+  onContinue,
+  onReportIssue,
+}: MessageBubbleProps) {
   if (message.role === 'user') {
     return <UserMessage message={message} />;
   }
 
-  return <AssistantMessage message={message} streamingText={streamingText} onRetry={onRetry} />;
+  return (
+    <AssistantMessage
+      message={message}
+      streamingText={streamingText}
+      onRetry={onRetry}
+      onRegenerate={onRegenerate}
+      onContinue={onContinue}
+      onReportIssue={onReportIssue}
+    />
+  );
 }
 
 function UserMessage({ message }: { message: ConversationMessage }) {
-  const imagePath = message.attachments.find((attachment) => attachment.kind === 'image')?.path;
-  if (imagePath !== undefined) {
+  const imageAttachment = message.attachments.find((attachment) => attachment.kind === 'image');
+  if (imageAttachment !== undefined) {
     return (
       <View style={styles.userWrap}>
-        <ImagePromptCard imagePath={imagePath} question={message.text} />
+        <ImagePromptCard
+          imagePath={imageAttachment.path}
+          question={message.text}
+          available={imageAttachment.available}
+        />
+        <MessageActionRow text={message.text} />
       </View>
     );
   }
@@ -35,8 +61,9 @@ function UserMessage({ message }: { message: ConversationMessage }) {
   return (
     <View style={styles.userWrap}>
       <View style={styles.userBubble}>
-        <Text style={styles.userText}>{message.text}</Text>
+        <Text selectable style={styles.userText}>{message.text}</Text>
       </View>
+      <MessageActionRow text={message.text} />
     </View>
   );
 }
@@ -45,12 +72,19 @@ function AssistantMessage({
   message,
   streamingText,
   onRetry,
+  onRegenerate,
+  onContinue,
+  onReportIssue,
 }: {
   message: ConversationMessage;
   streamingText: string;
   onRetry?: (assistantMessageId: string) => void;
+  onRegenerate?: (assistantMessageId: string) => void;
+  onContinue?: (assistantMessageId: string) => void;
+  onReportIssue?: (assistantMessageId: string) => void;
 }) {
   const text = message.status === 'generating' ? streamingText : message.text;
+  const isTruncated = message.status === 'completed' && message.finishReason === 'length';
 
   if (message.status === 'failed') {
     return (
@@ -64,6 +98,7 @@ function AssistantMessage({
             />
             <Text style={styles.failedTitle}>Response failed</Text>
           </View>
+          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
           <Text style={styles.failedText}>
             {message.errorMessage ?? 'Locra could not finish that answer.'}
           </Text>
@@ -80,6 +115,8 @@ function AssistantMessage({
               <Text style={styles.retryButtonLabel}>Retry</Text>
             </Pressable>
           ) : null}
+          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+          <MessageActionRow text={text} />
         </View>
       </View>
     );
@@ -89,7 +126,23 @@ function AssistantMessage({
     return (
       <View style={styles.assistantWrap}>
         <View style={styles.assistantBubble}>
+          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
           <Text style={styles.assistantMuted}>This response was stopped.</Text>
+          {onRetry !== undefined ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry interrupted response"
+              style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
+              onPress={() => {
+                void haptics.tap();
+                onRetry(message.id);
+              }}
+            >
+              <Text style={styles.retryButtonLabel}>Retry</Text>
+            </Pressable>
+          ) : null}
+          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+          <MessageActionRow text={text} />
         </View>
       </View>
     );
@@ -103,8 +156,145 @@ function AssistantMessage({
         ) : (
           <MarkdownText text={text} />
         )}
+        {isTruncated ? (
+          <Text style={styles.assistantMuted}>
+            This answer was cut off at the length limit.
+          </Text>
+        ) : null}
+        {message.status === 'completed' ? (
+          <View style={styles.followUpActions}>
+            {isTruncated && onContinue !== undefined ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Continue this answer"
+                style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
+                onPress={() => {
+                  void haptics.tap();
+                  onContinue(message.id);
+                }}
+              >
+                <Text style={styles.retryButtonLabel}>Continue</Text>
+              </Pressable>
+            ) : null}
+            {onRegenerate !== undefined ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Regenerate this response"
+                style={({ pressed }) => [styles.regenerateButton, pressed && styles.retryButtonPressed]}
+                onPress={() => {
+                  void haptics.tap();
+                  onRegenerate(message.id);
+                }}
+              >
+                <MaterialCommunityIcons
+                  name="refresh"
+                  size={15}
+                  color={designTokens.color.textSecondary}
+                />
+                <Text style={styles.messageActionLabel}>Regenerate</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+        {message.status !== 'generating' ? (
+          <>
+            <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
+            <MessageActionRow text={text} />
+          </>
+        ) : null}
       </View>
     </View>
+  );
+}
+
+function MessageActionRow({ text }: { text: string }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'sharing' | 'copied' | 'failed'>('idle');
+  const busy = state === 'copying' || state === 'sharing';
+
+  const run = async (kind: 'copy' | 'share'): Promise<void> => {
+    if (busy) return;
+    setState(kind === 'copy' ? 'copying' : 'sharing');
+    try {
+      if (kind === 'copy') {
+        await copyText(text);
+        setState('copied');
+      } else {
+        await shareText(text);
+        setState('idle');
+      }
+    } catch {
+      setState('failed');
+    }
+  };
+
+  if (text.trim() === '') return null;
+  return (
+    <View style={styles.messageActions}>
+      <MessageActionButton
+        label={state === 'copied' ? 'Copied' : 'Copy'}
+        icon={state === 'copied' ? 'check' : 'content-copy'}
+        disabled={busy}
+        onPress={() => { void run('copy'); }}
+      />
+      <MessageActionButton
+        label="Share"
+        icon="share-variant-outline"
+        disabled={busy}
+        onPress={() => { void run('share'); }}
+      />
+      {state === 'failed' ? <Text style={styles.actionError}>Action failed</Text> : null}
+    </View>
+  );
+}
+
+function MessageActionButton({
+  label,
+  icon,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label} message`}
+      disabled={disabled}
+      style={({ pressed }) => [styles.messageAction, pressed && styles.retryButtonPressed, disabled && styles.actionDisabled]}
+      onPress={onPress}
+    >
+      <MaterialCommunityIcons name={icon} size={15} color={designTokens.color.textSecondary} />
+      <Text style={styles.messageActionLabel}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ReportIssueButton({
+  messageId,
+  onReportIssue,
+}: {
+  messageId: string;
+  onReportIssue?: (assistantMessageId: string) => void;
+}) {
+  if (onReportIssue === undefined) {
+    return null;
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Report issue with this response"
+      style={({ pressed }) => [styles.reportButton, pressed && styles.retryButtonPressed]}
+      onPress={() => {
+        void haptics.tap();
+        onReportIssue(messageId);
+      }}
+    >
+      <MaterialCommunityIcons name="flag-outline" size={16} color={designTokens.color.textSecondary} />
+      <Text style={styles.reportButtonLabel}>Report issue</Text>
+    </Pressable>
   );
 }
 
@@ -181,4 +371,49 @@ const styles = StyleSheet.create({
     fontSize: designTokens.type.button.fontSize,
     fontWeight: designTokens.type.button.fontWeight,
   },
+  reportButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: designTokens.spacing.space12,
+    minHeight: 44,
+  },
+  reportButtonLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
+    marginLeft: designTokens.spacing.space4,
+  },
+  followUpActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexWrap: 'wrap',
+    marginTop: designTokens.spacing.space8,
+  },
+  regenerateButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: designTokens.spacing.space12,
+    marginRight: designTokens.spacing.space16,
+  },
+  messageActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: designTokens.spacing.space8,
+  },
+  messageAction: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: designTokens.spacing.space16,
+  },
+  messageActionLabel: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.caption.fontSize,
+    marginLeft: designTokens.spacing.space4,
+  },
+  actionDisabled: { opacity: 0.45 },
+  actionError: { color: designTokens.color.error, fontSize: designTokens.type.caption.fontSize },
 });

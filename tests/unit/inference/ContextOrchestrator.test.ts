@@ -304,6 +304,70 @@ describe('ContextOrchestrator', () => {
     );
   });
 
+  it('does not pull prior image evidence into a bare-pronoun follow-up', () => {
+    // "that"/"it" used to match the visual-reference pattern and dragged stale
+    // image evidence into plainly non-visual turns. It must no longer qualify.
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      currentMessage(2, 'Can you clarify that earlier point?'),
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toEqual([]);
+  });
+
+  it('includes image evidence on an active image turn even without visual keywords', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      {
+        id: 'user-2',
+        role: 'user' as const,
+        text: 'And now?',
+        attachments: [{ kind: 'image' as const, path: '/images/label.jpg' }],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: 1_700_000_000_010,
+      },
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toHaveLength(1);
+  });
+
+  it('still includes image evidence for explicit visual language', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
+      currentMessage(2, 'What color was shown in the image?'),
+    ];
+    const memory = mergeVisualEvidenceIntoMemory(
+      null,
+      visualEvidence('/images/label.jpg', 'equipment label', ['Serial code ZX-418']),
+      'user-1',
+    );
+
+    const result = new ContextOrchestrator(compactPolicy()).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toHaveLength(1);
+  });
+
   it('advances the rolling summary boundary as completed turns age out of the exact window', () => {
     const firstMessages = [
       ...completedTurn(1, 'First question', 'First answer'),
@@ -470,13 +534,15 @@ describe('ContextOrchestrator', () => {
     expect(first.context).toEqual(second.context);
     expect(first.context.recentTurns).toEqual([{ question: 'Recent question', answer: 'Recent answer' }]);
     expect(first.context.importantFacts.map((fact) => fact.text)).toEqual([
-      'same chat B', 'same chat A',
-      '[Selected conversation conversation-b] selected past chat', 'durable fact',
+      '[Untrusted source: conversation conversation-a, message same-message-b] same chat B',
+      '[Untrusted source: conversation conversation-a, message same-message-a] same chat A',
+      '[Untrusted selected source: conversation conversation-b, message past-message] selected past chat',
+      'durable fact',
     ]);
     expect(first.context.olderSummary).toBe('older range summary');
   });
 
-  it('uses the response-mode recent floor even when protected content exceeds the character budget', () => {
+  it('caps oversized exact context instead of exceeding the response-mode character budget', () => {
     const messages = [
       ...completedTurn(1, 'Question one', 'A'.repeat(900)),
       ...completedTurn(2, 'Question two', 'B'.repeat(900)),
@@ -492,8 +558,77 @@ describe('ContextOrchestrator', () => {
       { responseMode: 'Low' },
     );
 
-    expect(result.context.recentTurns).toHaveLength(6);
-    expect(result.context.budget.usedUnits).toBeGreaterThan(result.context.budget.maximumUnits);
-    expect(result.context.olderSummary).toBeNull();
+    expect(result.context.recentTurns.length).toBeLessThan(6);
+    expect(result.context.budget.usedUnits).toBeLessThanOrEqual(
+      result.context.budget.maximumUnits,
+    );
+  });
+
+  it('omits active persisted image evidence for an unrelated follow-up', () => {
+    const evidence = {
+      id: 'evidence-1',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-1',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'red bicycle',
+      visible_features_json: '["red frame"]',
+      visible_text_json: '[]',
+      visible_condition: 'good condition',
+      uncertainty_json: '[]',
+      source_revision: 'revision-1',
+      created_at: 1_700_000_000_000,
+    };
+    const orchestrator = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => evidence,
+        resolveReferencedImageEvidence: () => evidence,
+      },
+    });
+    const messages = [
+      ...completedTurn(1, 'What is in this image?', 'A red bicycle.'),
+      currentMessage(2, 'Tell me a joke about databases.'),
+    ];
+
+    const result = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+    );
+
+    expect(result.context.mediaEvidence).toEqual([]);
+  });
+
+  it('keeps explicitly referenced evidence inside the configured budget', () => {
+    const evidence = {
+      id: 'evidence-1',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-1',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'label',
+      visible_features_json: JSON.stringify(['A'.repeat(500)]),
+      visible_text_json: '[]',
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-1',
+      created_at: 1_700_000_000_000,
+    };
+    const orchestrator = new ContextOrchestrator(
+      compactPolicy({ maximumUnits: 120, recentExactTurnLimit: 0 }),
+      {
+        evidenceRepository: {
+          getActiveImageEvidence: () => evidence,
+          resolveReferencedImageEvidence: () => evidence,
+        },
+      },
+    );
+    const messages = [currentMessage(1, 'Read that label.')];
+
+    const result = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-1'),
+      { referencedImage: { sourceMessageId: 'user-1' } },
+    );
+
+    expect(result.context.mediaEvidence).toEqual([]);
+    expect(result.context.budget.usedUnits).toBeLessThanOrEqual(120);
   });
 });

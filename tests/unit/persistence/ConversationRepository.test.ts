@@ -1,6 +1,7 @@
 // T015 — ConversationRepository against a real (node:sqlite) database.
 
 import { ConversationRepository, normalizeTitle } from '../../../src/persistence/ConversationRepository';
+import { MessageRepository } from '../../../src/persistence/MessageRepository';
 import type { SqliteDriver } from '../../../src/persistence/types';
 import { createTestDatabase, type TestDatabase } from '../../helpers/nodeSqliteDriver';
 
@@ -83,6 +84,41 @@ describe('ConversationRepository', () => {
     const page = repo.listConversations({ limit: 1000 });
     expect(page.items.length).toBe(50);
     expect(page.nextCursor).not.toBeNull();
+  });
+
+  it('returns canonical previews and image metadata, and searches canonical SQL content', () => {
+    const repo = new ConversationRepository(db.driver, { now: () => 1 });
+    const messages = new MessageRepository(db.driver);
+    repo.createConversation({ id: 'answer', title: 'Answer chat' });
+    const answerUser = messages.appendUserMessage({ id: 'answer-user', conversationId: 'answer', text: 'question' });
+    const answer = messages.createAssistantAttempt(answerUser.id, { id: 'answer-assistant' });
+    messages.updateAssistantStreamingText(answer.id, 'canonical answer');
+    messages.finalizeAttempt(answer.id, 'completed');
+    db.driver.runSync(
+      `INSERT INTO image_asset (id, conversation_id, local_path, available, content_hash, created_at)
+       VALUES ('answer-asset', 'answer', '/images/answer.jpg', 1, NULL, 1)`,
+    );
+    db.driver.runSync(
+      `INSERT INTO message_image (message_id, image_asset_id, ordinal, created_at)
+       VALUES ('answer-user', 'answer-asset', 0, 1)`,
+    );
+
+    repo.createConversation({ id: 'user', title: 'User chat' });
+    messages.appendUserMessage({ id: 'user-message', conversationId: 'user', text: 'needle in user text' });
+
+    repo.createConversation({ id: 'failed', title: 'Failed chat' });
+    const failedUser = messages.appendUserMessage({ id: 'failed-user', conversationId: 'failed', text: 'visible user' });
+    const failed = messages.createAssistantAttempt(failedUser.id, { id: 'failed-assistant' });
+    messages.updateAssistantStreamingText(failed.id, 'do-not-search-this');
+    messages.finalizeAttempt(failed.id, 'failed');
+
+    const answerRow = repo.listConversations({ limit: 50 }).items.find((row) => row.id === 'answer');
+    expect(answerRow?.latest_message_preview).toBe('canonical answer');
+    expect(answerRow?.has_image).toBe(1);
+
+    expect(repo.searchConversations('needle').map((row) => row.id)).toEqual(['user']);
+    expect(repo.searchConversations('canonical').map((row) => row.id)).toEqual(['answer']);
+    expect(repo.searchConversations('do-not-search-this')).toEqual([]);
   });
 
   it('deletes a conversation and cascades to all child rows, unlinking image files', () => {

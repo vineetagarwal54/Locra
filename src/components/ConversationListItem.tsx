@@ -25,8 +25,8 @@ export function ConversationListItem({
   onDelete,
 }: ConversationListItemProps) {
   const title = deriveConversationTitle(conversation);
-  const preview = deriveConversationPreview(conversation);
-  const hasImage = conversation.messages.some((message) => message.attachments.length > 0);
+  const preview = conversation.latestMessagePreview ?? deriveConversationPreview(conversation);
+  const hasImage = conversation.hasImage ?? conversation.messages.some((message) => message.attachments.length > 0);
 
   return (
     <Pressable

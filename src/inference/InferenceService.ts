@@ -1,4 +1,5 @@
 import { getCurrentDeviceBuildMetadata } from '../diagnostics/DeviceBuildMetadataProvider';
+import { temporaryImageCleanup } from '../media/TemporaryImageCleanup';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import { useModelStore } from '../store/modelStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -9,10 +10,10 @@ import { inferenceEngineAdapter } from './InferenceEngineRegistry';
 import { createInferenceQueue } from './InferenceQueue';
 
 const queue = createInferenceQueue(inferenceEngineAdapter, {
-  isReadyForInference: (requiresVision) => requiresVision
-    ? useModelStore.getState().isReadyForInference()
-    : useModelStore.getState().isReadyForTextInference?.()
-      ?? useModelStore.getState().isReadyForInference(),
+  cleanupProcessedImage: (processedPath, sourcePath) =>
+    temporaryImageCleanup.removeDerived(processedPath, sourcePath),
+  isReadyForInference: () => useModelStore.getState().isReadyForInference(),
+  getInferenceReadiness: () => useModelStore.getState().getInferenceReadiness(),
   getResponseMode: () => useSettingsStore.getState().responseMode,
   resourcePolicy: deviceResourcePolicy,
   getDeviceBuildMetadata: getCurrentDeviceBuildMetadata,

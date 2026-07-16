@@ -112,6 +112,18 @@ describe('InferenceQueue', () => {
     );
   });
 
+  it('cleans a temporary prepared image after the native turn settles', async () => {
+    const cleanupProcessedImage = jest.fn(async () => undefined);
+    const queue = makeQueue({
+      preprocess: async () => ({ path: '/cache/derived.jpg', width: 512, height: 512 }),
+      cleanupProcessedImage,
+    });
+
+    await queue.submit(request);
+
+    expect(cleanupProcessedImage).toHaveBeenCalledWith('/cache/derived.jpg', '/tmp/capture.jpg');
+  });
+
   it('rejects submit() while a request is in-flight without acquiring the lock (FR-006)', async () => {
     const gate = deferred<{ response: string; tokenCount: number }>();
     const engine: InferenceEngineAdapter = {

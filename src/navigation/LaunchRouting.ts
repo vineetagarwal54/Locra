@@ -1,4 +1,4 @@
-import type { ModelDownloadStatus } from '../types/models';
+import type { ModelSetupPhase } from '../types/models';
 
 export type LaunchRoute =
   | 'Welcome'
@@ -8,18 +8,17 @@ export type LaunchRoute =
 
 export interface LaunchRoutingState {
   readonly welcomeCompleted: boolean;
-  readonly modelReady: boolean;
-  readonly downloadStatus: ModelDownloadStatus;
+  readonly setupPhase: ModelSetupPhase;
 }
 
 export function resolveLaunchRoute(state: LaunchRoutingState): LaunchRoute {
   if (!state.welcomeCompleted) {
     return 'Welcome';
   }
-  if (state.modelReady) {
+  if (state.setupPhase === 'ready') {
     return 'Chat';
   }
-  return state.downloadStatus === 'downloading' || state.downloadStatus === 'paused'
+  return state.setupPhase === 'downloading' || state.setupPhase === 'paused' || state.setupPhase === 'verifying'
     ? 'DownloadProgress'
     : 'ModelIntro';
 }

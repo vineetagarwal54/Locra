@@ -71,6 +71,22 @@ describe('WindowedPageCache', () => {
     expect(calls[calls.length - 1]).toBeNull(); // page 0 uses the null cursor
   });
 
+  it('re-fetches both newer and older pages after either edge is evicted', () => {
+    const values = [0, 1, 2, 3, 4, 5];
+    const { fetch } = arrayFetcher(values, 2);
+    const cache = new WindowedPageCache<number>(2);
+
+    cache.loadFirst(fetch);
+    cache.loadNext(fetch);
+    cache.loadNext(fetch); // newest page is evicted
+    expect(cache.items()).toEqual([2, 3, 4, 5]);
+
+    expect(cache.loadPrevious(fetch)).toBe(true); // re-fetch newer page 0
+    expect(cache.items()).toEqual([0, 1, 2, 3]);
+    expect(cache.loadNext(fetch)).toBe(true); // re-fetch older page 2
+    expect(cache.items()).toEqual([2, 3, 4, 5]);
+  });
+
   it('stops at the top and bottom', () => {
     const { fetch } = arrayFetcher([0, 1], 2);
     const cache = new WindowedPageCache<number>(2);

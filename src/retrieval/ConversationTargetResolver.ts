@@ -108,8 +108,9 @@ function isFillerTarget(value: string): boolean {
 function tokenizeTarget(value: string): string[] {
   const stopWords = new Set(['the', 'my', 'our', 'that', 'this', 'a', 'an']);
   return value
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
     .filter((token) => token.length >= 2 && !stopWords.has(token));
 }
 

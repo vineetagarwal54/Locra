@@ -19,8 +19,11 @@ export type ProtectedOperation =
   | 'qwen-answer'
   | 'qwen-compaction'
   | 'embedding'
-  | 'record'
-  | 'transcribe';
+  // One exclusive lease for the WHOLE offline voice session: model init, mic
+  // recording, streaming recognition, and finalization are a single indivisible
+  // hold so voice can never overlap Qwen generation, compaction, verification,
+  // deletion, or another voice session (FR-A09/A10).
+  | 'voice-input';
 
 export interface ResourceLease {
   readonly operation: ProtectedOperation;
@@ -39,7 +42,7 @@ export interface DeviceResourcePolicy {
 
 /** Maps a protected operation onto the legacy vlm/voice cross-feature owner. */
 export function activityOwnerFor(operation: ProtectedOperation): ActivityOwner {
-  return operation === 'record' || operation === 'transcribe' ? 'voice' : 'vlm';
+  return operation === 'voice-input' ? 'voice' : 'vlm';
 }
 
 interface Held {

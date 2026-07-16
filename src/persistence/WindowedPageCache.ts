@@ -81,4 +81,9 @@ export class WindowedPageCache<T> {
     const tail = this.pages[this.pages.length - 1];
     return tail !== undefined && tail.nextCursor !== null;
   }
+
+  /** Whether a page before the current window can be re-fetched. */
+  hasPrevious(): boolean {
+    return this.firstPageIndex > 0;
+  }
 }

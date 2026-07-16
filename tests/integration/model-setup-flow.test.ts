@@ -87,7 +87,7 @@ describe('model setup integration flow', () => {
     await download;
 
     expect(getExpectedIntegrity).toHaveBeenCalledTimes(1);
-    expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH);
+    expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH, expect.any(Function));
     expect(deleteResources).not.toHaveBeenCalled();
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.getState().integrityVerified).toBe(true);

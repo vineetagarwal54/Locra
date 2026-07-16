@@ -37,6 +37,16 @@ export function loadMoreConversations(
   );
 }
 
+export function loadNewerConversations(
+  cache: WindowedPageCache<ConversationRow>,
+  repository: ConversationRepository,
+  pageSize: number = DEFAULT_PAGE_SIZE,
+): boolean {
+  return cache.loadPrevious((before) =>
+    repository.listConversations({ before: before ?? undefined, limit: pageSize }),
+  );
+}
+
 export function createMessageHistoryCache(
   repository: MessageRepository,
   conversationId: string,
@@ -56,6 +66,17 @@ export function loadOlderMessages(
   pageSize: number = DEFAULT_PAGE_SIZE,
 ): boolean {
   return cache.loadNext((before) =>
+    repository.listMessages({ conversationId, before: before ?? undefined, limit: pageSize }),
+  );
+}
+
+export function loadNewerMessages(
+  cache: WindowedPageCache<MessageRow>,
+  repository: MessageRepository,
+  conversationId: string,
+  pageSize: number = DEFAULT_PAGE_SIZE,
+): boolean {
+  return cache.loadPrevious((before) =>
     repository.listMessages({ conversationId, before: before ?? undefined, limit: pageSize }),
   );
 }

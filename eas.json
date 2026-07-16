@@ -13,6 +13,9 @@
     },
     "production-apk": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_INTERNAL_BETA": "true"
+      },
       "android": {
         "buildType": "apk"
       }
