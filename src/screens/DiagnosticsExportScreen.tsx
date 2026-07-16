@@ -6,7 +6,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ConversationListItem } from '../components/ConversationListItem';
 import { designTokens, haptics } from '../constants/theme';
-import { exportDiagnosticsBundle } from '../diagnostics/DiagnosticsExportService';
+import {
+  prepareDiagnosticsExportBundle,
+  shareDiagnosticsExportBundle,
+} from '../diagnostics/DiagnosticsExportRuntime';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import {
   listAllConversationHeadersForDiagnostics,
@@ -16,10 +19,17 @@ import type { Conversation } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DiagnosticsExport'>;
 
+// Explicit two-phase flow: the ZIP is created locally first (preparing →
+// creating-zip → ready); the OS share sheet only opens after the user taps Share
+// (sharing → shared/cancelled). Nothing is ever uploaded automatically.
 type ExportStatus =
   | { kind: 'idle' }
-  | { kind: 'exporting' }
-  | { kind: 'success'; conversationCount: number; turnCount: number }
+  | { kind: 'preparing' }
+  | { kind: 'creating-zip' }
+  | { kind: 'ready'; uri: string; conversationCount: number; turnCount: number }
+  | { kind: 'sharing'; uri: string; conversationCount: number; turnCount: number }
+  | { kind: 'shared' }
+  | { kind: 'cancelled'; uri: string; conversationCount: number; turnCount: number }
   | { kind: 'error'; message: string };
 
 export function DiagnosticsExportScreen({ navigation, route }: Props) {
@@ -47,6 +57,8 @@ export function DiagnosticsExportScreen({ navigation, route }: Props) {
   }, [navigation]);
 
   const onToggleConversation = useCallback((conversationId: string): void => {
+    // Changing the selection invalidates any already-prepared file.
+    setStatus({ kind: 'idle' });
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(conversationId)) {
@@ -60,6 +72,7 @@ export function DiagnosticsExportScreen({ navigation, route }: Props) {
 
   const onToggleSelectAll = useCallback((): void => {
     void haptics.tap();
+    setStatus({ kind: 'idle' });
     setSelectedIds((current) =>
       current.size === conversations.length
         ? new Set()
@@ -67,17 +80,18 @@ export function DiagnosticsExportScreen({ navigation, route }: Props) {
     );
   }, [conversations]);
 
-  const onExport = useCallback((): void => {
+  const onCreate = useCallback((): void => {
     void haptics.tap();
-    setStatus({ kind: 'exporting' });
-    void exportDiagnosticsBundle(Array.from(selectedIds), {
-      ...(route.params?.responseId === undefined
-        ? {}
-        : { responseId: route.params.responseId }),
-    })
+    setStatus({ kind: 'preparing' });
+    void prepareDiagnosticsExportBundle(
+      Array.from(selectedIds),
+      route.params?.responseId === undefined ? {} : { responseId: route.params.responseId },
+      (stage) => setStatus({ kind: stage }),
+    )
       .then((result) => {
         setStatus({
-          kind: 'success',
+          kind: 'ready',
+          uri: result.uri,
           conversationCount: result.conversationCount,
           turnCount: result.turnCount,
         });
@@ -85,10 +99,31 @@ export function DiagnosticsExportScreen({ navigation, route }: Props) {
       .catch((error: unknown) => {
         setStatus({
           kind: 'error',
-          message: error instanceof Error ? error.message : 'Export failed for an unknown reason.',
+          message:
+            error instanceof Error ? error.message : 'Creating the diagnostics file failed.',
         });
       });
   }, [route.params?.responseId, selectedIds]);
+
+  const onShare = useCallback(
+    (uri: string, conversationCount: number, turnCount: number): void => {
+      void haptics.tap();
+      setStatus({ kind: 'sharing', uri, conversationCount, turnCount });
+      void shareDiagnosticsExportBundle(uri)
+        .then((outcome) => {
+          // A dismissed/cancelled share sheet is NOT a failure; the file is kept.
+          setStatus(
+            outcome === 'shared'
+              ? { kind: 'shared' }
+              : { kind: 'cancelled', uri, conversationCount, turnCount },
+          );
+        })
+        .catch(() => {
+          setStatus({ kind: 'cancelled', uri, conversationCount, turnCount });
+        });
+    },
+    [],
+  );
 
   return (
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
@@ -141,39 +176,110 @@ export function DiagnosticsExportScreen({ navigation, route }: Props) {
 
       <View style={styles.footer}>
         <Text style={styles.disclosure}>
-          The bundle includes the selected conversation text, all response attempts, and app,
-          model, download, storage, and resource state. Images and local file paths are excluded.
+          The ZIP is created on your device and is never uploaded. It may include the selected
+          conversation text, response attempts, inference timings, context-selection diagnostics,
+          app / build / model / database versions, model state, storage state, and recent errors.
+          Images, model files, audio, secrets, tokens, absolute file paths, and device identifiers
+          are excluded.
         </Text>
-        {status.kind === 'success' ? (
-          <Text style={styles.statusSuccess}>
-            Exported {status.conversationCount} conversation
-            {status.conversationCount === 1 ? '' : 's'} ({status.turnCount} diagnostic turn
-            {status.turnCount === 1 ? '' : 's'}).
-          </Text>
-        ) : null}
-        {status.kind === 'error' ? (
-          <Text style={styles.statusError}>{status.message}</Text>
-        ) : null}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Export diagnostics bundle"
-          accessibilityState={{ disabled: selectedIds.size === 0 || status.kind === 'exporting' }}
-          disabled={selectedIds.size === 0 || status.kind === 'exporting'}
-          style={[
-            styles.exportButton,
-            (selectedIds.size === 0 || status.kind === 'exporting') && styles.exportButtonDisabled,
-          ]}
-          onPress={onExport}
-        >
-          <Text style={styles.exportButtonLabel}>
-            {status.kind === 'exporting'
-              ? 'Exporting…'
-              : `Export ${selectedIds.size > 0 ? selectedIds.size : ''} bundle`}
-          </Text>
-        </Pressable>
+        <StatusLine status={status} />
+        <ExportActionButton
+          status={status}
+          selectionCount={selectedIds.size}
+          onCreate={onCreate}
+          onShare={onShare}
+        />
       </View>
     </SafeAreaView>
   );
+}
+
+function StatusLine({ status }: { status: ExportStatus }) {
+  switch (status.kind) {
+    case 'preparing':
+      return <Text style={styles.statusInfo}>Preparing diagnostics…</Text>;
+    case 'creating-zip':
+      return <Text style={styles.statusInfo}>Creating ZIP…</Text>;
+    case 'ready':
+      return (
+        <Text style={styles.statusSuccess}>
+          {describeContents(status.conversationCount, status.turnCount)} ready to share.
+        </Text>
+      );
+    case 'sharing':
+      return <Text style={styles.statusInfo}>Opening the share sheet…</Text>;
+    case 'shared':
+      return <Text style={styles.statusSuccess}>Diagnostics shared.</Text>;
+    case 'cancelled':
+      return (
+        <Text style={styles.statusInfo}>Sharing cancelled. The file is kept — share it again anytime.</Text>
+      );
+    case 'error':
+      return <Text style={styles.statusError}>{status.message}</Text>;
+    default:
+      return null;
+  }
+}
+
+function ExportActionButton({
+  status,
+  selectionCount,
+  onCreate,
+  onShare,
+}: {
+  status: ExportStatus;
+  selectionCount: number;
+  onCreate: () => void;
+  onShare: (uri: string, conversationCount: number, turnCount: number) => void;
+}) {
+  const busy =
+    status.kind === 'preparing' || status.kind === 'creating-zip' || status.kind === 'sharing';
+
+  if (status.kind === 'ready' || status.kind === 'cancelled') {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Share diagnostics file"
+        style={styles.exportButton}
+        onPress={() => onShare(status.uri, status.conversationCount, status.turnCount)}
+      >
+        <Text style={styles.exportButtonLabel}>Share diagnostics file</Text>
+      </Pressable>
+    );
+  }
+
+  const disabled = busy || selectionCount === 0;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Create diagnostics file"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={[styles.exportButton, disabled && styles.exportButtonDisabled]}
+      onPress={onCreate}
+    >
+      <Text style={styles.exportButtonLabel}>{createButtonLabel(status, selectionCount)}</Text>
+    </Pressable>
+  );
+}
+
+function createButtonLabel(status: ExportStatus, selectionCount: number): string {
+  if (status.kind === 'preparing') {
+    return 'Preparing…';
+  }
+  if (status.kind === 'creating-zip') {
+    return 'Creating ZIP…';
+  }
+  if (status.kind === 'sharing') {
+    return 'Sharing…';
+  }
+  return `Create diagnostics file${selectionCount > 0 ? ` (${selectionCount})` : ''}`;
+}
+
+function describeContents(conversationCount: number, turnCount: number): string {
+  const conversations = `${conversationCount} conversation${conversationCount === 1 ? '' : 's'}`;
+  const turns = `${turnCount} diagnostic turn${turnCount === 1 ? '' : 's'}`;
+  return `${conversations} (${turns})`;
 }
 
 const styles = StyleSheet.create({
@@ -234,6 +340,11 @@ const styles = StyleSheet.create({
   },
   statusSuccess: {
     color: designTokens.color.primary,
+    fontSize: designTokens.type.caption.fontSize,
+    marginBottom: designTokens.spacing.space8,
+  },
+  statusInfo: {
+    color: designTokens.color.textSecondary,
     fontSize: designTokens.type.caption.fontSize,
     marginBottom: designTokens.spacing.space8,
   },

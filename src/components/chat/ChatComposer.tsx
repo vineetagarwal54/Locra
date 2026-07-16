@@ -19,7 +19,8 @@ import type { Draft } from '../../types/models';
 import { LocraSheet } from '../LocraSheet';
 
 import { ResponseModeSelector } from './ResponseModeSelector';
-import { VoiceControl } from './VoiceControl';
+import { useVoiceDictation } from './useVoiceDictation';
+import { VoiceMicButton, VoiceSheets } from './VoiceControl';
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -69,11 +70,6 @@ export function ChatComposer({
   const [sendError, setSendError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSend =
-    !locked && !submitting && (draft.text.trim() !== '' || draft.imagePath !== null);
-  const controlsDisabled = locked || submitting;
-  const selectedTarget = targetCandidates.find((candidate) => candidate.id === selectedTargetId);
-
   const onChangeText = useCallback(
     (text: string): void => {
       setSendError(null);
@@ -82,6 +78,17 @@ export function ChatComposer({
     },
     [conversationId, draft, onDraftChange]
   );
+
+  const voice = useVoiceDictation({ draftText: draft.text, setDraftText: onChangeText });
+
+  // Voice holds the composer exclusively: disable Send / image / past-chat while a
+  // session is active, and make the field read-only while recording/finalizing so
+  // the partial transcript cannot be edited — but never lock text editing otherwise.
+  const canSend =
+    !locked && !submitting && !voice.active && (draft.text.trim() !== '' || draft.imagePath !== null);
+  const controlsDisabled = locked || submitting || voice.active;
+  const inputEditable = !locked && !submitting && !voice.readOnly;
+  const selectedTarget = targetCandidates.find((candidate) => candidate.id === selectedTargetId);
 
   const setDraftImage = useCallback(
     (imagePath: string | null): void => {
@@ -233,14 +240,44 @@ export function ChatComposer({
         </View>
       ) : null}
 
+      {voice.micMode !== 'idle' ? (
+        <View style={styles.recordingRow}>
+          <View style={styles.recordingDot} />
+          <Text style={styles.recordingText}>
+            {voice.micMode === 'recording'
+              ? `Recording… ${voice.elapsedLabel}`
+              : 'Finishing transcription…'}
+          </Text>
+          {voice.micMode === 'recording' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel voice recording"
+              hitSlop={designTokens.spacing.space8}
+              onPress={() => {
+                void haptics.tap();
+                voice.onCancel();
+              }}
+            >
+              <MaterialCommunityIcons name="close" size={16} color={designTokens.color.textSecondary} />
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
       <View style={styles.composer}>
         <TextInput
-          style={[styles.input, controlsDisabled && styles.inputDisabled]}
+          style={[styles.input, !inputEditable && styles.inputDisabled]}
           value={draft.text}
           onChangeText={onChangeText}
-          placeholder={locked ? 'Generation in progress...' : placeholder}
+          placeholder={
+            locked
+              ? 'Generation in progress...'
+              : voice.micMode === 'recording'
+                ? 'Listening…'
+                : placeholder
+          }
           placeholderTextColor={designTokens.color.textSecondary}
-          editable={!controlsDisabled}
+          editable={inputEditable}
           multiline
         />
 
@@ -288,46 +325,49 @@ export function ChatComposer({
 
           <View style={styles.controlsSpacer} />
 
-          <VoiceControl
-            disabled={controlsDisabled}
-            onTranscript={(transcript) => {
-              const nextText = [draft.text.trim(), transcript]
-                .filter((value) => value !== '')
-                .join(' ');
-              onChangeText(nextText);
-            }}
-          />
+          {/* Right-side vertical action column: microphone directly ABOVE Send. */}
+          <View style={styles.rightColumn}>
+            {voice.enabled ? (
+              <VoiceMicButton
+                mode={voice.micMode}
+                disabled={locked || submitting}
+                onPress={voice.onMicPress}
+              />
+            ) : null}
 
-          {canCancel ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Stop generating"
-              style={({ pressed }) => [styles.stopButton, pressed && styles.stopButtonPressed]}
-              onPress={() => {
-                void haptics.tap();
-                onCancel();
-              }}
-            >
-              <MaterialCommunityIcons name="stop" size={22} color={designTokens.color.onPrimary} />
-            </Pressable>
-          ) : (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
-              accessibilityState={{ disabled: !canSend }}
-              disabled={!canSend}
-              style={({ pressed }) => [
-                styles.sendButton,
-                pressed && canSend && styles.sendButtonPressed,
-                !canSend && styles.disabled,
-              ]}
-              onPress={onSubmit}
-            >
-              <MaterialCommunityIcons name="arrow-up" size={22} color={designTokens.color.onPrimary} />
-            </Pressable>
-          )}
+            {canCancel ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Stop generating"
+                style={({ pressed }) => [styles.stopButton, pressed && styles.stopButtonPressed]}
+                onPress={() => {
+                  void haptics.tap();
+                  onCancel();
+                }}
+              >
+                <MaterialCommunityIcons name="stop" size={22} color={designTokens.color.onPrimary} />
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+                accessibilityState={{ disabled: !canSend }}
+                disabled={!canSend}
+                style={({ pressed }) => [
+                  styles.sendButton,
+                  pressed && canSend && styles.sendButtonPressed,
+                  !canSend && styles.disabled,
+                ]}
+                onPress={onSubmit}
+              >
+                <MaterialCommunityIcons name="arrow-up" size={22} color={designTokens.color.onPrimary} />
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
+
+      <VoiceSheets />
 
       <SourceModal
         visible={sourceModalVisible}
@@ -495,6 +535,34 @@ const styles = StyleSheet.create({
   },
   controlsSpacer: {
     flex: 1,
+  },
+  rightColumn: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: designTokens.spacing.space8,
+  },
+  recordingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: designTokens.spacing.space8,
+    paddingVertical: designTokens.spacing.space4,
+    paddingHorizontal: designTokens.spacing.space12,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
+    marginBottom: designTokens.spacing.space8,
+  },
+  recordingDot: {
+    width: designTokens.spacing.space8,
+    height: designTokens.spacing.space8,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.error,
+  },
+  recordingText: {
+    color: designTokens.color.textSecondary,
+    fontSize: designTokens.type.supporting.fontSize,
   },
   iconButton: {
     width: designTokens.spacing.space24 + designTokens.spacing.space16,

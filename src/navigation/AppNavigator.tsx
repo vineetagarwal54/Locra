@@ -47,6 +47,10 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
+  // Registered only after the Sherpa/AudioStudio native packages are installed —
+  // VoiceDiagnosticsScreen statically requires them, so keeping it out of the live
+  // navigator graph keeps the Android JS bundle resolvable until then.
+  VoiceDiagnostics: undefined;
   Settings: { conversationId?: string } | undefined;
 };
 
