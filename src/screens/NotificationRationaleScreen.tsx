@@ -99,7 +99,7 @@ export function NotificationRationaleScreen({ navigation }: Props) {
       <Text style={styles.title}>Keep track of the download</Text>
       <Text style={styles.body}>
         Locra downloads a large AI model in the background. Notifications let you see download
-        progress and know when the model is ready, even if you leave the app.
+        progress and know when the download is complete and ready for final verification.
       </Text>
     </OnboardingScreen>
   );

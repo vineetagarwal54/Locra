@@ -69,10 +69,22 @@ function makeHarness() {
   const cancelFetching = jest.fn(async () => {});
   const deleteResources = jest.fn(async () => {});
   const listDownloadedModels = jest.fn(async (): Promise<string[]> => []);
-  const verifyIntegrity = jest.fn(async (fileUri: string) => fileUri.length > 0);
+  const verifyIntegrity = jest.fn(async (
+    fileUri: string,
+    _expectedSha256: string,
+    _onProgress?: (progress: { bytesRead: number; totalBytes: number; progress: number }) => void,
+  ) => fileUri.length > 0);
   const getFileSize = jest.fn(
     async (path: string): Promise<number> => (path === PROJ_PATH ? PROJ_SIZE : LANG_SIZE)
   );
+  let verificationRecord: string | null = null;
+  const readVerificationRecord = jest.fn(async () => verificationRecord);
+  const writeVerificationRecord = jest.fn(async (value: string) => {
+    verificationRecord = value;
+  });
+  const clearVerificationRecord = jest.fn(async () => {
+    verificationRecord = null;
+  });
 
   const manager = new ModelDownloadManager({
     fetcher: {
@@ -87,6 +99,12 @@ function makeHarness() {
     getFileSize,
     sources: SOURCES,
     artifacts: artifacts(),
+    modelId: 'qwen-test',
+    verificationRecord: {
+      read: readVerificationRecord,
+      write: writeVerificationRecord,
+      clear: clearVerificationRecord,
+    },
   });
 
   return {
@@ -99,6 +117,9 @@ function makeHarness() {
     listDownloadedModels,
     verifyIntegrity,
     getFileSize,
+    readVerificationRecord,
+    writeVerificationRecord,
+    clearVerificationRecord,
   };
 }
 
@@ -108,8 +129,8 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
 
     await manager.startDownload();
 
-    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA);
-    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA);
+    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA, expect.any(Function));
+    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.getState().integrityVerified).toBe(true);
     expect(manager.isReadyForInference()).toBe(true);
@@ -119,17 +140,54 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
     ]);
   });
 
+  it('publishes downloading -> verifying -> ready and persists only after the whole bundle verifies', async () => {
+    const { manager, writeVerificationRecord } = makeHarness();
+    const phases: string[] = [];
+    manager.subscribe((state) => phases.push(state.setupPhase));
+
+    await manager.startDownload();
+
+    expect(phases).toEqual(expect.arrayContaining(['preparing', 'downloading', 'verifying', 'ready']));
+    expect(phases.indexOf('verifying')).toBeLessThan(phases.indexOf('ready'));
+    expect(writeVerificationRecord).toHaveBeenCalledTimes(1);
+    expect(manager.getState()).toEqual(expect.objectContaining({
+      setupPhase: 'ready',
+      integrityVerified: true,
+    }));
+  });
+
   it('fails the whole bundle (not ready) when the projector fails verification', async () => {
-    const { manager, verifyIntegrity, deleteResources } = makeHarness();
+    const { manager, verifyIntegrity, deleteResources, writeVerificationRecord } = makeHarness();
+    const phases: string[] = [];
+    manager.subscribe((state) => phases.push(state.setupPhase));
     verifyIntegrity.mockImplementation(async (path: string) => path !== PROJ_PATH);
 
     await manager.startDownload();
 
     expect(manager.getState().downloadStatus).toBe('failed');
+    expect(manager.getState().setupPhase).toBe('failed');
+    expect(phases).toEqual(expect.arrayContaining(['downloading', 'verifying', 'failed']));
+    expect(phases).not.toContain('ready');
     expect(manager.isReadyForInference()).toBe(false);
-    expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
+    expect(deleteResources).not.toHaveBeenCalled();
+    expect(manager.getState().canRetryVerification).toBe(true);
+    expect(writeVerificationRecord).not.toHaveBeenCalled();
     const states = manager.getArtifactStates();
     expect(states.find((s) => s.artifactId === 'qwen_multimodal_projector')?.integrityVerified).toBe(false);
+  });
+
+  it.each([
+    ['smaller', PROJ_SIZE - 1],
+    ['larger', PROJ_SIZE + 1],
+  ])('rejects a %s-than-expected artifact before hashing it', async (_label, badSize) => {
+    const { manager, getFileSize, verifyIntegrity } = makeHarness();
+    getFileSize.mockImplementation(async (path: string) => path === PROJ_PATH ? badSize : LANG_SIZE);
+
+    await manager.startDownload();
+
+    expect(manager.getState().setupPhase).toBe('failed');
+    expect(manager.isReadyForInference()).toBe(false);
+    expect(verifyIntegrity).not.toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
   });
 
   it('reports aggregate 0..1 progress across both files', async () => {
@@ -191,9 +249,10 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
         listDownloadedModels: jest.fn(async (): Promise<string[]> => []),
       },
       verifyIntegrity,
-      getFileSize: jest.fn(async () => LANG_SIZE),
+      getFileSize: jest.fn(async (path: string) => path === PROJ_PATH ? PROJ_SIZE : LANG_SIZE),
       sources: SOURCES,
       artifacts: artifacts(),
+      modelId: 'qwen-test',
     });
 
     await expect(manager.reattachExistingDownload()).resolves.toBe(true);
@@ -203,31 +262,42 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
     downloadDeferred.resolve(bundleFetchResult());
     await flush();
 
-    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA);
-    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA);
+    expect(verifyIntegrity).toHaveBeenCalledWith(LANG_PATH, LANG_SHA, expect.any(Function));
+    expect(verifyIntegrity).toHaveBeenCalledWith(PROJ_PATH, PROJ_SHA, expect.any(Function));
     expect(manager.isReadyForInference()).toBe(true);
   });
 
   describe('restart reconciliation', () => {
-    it('is ready with zero re-download when both artifacts are present and complete', async () => {
-      const { manager, listDownloadedModels, fetch } = makeHarness();
+    it('creates a record after full verification, then restores readiness without re-hashing', async () => {
+      const { manager, listDownloadedModels, fetch, verifyIntegrity, writeVerificationRecord } = makeHarness();
       listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
 
+      await manager.reconcile();
+      expect(manager.getState().setupPhase).toBe('verifying');
+      expect(verifyIntegrity).not.toHaveBeenCalled();
+      await manager.verifyPendingArtifacts();
+      expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+      expect(writeVerificationRecord).toHaveBeenCalledTimes(1);
+      verifyIntegrity.mockClear();
       await manager.reconcile();
       await manager.startDownload();
 
       expect(fetch).not.toHaveBeenCalled();
+      expect(verifyIntegrity).not.toHaveBeenCalled();
       expect(manager.isReadyForInference()).toBe(true);
     });
 
     it('is not ready when only one artifact is present on disk', async () => {
-      const { manager, listDownloadedModels } = makeHarness();
+      const { manager, listDownloadedModels, clearVerificationRecord } = makeHarness();
       listDownloadedModels.mockResolvedValue([LANG_PATH]);
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(manager.isReadyForInference()).toBe(false);
       expect(manager.getState().downloadStatus).toBe('not_started');
+      expect(manager.getState().setupPhase).toBe('not_installed');
+      expect(clearVerificationRecord).toHaveBeenCalled();
     });
 
     it('deletes and reports not-ready when an artifact is truncated', async () => {
@@ -238,9 +308,151 @@ describe('ModelArtifactBundleManager (generalized ModelDownloadManager)', () => 
       );
 
       await manager.reconcile();
+      await manager.verifyPendingArtifacts();
 
       expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
       expect(manager.isReadyForInference()).toBe(false);
+    });
+
+    it('invalidates a stale or malformed record and performs full verification safely', async () => {
+      const { manager, listDownloadedModels, readVerificationRecord, verifyIntegrity, clearVerificationRecord } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      readVerificationRecord.mockResolvedValue('{broken');
+
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(clearVerificationRecord).toHaveBeenCalled();
+      expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+      expect(manager.getState().setupPhase).toBe('ready');
+    });
+
+    it('invalidates a manifest-mismatched record and performs full verification', async () => {
+      const { manager, listDownloadedModels, readVerificationRecord, verifyIntegrity, clearVerificationRecord } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      readVerificationRecord.mockResolvedValue(JSON.stringify({
+        schemaVersion: 1,
+        modelId: 'another-model',
+        manifestFingerprint: 'stale',
+        verifiedAt: 1,
+        artifacts: [],
+      }));
+
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(clearVerificationRecord).toHaveBeenCalled();
+      expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+      expect(manager.getState().setupPhase).toBe('ready');
+    });
+
+    it('deduplicates repeated download taps into one native task', async () => {
+      const { manager, fetch } = makeHarness();
+      const download = defer<FetchResult>();
+      fetch.mockReturnValue(download.promise);
+
+      const first = manager.startDownload();
+      const second = manager.startDownload();
+      expect(first).toBe(second);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      download.resolve(bundleFetchResult());
+      await first;
+    });
+
+    it('prevents a late reconciliation result from overwriting a newer download', async () => {
+      const { manager, listDownloadedModels, fetch } = makeHarness();
+      const files = defer<string[]>();
+      const download = defer<FetchResult>();
+      listDownloadedModels.mockReturnValue(files.promise);
+      fetch.mockReturnValue(download.promise);
+
+      const reconciliation = manager.reconcile();
+      const downloading = manager.startDownload();
+      expect(manager.getState().setupPhase).toBe('downloading');
+      files.resolve([]);
+      await reconciliation;
+      expect(manager.getState().setupPhase).toBe('downloading');
+      download.resolve(bundleFetchResult());
+      await downloading;
+    });
+
+    it('restarts verification after process death without redownloading valid files', async () => {
+      const { manager, listDownloadedModels, fetch, verifyIntegrity } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+
+      await manager.reconcile();
+
+      expect(manager.getState().setupPhase).toBe('verifying');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(verifyIntegrity).not.toHaveBeenCalled();
+
+      await manager.verifyPendingArtifacts();
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(verifyIntegrity).toHaveBeenCalledTimes(2);
+      expect(manager.isReadyForInference()).toBe(true);
+    });
+
+    it('publishes per-artifact and weighted total verification progress', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockImplementation(async (_path, _sha, onProgress) => {
+        onProgress?.({ bytesRead: LANG_SIZE / 2, totalBytes: LANG_SIZE, progress: 0.5 });
+        return true;
+      });
+      const states: Array<{ total: number; artifact: number; name: string | null }> = [];
+      manager.subscribe((state) => states.push({
+        total: state.verificationProgress,
+        artifact: state.verificationArtifactProgress,
+        name: state.verificationArtifactName,
+      }));
+
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(states).toContainEqual(expect.objectContaining({
+        artifact: 0.5,
+        name: LANG_FILE,
+      }));
+      expect(states.some((state) => state.total > 0 && state.total < 1)).toBe(true);
+      expect(manager.getState().verificationProgress).toBe(1);
+    });
+
+    it('ignores a stale verification result after a newer delete action', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity } = makeHarness();
+      const hash = defer<boolean>();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockReturnValueOnce(hash.promise);
+      await manager.reconcile();
+      const verification = manager.verifyPendingArtifacts();
+      await flush();
+
+      await manager.cancelDownload();
+      hash.resolve(true);
+      await verification;
+
+      expect(manager.getState().setupPhase).toBe('not_installed');
+      expect(manager.getState().integrityVerified).toBe(false);
+    });
+
+    it('keeps failed hashes recoverable and can retry without redownloading', async () => {
+      const { manager, listDownloadedModels, verifyIntegrity, deleteResources } = makeHarness();
+      listDownloadedModels.mockResolvedValue([LANG_PATH, PROJ_PATH]);
+      verifyIntegrity.mockResolvedValueOnce(false);
+      await manager.reconcile();
+      await manager.verifyPendingArtifacts();
+
+      expect(manager.getState()).toEqual(expect.objectContaining({
+        setupPhase: 'failed',
+        canRetryVerification: true,
+      }));
+      expect(deleteResources).not.toHaveBeenCalled();
+
+      verifyIntegrity.mockResolvedValue(true);
+      await manager.verifyPendingArtifacts();
+
+      expect(manager.isReadyForInference()).toBe(true);
+      expect(deleteResources).not.toHaveBeenCalled();
     });
   });
 });

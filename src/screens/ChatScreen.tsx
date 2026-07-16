@@ -27,7 +27,7 @@ import { designTokens, haptics } from '../constants/theme';
 import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
-import { useHistoryStore } from '../store/historyStore';
+import { listConversationTargets, useHistoryStore } from '../store/historyStore';
 import type {
   Conversation,
   ConversationMessage,
@@ -67,6 +67,7 @@ export function ChatScreen({ navigation, route }: Props) {
   const [responseMode, setResponseMode] = useState<ResponseMode>(() =>
     conversationStore.getResponseMode(conversationId)
   );
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const { confirm, dialog } = useConfirmSheet();
 
   const conversation = useMemo(
@@ -75,6 +76,10 @@ export function ChatScreen({ navigation, route }: Props) {
         ? null
         : useHistoryStore.getState().getConversation(conversationId),
     [conversationId, historyRevision]
+  );
+  const targetCandidates = useMemo(
+    () => listConversationTargets(conversationId),
+    [conversationId, historyRevision],
   );
 
   useEffect(() => {
@@ -86,6 +91,10 @@ export function ChatScreen({ navigation, route }: Props) {
     setDraft(conversationStore.getDraft(conversationId));
     setResponseMode(conversationStore.getResponseMode(conversationId));
   }, [conversationId, historyRevision]);
+
+  useEffect(() => {
+    setSelectedTargetId(null);
+  }, [conversationId]);
 
   // FR-031: switching away from and back to a conversation (including the
   // not-yet-created 'new' slot) restores its exact draft from conversationStore.
@@ -206,8 +215,8 @@ export function ChatScreen({ navigation, route }: Props) {
 
   const onOpenSettings = useCallback((): void => {
     void haptics.tap();
-    navigation.navigate('Settings');
-  }, [navigation]);
+    navigation.navigate('Settings', conversationId === 'new' ? undefined : { conversationId });
+  }, [conversationId, navigation]);
 
   const onOpenCamera = useCallback((): void => {
     navigation.navigate('Capture', { conversationId });
@@ -240,6 +249,46 @@ export function ChatScreen({ navigation, route }: Props) {
     [conversationId]
   );
 
+  const onRegenerate = useCallback(
+    (assistantMessageId: string): void => {
+      setScreenError(null);
+      void conversationStore
+        .regenerateResponse(conversationId, assistantMessageId)
+        .catch((error: unknown) => {
+          setScreenError(
+            error instanceof Error ? error.message : 'Could not regenerate that response.',
+          );
+          void haptics.error();
+        });
+    },
+    [conversationId],
+  );
+
+  const onContinue = useCallback(
+    (assistantMessageId: string): void => {
+      setScreenError(null);
+      void conversationStore
+        .continueTruncatedMessage(conversationId, assistantMessageId)
+        .catch((error: unknown) => {
+          setScreenError(
+            error instanceof Error ? error.message : 'Could not continue that response.',
+          );
+          void haptics.error();
+        });
+    },
+    [conversationId],
+  );
+
+  const onReportIssue = useCallback(
+    (assistantMessageId: string): void => {
+      navigation.navigate('DiagnosticsExport', {
+        conversationId,
+        responseId: assistantMessageId,
+      });
+    },
+    [conversationId, navigation],
+  );
+
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>): void => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom =
@@ -247,6 +296,9 @@ export function ChatScreen({ navigation, route }: Props) {
     isNearBottomRef.current = distanceFromBottom <= AUTO_FOLLOW_THRESHOLD;
     if (contentOffset.y <= designTokens.spacing.space24 * 2 && conversationId !== 'new') {
       useHistoryStore.getState().loadOlderMessages(conversationId);
+    }
+    if (distanceFromBottom <= designTokens.spacing.space24 * 2 && conversationId !== 'new') {
+      useHistoryStore.getState().loadNewerMessages(conversationId);
     }
   }, [conversationId]);
 
@@ -271,11 +323,25 @@ export function ChatScreen({ navigation, route }: Props) {
       return (
         <View>
           {message.role === 'assistant' ? <AssistantIdentityRow /> : null}
-          <MessageBubble message={message} streamingText={streamingText} onRetry={onRetry} />
+          <MessageBubble
+            message={message}
+            streamingText={streamingText}
+            onRetry={onRetry}
+            onRegenerate={onRegenerate}
+            onContinue={onContinue}
+            onReportIssue={onReportIssue}
+          />
         </View>
       );
     },
-    [onRetry, runtimeState?.assistantMessageId, runtimeState?.streamingText]
+    [
+      onContinue,
+      onRegenerate,
+      onReportIssue,
+      onRetry,
+      runtimeState?.assistantMessageId,
+      runtimeState?.streamingText,
+    ]
   );
 
   if (isMissingConversation) {
@@ -300,6 +366,9 @@ export function ChatScreen({ navigation, route }: Props) {
     <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
       <AppHeader onMenu={onOpenDrawer} onSettings={onOpenSettings} />
       {screenError !== null ? <Text style={styles.screenError}>{screenError}</Text> : null}
+      {screenError === null && runtimeState?.limitWarning != null && runtimeState.limitWarning !== '' ? (
+        <Text style={styles.limitWarning}>{runtimeState.limitWarning}</Text>
+      ) : null}
       <FlatList
         ref={listRef}
         data={conversation?.messages ?? []}
@@ -322,6 +391,7 @@ export function ChatScreen({ navigation, route }: Props) {
         onScroll={onScroll}
         scrollEventThrottle={16}
         onContentSizeChange={onContentSizeChange}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
       <ChatComposer
         conversationId={conversationId}
@@ -335,6 +405,9 @@ export function ChatScreen({ navigation, route }: Props) {
         onOpenCamera={onOpenCamera}
         onDraftChange={setDraft}
         onConversationResolved={onConversationResolved}
+        targetCandidates={targetCandidates}
+        selectedTargetId={selectedTargetId}
+        onTargetChange={setSelectedTargetId}
         responseMode={responseMode}
         onResponseModeChange={(mode) => {
           conversationStore.setResponseMode(conversationId, mode);
@@ -401,6 +474,7 @@ function ChatHeaderContent({
           question={draft.text}
           metadata="Attached to your next message"
           onRemove={onRemoveImage}
+          onRetake={onPhotoSuggestion}
         />
       </View>
     ) : null;
@@ -428,6 +502,7 @@ function ChatHeaderContent({
             question={draft.text}
             metadata="Attached to your first message"
             onRemove={onRemoveImage}
+            onRetake={onPhotoSuggestion}
           />
         </View>
       ) : (
@@ -524,6 +599,12 @@ const styles = StyleSheet.create({
   },
   screenError: {
     color: designTokens.color.error,
+    fontSize: designTokens.type.supporting.fontSize,
+    paddingHorizontal: designTokens.spacing.space16,
+    paddingTop: designTokens.spacing.space8,
+  },
+  limitWarning: {
+    color: designTokens.color.textSecondary,
     fontSize: designTokens.type.supporting.fontSize,
     paddingHorizontal: designTokens.spacing.space16,
     paddingTop: designTokens.spacing.space8,

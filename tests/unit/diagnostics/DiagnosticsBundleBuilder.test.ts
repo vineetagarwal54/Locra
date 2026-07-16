@@ -1,6 +1,7 @@
 import {
   buildDiagnosticsBundleJson,
   buildDiagnosticsMarkdown,
+  sanitizeSensitive,
   type AppDiagnosticsInfo,
 } from '../../../src/diagnostics/DiagnosticsBundleBuilder';
 import type { DiagnosticTurnRecord } from '../../../src/diagnostics/DiagnosticsTraceStore';
@@ -80,6 +81,12 @@ const APP_INFO: AppDiagnosticsInfo = {
   appBuildId: '1.0.0+1',
   deviceNameModel: 'Google Pixel 8',
   exportedAt: '2026-07-10T00:00:00.000Z',
+  modelDownloadStatus: 'downloaded',
+  modelDownloadProgress: 1,
+  modelIntegrityVerified: true,
+  storageAvailableBytes: 1_000,
+  storageTotalBytes: 2_000,
+  activeResourceOperation: null,
 };
 
 describe('DiagnosticsBundleBuilder', () => {
@@ -147,14 +154,60 @@ describe('DiagnosticsBundleBuilder', () => {
     expect(bundle.turns[0]?.refusalRecoveryTriggered).toBe(false);
   });
 
-  it('never inlines image bytes, only source paths', () => {
+  it('excludes images and sanitizes local paths by default', () => {
+    const conversation = makeConversation();
+    conversation.messages[1].errorMessage = 'Failed near C:\\Users\\me\\photo.jpg';
     const bundle = buildDiagnosticsBundleJson({
-      conversations: [makeConversation()],
-      turns: [],
+      conversations: [conversation],
+      turns: [makeTurn({
+        trace: {
+          id: 'turn-path',
+          createdAt: '2026-07-10T00:00:00.000Z',
+          stages: [{
+            stage: 'answer',
+            modelInput: [{ role: 'user', content: 'question', mediaPath: 'file:///data/photo.jpg' }],
+            rawOutput: 'answer',
+            processedOutput: 'answer',
+          }],
+          finalResponse: 'answer',
+        },
+      })],
       appInfo: APP_INFO,
     });
 
-    const attachment = bundle.conversations[0]?.messages[0]?.attachments[0];
-    expect(attachment).toEqual({ kind: 'image', path: '/tmp/photo.jpg' });
+    expect(bundle.conversations[0]?.messages[0]?.attachments).toEqual([]);
+    expect(JSON.stringify(bundle)).not.toContain('/tmp/photo.jpg');
+    expect(JSON.stringify(bundle)).not.toContain('C:\\Users\\me');
+    expect(JSON.stringify(bundle)).not.toContain('file:///data/photo.jpg');
+    expect(JSON.stringify(bundle)).toContain('[local path omitted]');
+  });
+
+  it('redacts secrets and tokens from message text before writing', () => {
+    const conversation = makeConversation();
+    conversation.messages[0].text =
+      'Use api_key=sk-ABCDEF123456 and Authorization: Bearer abcdef.ghijkl.mnopqr to call it.';
+    conversation.messages[1].text =
+      'token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadpart.signaturepart';
+
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [conversation],
+      turns: [],
+      appInfo: APP_INFO,
+    });
+    const serialized = JSON.stringify(bundle);
+
+    expect(serialized).not.toContain('sk-ABCDEF123456');
+    expect(serialized).not.toContain('abcdef.ghijkl.mnopqr');
+    expect(serialized).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+    expect(serialized).toContain('[redacted]');
+  });
+
+  it('sanitizeSensitive redacts common credential shapes but leaves plain text intact', () => {
+    expect(sanitizeSensitive('secret=hunter2hunter2')).toBe('secret=[redacted]');
+    expect(sanitizeSensitive('password: correcthorse')).toBe('password=[redacted]');
+    expect(sanitizeSensitive('Bearer abcdef1234567890')).toBe('Bearer [redacted]');
+    expect(sanitizeSensitive('The chair is wooden and brown.')).toBe(
+      'The chair is wooden and brown.',
+    );
   });
 });

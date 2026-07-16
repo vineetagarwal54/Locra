@@ -9,9 +9,20 @@ export type ConversationStatus = 'idle' | QASessionStatus;
 export type AttachmentKind = 'image';
 export type MessageStatus = 'generating' | 'completed' | 'failed' | 'interrupted';
 
+/**
+ * Why a generation stopped.
+ * - `natural`: the model emitted a stop token / finished on its own.
+ * - `length`: the hard `n_predict` output cap was reached — the answer is truncated
+ *   and can be continued.
+ * - `cancelled`: the user stopped generation.
+ * - `failed`: generation errored before finishing.
+ */
+export type GenerationFinishReason = 'natural' | 'length' | 'cancelled' | 'failed';
+
 export interface Attachment {
   kind: AttachmentKind;
   path: string;
+  available?: boolean;
 }
 
 export interface PerformanceMetrics {
@@ -46,6 +57,11 @@ export interface ConversationMessage {
   status: MessageStatus;
   errorMessage: string | null;
   createdAt: number;
+  /**
+   * Assistant-only. Why generation stopped; `length` marks a truncated answer the
+   * user can continue. Absent/null on user messages and older persisted rows.
+   */
+  finishReason?: GenerationFinishReason | null;
 }
 
 export interface Conversation {
@@ -61,6 +77,8 @@ export interface Conversation {
   flagNote: string | null;
   contextMemory?: ConversationContextMemory | null;
   responseMode?: import('../inference/ResponseMode').ResponseMode;
+  latestMessagePreview?: string | null;
+  hasImage?: boolean;
 }
 
 export interface CanonicalContextTurn {
@@ -149,9 +167,25 @@ export interface ConversationRuntimeState {
   assistantMessageId: string | null;
   streamingText: string;
   isOwnerOfActiveInference: boolean;
+  /**
+   * Transient notice about the most recent turn in this conversation — e.g. the
+   * input was shortened to fit, or the answer was cut off. Cleared when the next
+   * generation starts. Not persisted; durable truncation is read from the
+   * assistant message's `finishReason`.
+   */
+  limitWarning?: string | null;
 }
 
 export type ModelDownloadStatus = 'not_started' | 'downloading' | 'paused' | 'downloaded' | 'failed';
+export type ModelSetupPhase =
+  | 'checking'
+  | 'not_installed'
+  | 'preparing'
+  | 'downloading'
+  | 'paused'
+  | 'verifying'
+  | 'ready'
+  | 'failed';
 
 export interface OnDeviceModel {
   modelName: string;
@@ -195,6 +229,8 @@ export interface InferenceState {
   metrics: PerformanceMetrics | null;
   error: string | null;
   limitWarning: string | null;
+  /** Why the generation stopped; null until a terminal state resolves it. */
+  finishReason?: GenerationFinishReason | null;
   pinnedExtraction: string | null;
   hiddenEvidence?: HiddenVisualEvidence | null;
   objectiveResult?: ObjectiveInferenceResultRecord | null;
@@ -202,8 +238,13 @@ export interface InferenceState {
 }
 
 export interface ModelState {
+  setupPhase: ModelSetupPhase;
   downloadStatus: ModelDownloadStatus;
   downloadProgress: number;
+  verificationProgress: number;
+  verificationArtifactProgress: number;
+  verificationArtifactName: string | null;
+  canRetryVerification: boolean;
   integrityVerified: boolean;
   error: string | null;
 }
@@ -239,6 +280,8 @@ export interface ConversationRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+  latest_message_preview: string | null;
+  has_image: number;
 }
 
 /** Kind of a benchmarked turn: image turns include preparation time, text turns don't. */
@@ -271,6 +314,8 @@ export interface MessageRow {
   text: string;
   status: AttemptStatus;
   error_message: string | null;
+  /** Assistant-only; why generation stopped (`length` = truncated). NULL otherwise. */
+  finish_reason: GenerationFinishReason | null;
   finalized_at: number | null;
   created_at: number;
 }

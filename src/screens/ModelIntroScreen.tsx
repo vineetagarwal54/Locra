@@ -26,6 +26,9 @@ interface MetadataRow {
 export function ModelIntroScreen({ navigation }: Props) {
   const presentation = createQwenModelPresentation();
   const checkDeviceCompatibility = useModelStore((s) => s.checkDeviceCompatibility);
+  const setupPhase = useModelStore((s) => s.setupPhase);
+  const setupError = useModelStore((s) => s.error);
+  const reconcile = useModelStore((s) => s.reconcile);
   const compatibility = useMemo(() => checkDeviceCompatibility(), [checkDeviceCompatibility]);
 
   // design.md §7.3 dynamic metadata rule — bound to real model configuration.
@@ -44,8 +47,12 @@ export function ModelIntroScreen({ navigation }: Props) {
     // "Not now" must not mark the model as ready (design.md §7.3). We simply
     // leave setup for the main experience; the launch/readiness gate keeps
     // routing an unverified model back into setup when inference is attempted.
-    navigation.replace('Chat', { conversationId: 'new' });
+    navigation.navigate('Settings');
   }, [navigation]);
+
+  const onRetryCheck = useCallback((): void => {
+    void reconcile();
+  }, [reconcile]);
 
   if (!compatibility.isSupported) {
     return (
@@ -75,15 +82,22 @@ export function ModelIntroScreen({ navigation }: Props) {
       footer={
         <View>
           <PrimaryButton
-            label="Download model"
+            label={setupPhase === 'failed' ? 'Retry check' : 'Download model'}
             icon="arrow-right"
-            onPress={onDownload}
-            accessibilityLabel="Download the model"
+            onPress={setupPhase === 'failed' ? onRetryCheck : onDownload}
+            accessibilityLabel={setupPhase === 'failed' ? 'Retry the model check' : 'Download the model'}
           />
+          {setupPhase === 'failed' ? (
+            <SecondaryTextButton
+              label="Continue to model setup"
+              onPress={onDownload}
+              accessibilityLabel="Continue to model download setup"
+            />
+          ) : null}
           <SecondaryTextButton
-            label="Not now"
+            label="Open Settings"
             onPress={onNotNow}
-            accessibilityLabel="Skip the download for now"
+            accessibilityLabel="Open Settings"
           />
         </View>
       }
@@ -94,8 +108,11 @@ export function ModelIntroScreen({ navigation }: Props) {
 
       <Text style={styles.title}>Your AI lives on your device.</Text>
       <Text style={styles.body}>
-        Locra needs to download the AI model once. After that, the core experience works entirely
-        offline.
+        {setupPhase === 'checking'
+          ? 'Checking the on-device model…'
+          : setupPhase === 'failed'
+            ? setupError ?? 'Model setup needs attention. Retry the check or redownload the model.'
+            : 'Locra needs to download the AI model once. After that, the core experience works entirely offline.'}
       </Text>
 
       <View style={styles.metadataCard}>

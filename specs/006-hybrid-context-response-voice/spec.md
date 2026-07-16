@@ -275,3 +275,42 @@ A user can record speech, receive editable local transcription and explicitly su
 - Only one explicitly selected past chat can be targeted per request in this feature.
 - User-message editing/branching and unrestricted all-chat search are deferred.
 - Performance testing targets Android devices with 6–8GB RAM.
+
+---
+
+## Addendum: Production Stabilization and Voice Composer UX
+
+This addendum completes and hardens the existing stories. It does not replace SQLite, Zustand UI state, Qwen/llama.rn, the bounded-memory policy, immutable attempts, or the existing offline architecture.
+
+### Additional Requirements
+
+- **FR-A01 — History correctness**: Bounded conversation and message caches MUST allow evicted newer and older pages to be fetched again. History search MUST query SQL across conversation titles, user messages and active completed assistant attempts, and conversation rows MUST show an accurate latest-message preview and image indicator.
+
+- **FR-A02 — Interrupted response recovery**: Streaming assistant text MUST be checkpointed at a bounded interval and flushed on normal completion, stop, failure or cancellation. Stopped and failed attempts MUST retain partial text, startup MUST reconcile abandoned `generating` attempts to `interrupted`, and retry MUST create a new attempt.
+
+- **FR-A03 — Model setup integrity**: Model lifecycle MUST distinguish downloading, verifying, preparing, ready and failed states. Readiness requires the exact expected size and SHA-256 for every required artifact or a durable verification record tied to the identical manifest. Onboarding MUST not complete before model readiness, splash reconciliation MUST time out safely, and Chat MUST not enter an unusable model-less state.
+
+- **FR-A04 — Durable images**: Camera and gallery images MUST be copied into durable application-controlled storage before their paths are persisted. Inference derivatives remain temporary and are cleaned independently. Missing files MUST be reconciled without substituting another image. The UI SHOULD support image preview, remove/retake and reopening a referenced original image.
+
+- **FR-A05 — Context correctness**: Active image evidence MUST be added only when relevant to the current request or explicitly referenced. Retrieved text MUST be treated as untrusted source content, source-attributed and kept within the configured character budget. Past-chat selection MUST use a real picker, Unicode-safe title normalization and persisted request state where required.
+
+- **FR-A06 — Diagnostics and recovery**: Internal beta production builds MUST expose diagnostics export from persistence repositories rather than UI caches. Export MUST include relevant attempts and model/download/storage/build state, disclose included conversation content, sanitize local paths, exclude images by default, clean temporary archives and support reporting a specific response.
+
+- **FR-A07 — Database safety**: Supported schema changes MUST use ordered transactional migrations. Database startup MUST occur through controlled bootstrap with a recoverable error screen; production builds MUST never silently reset canonical conversations.
+
+- **FR-A08 — Performance and controls**: The Qwen runtime SHOULD load only when required and release after an appropriate idle/background policy. Compaction and embedding work MUST yield to visible requests. Streaming UI updates SHOULD be throttled. Settings SHOULD provide model delete/redownload, temporary-file cleanup, diagnostics cleanup, conversation-data controls and app/model/database version information.
+
+- **FR-A09 — One-tap live voice**: After one-time setup, the microphone MUST be visible on the right inside the primary text-input row and one tap MUST start recording directly. Partial offline transcription MUST appear in the same editable input while the user speaks, preserving existing typed draft text. Tapping the active microphone stops and finalizes transcription without sending.
+
+- **FR-A10 — Voice resource clarification**: For live transcription, recording and incremental transcription MAY cooperate inside one exclusive `voice-input` session. This addendum supersedes FR-045 only for that internal cooperation. The complete voice-input session remains mutually exclusive with Qwen answering, Qwen compaction and embedding work.
+
+### Additional Success Criteria
+
+- **SC-A01**: After loading enough pages to trigger eviction, the user can return to both the newest and oldest reachable History/message pages without reopening the app.
+- **SC-A02**: SQL History search finds matching content outside the currently loaded Zustand cache.
+- **SC-A03**: Stop, failure and app restart preserve the latest checkpointed assistant text without duplicating the user turn.
+- **SC-A04**: A completed model download reaches Ready without restart only after verification; a corrupt or incorrectly sized artifact never becomes ready.
+- **SC-A05**: Persisted camera and gallery images survive app restart and normal cache cleanup.
+- **SC-A06**: Relevant image evidence is reused, while unrelated follow-up questions receive no automatic image evidence.
+- **SC-A07**: A beta diagnostic export is complete regardless of pagination state and contains no unsanitized internal paths.
+- **SC-A08**: After voice setup, one tap starts recording, partial text appears in the composer while speaking, stopping leaves editable text, and nothing is auto-submitted.

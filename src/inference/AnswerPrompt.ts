@@ -38,6 +38,9 @@ function buildInstructionText(question: string): string {
     'Answer naturally and directly.',
     'Use the image evidence only as grounding for visual claims.',
     'Add brief uncertainty only when the evidence is unclear.',
+    'For counts or object identification, if the evidence is unclear or incomplete, give a ' +
+      'cautious best estimate and say it is approximate rather than stating an exact count or a ' +
+      'certain identification you cannot verify.',
     'Give practical next steps when they help.',
   ].join('\n');
 }

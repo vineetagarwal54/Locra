@@ -73,6 +73,24 @@ describe('MessageRepository — immutable messages and retries', () => {
     expect(statusOf(db.driver, 'a2').is_active_attempt).toBe(1);
   });
 
+  it('persists the finish reason on finalize and reads it back', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'cut off here');
+    repo.finalizeAttempt('a1', 'completed', null, 'length');
+
+    expect(repo.getMessage('a1')?.finish_reason).toBe('length');
+    // A user row never carries a finish reason.
+    expect(repo.getMessage('u1')?.finish_reason).toBeNull();
+  });
+
+  it('records a cancelled finish reason when reconciling abandoned attempts', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.reconcileGeneratingAttempts();
+    expect(repo.getMessage('a1')?.finish_reason).toBe('cancelled');
+  });
+
   it('switches the active attempt as selection metadata only', () => {
     repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
     repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
@@ -117,6 +135,18 @@ describe('MessageRepository — immutable messages and retries', () => {
     repo.finalizeAttempt('a2', 'completed');
 
     expect(repo.listAllAttempts('c1').map((m) => m.id)).toEqual(['a1', 'a2']);
+  });
+
+  it('reconciles abandoned generating attempts as interrupted without changing user rows', () => {
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+
+    expect(repo.reconcileGeneratingAttempts()).toBe(1);
+    expect(statusOf(db.driver, 'a1')).toMatchObject({
+      status: 'interrupted',
+      is_active_attempt: 1,
+    });
+    expect(statusOf(db.driver, 'u1')).toMatchObject({ status: 'submitted' });
   });
 
   it('projects the active attempt for UI while keeping every prior attempt diagnostic-only', () => {

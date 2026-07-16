@@ -1,57 +1,47 @@
-import { File, FileMode } from 'expo-file-system';
-import { sha256 } from 'js-sha256';
+import NativeModelIntegrity, {
+  type ModelIntegrityProgressEvent,
+} from '../native/NativeModelIntegrity';
 
-// The app verifies artifact integrity itself at the model boundary.
-//
-// Memory safety (constitution Principle IV): the `.pte` is ~2.4 GB, and
-// expo-crypto has no incremental/streaming digest, so a one-shot hash would pull
-// the entire file into a JS ArrayBuffer and blow the budget on 6–8 GB devices.
-// Instead we stream the file through a native FileHandle in bounded chunks and
-// fold each chunk into an incremental SHA-256 — peak memory stays at one chunk.
-// Any read/hash failure resolves to `false` (never throws) so a corrupt/missing
-// model routes to the setup screen rather than into an inference attempt.
+// Android streams bounded chunks on its own executor. JS receives only progress
+// snapshots and the final boolean, so hashing cannot block the JS event loop or
+// hold a complete model artifact in memory.
+export interface ModelIntegrityProgress {
+  bytesRead: number;
+  totalBytes: number;
+  progress: number;
+}
 
-const CHUNK_SIZE_BYTES = 8 * 1024 * 1024; // 8 MB
-const YIELD_EVERY_CHUNKS = 8; // let the JS thread breathe roughly every 64 MB
+let nextRequestId = 0;
 
-export async function verifyModelIntegrity(fileUri: string, expectedSha256: string): Promise<boolean> {
+export async function verifyModelIntegrity(
+  fileUri: string,
+  expectedSha256: string,
+  onProgress?: (progress: ModelIntegrityProgress) => void,
+): Promise<boolean> {
+  if (NativeModelIntegrity === null) return false;
+  const requestId = `model-integrity-${++nextRequestId}`;
+  const subscription = NativeModelIntegrity.addListener('onProgress', (event: ModelIntegrityProgressEvent) => {
+    if (event.requestId !== requestId) return;
+    onProgress?.({
+      bytesRead: event.bytesRead,
+      totalBytes: event.totalBytes,
+      progress: clampProgress(event.progress),
+    });
+  });
   try {
-    // ExpoResourceFetcher's fetch() hands back RAW filesystem paths (it strips the
-    // `file://` prefix), but expo-file-system's File requires a `file://` URI.
-    // Without this normalization the file reads as empty and the digest is the
-    // hash of zero bytes — which never matches the pinned value.
-    const file = new File(toFileUri(fileUri));
-    if (!file.exists) {
-      return false;
-    }
-
-    const total = file.size;
-    const handle = file.open(FileMode.ReadOnly);
-    try {
-      const hasher = sha256.create();
-      let read = 0;
-      let chunksSinceYield = 0;
-      while (read < total) {
-        const chunk = handle.readBytes(Math.min(CHUNK_SIZE_BYTES, total - read));
-        if (chunk.length === 0) {
-          break;
-        }
-        hasher.update(chunk);
-        read += chunk.length;
-        if (++chunksSinceYield >= YIELD_EVERY_CHUNKS) {
-          chunksSinceYield = 0;
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        }
-      }
-      return hasher.hex() === expectedSha256.trim().toLowerCase();
-    } finally {
-      handle.close();
-    }
+    return await NativeModelIntegrity.verifyFile(
+      requestId,
+      fileUri,
+      expectedSha256.trim().toLowerCase(),
+    );
   } catch {
     return false;
+  } finally {
+    subscription.remove();
   }
 }
 
-function toFileUri(path: string): string {
-  return path.startsWith('file://') ? path : `file://${path}`;
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
 }

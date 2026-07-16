@@ -25,7 +25,7 @@ describe('SingleFlightResourcePolicy', () => {
 
     // A second, different operation cannot acquire while the first is held.
     expect(policy.tryAcquire('embedding')).toBeNull();
-    expect(policy.tryAcquire('record')).toBeNull();
+    expect(policy.tryAcquire('voice-input')).toBeNull();
   });
 
   it('frees the gate on release and lets the next operation acquire', () => {
@@ -45,7 +45,7 @@ describe('SingleFlightResourcePolicy', () => {
   it('acquire() waits until the gate is released, then resolves', async () => {
     const { policy } = freshPolicy();
 
-    const recording = policy.tryAcquire('record');
+    const recording = policy.tryAcquire('voice-input');
     expect(recording).not.toBeNull();
 
     let resolved = false;
@@ -103,7 +103,7 @@ describe('SingleFlightResourcePolicy', () => {
   it('reflects the hold into the legacy vlm/voice activity lock', () => {
     const { policy, lock } = freshPolicy();
 
-    const recording = policy.tryAcquire('record');
+    const recording = policy.tryAcquire('voice-input');
     expect(lock.heldBy()).toBe('voice');
     recording?.release();
     expect(lock.isBusy()).toBe(false);
@@ -118,7 +118,6 @@ describe('SingleFlightResourcePolicy', () => {
     expect(activityOwnerFor('qwen-answer')).toBe('vlm');
     expect(activityOwnerFor('qwen-compaction')).toBe('vlm');
     expect(activityOwnerFor('embedding')).toBe('vlm');
-    expect(activityOwnerFor('record')).toBe('voice');
-    expect(activityOwnerFor('transcribe')).toBe('voice');
+    expect(activityOwnerFor('voice-input')).toBe('voice');
   });
 });

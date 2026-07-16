@@ -17,6 +17,7 @@ import {
 } from '../components/onboarding/OnboardingKit';
 import { designTokens, haptics } from '../constants/theme';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { useModelStore } from '../store/modelStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Success'>;
 
@@ -30,11 +31,16 @@ const TEXT_DURATION_MS = 240;
 
 export function SuccessScreen({ navigation }: Props) {
   const reduceMotion = useReducedMotion();
+  const ready = useModelStore((state) => state.setupPhase === 'ready' && state.integrityVerified);
 
   // motion.md §16 — model setup success gets one light success haptic.
   useEffect(() => {
-    void haptics.success();
-  }, []);
+    if (ready) void haptics.success();
+  }, [ready]);
+
+  useEffect(() => {
+    if (!ready) navigation.replace('ModelIntro');
+  }, [navigation, ready]);
 
   const iconScale = useSharedValue(reduceMotion ? 1 : 0.92);
   useEffect(() => {
@@ -46,11 +52,18 @@ export function SuccessScreen({ navigation }: Props) {
 
   const onStartChatting = useCallback((): void => {
     // Only reached after model verification succeeds (design.md §7.6 / §15).
-    navigation.replace('Chat', { conversationId: 'new' });
+    const state = useModelStore.getState();
+    if (state.setupPhase === 'ready' && state.integrityVerified) {
+      navigation.replace('Chat', { conversationId: 'new' });
+    } else {
+      navigation.replace('ModelIntro');
+    }
   }, [navigation]);
 
   const textEntry = (delay: number) =>
     reduceMotion ? undefined : FadeInDown.duration(TEXT_DURATION_MS).delay(delay);
+
+  if (!ready) return null;
 
   return (
     <OnboardingScreen

@@ -13,6 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
+import { runModelBootstrap } from '../model/ModelBootstrap';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -26,6 +27,7 @@ import { PrivacyScreen } from '../screens/PrivacyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
+import { reconcileAbandonedAttempts } from '../store/historyStore';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 
@@ -44,8 +46,12 @@ export type RootStackParamList = {
   Capture: { conversationId: string };
   History: undefined;
   Benchmark: undefined;
-  DiagnosticsExport: undefined;
-  Settings: undefined;
+  DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
+  // Registered only after the Sherpa/AudioStudio native packages are installed —
+  // VoiceDiagnosticsScreen statically requires them, so keeping it out of the live
+  // navigator graph keeps the Android JS bundle resolvable until then.
+  VoiceDiagnostics: undefined;
+  Settings: { conversationId?: string } | undefined;
 };
 
 export type RootDrawerParamList = {
@@ -83,8 +89,7 @@ function resolveInitialRoute(): keyof RootStackParamList {
   const modelState = useModelStore.getState();
   return resolveLaunchRoute({
     welcomeCompleted: hasCompletedWelcome(),
-    modelReady: modelState.isReadyForTextInference(),
-    downloadStatus: modelState.downloadStatus,
+    setupPhase: modelState.setupPhase,
   });
 }
 
@@ -101,11 +106,12 @@ function foregroundDownloadRoute(): 'DownloadProgress' | null {
     return null;
   }
   const modelState = useModelStore.getState();
-  if (modelState.isReadyForTextInference()) {
+  if (modelState.setupPhase === 'ready') {
     return null;
   }
-  const status = modelState.downloadStatus;
-  return status === 'downloading' || status === 'paused' ? 'DownloadProgress' : null;
+  return modelState.setupPhase === 'downloading' || modelState.setupPhase === 'paused' || modelState.setupPhase === 'verifying'
+    ? 'DownloadProgress'
+    : null;
 }
 
 // The stack owns every screen and the onboarding launch gate; the drawer (T046)
@@ -132,9 +138,7 @@ function RootStack() {
 }
 
 export function AppNavigator() {
-  const engineReady = useModelStore(
-    (s) => s.isReadyForTextInference()
-  );
+  const engineReady = useModelStore((s) => s.setupPhase === 'ready' && s.integrityVerified);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -143,7 +147,9 @@ export function AppNavigator() {
   const [bootstrapped, setBootstrapped] = useState(false);
   useEffect(() => {
     let active = true;
+    let runId = 1;
     async function bootstrapModelState(): Promise<void> {
+      reconcileAbandonedAttempts();
       const modelStore = useModelStore.getState();
       modelStore.initializeQwenBundle();
       const reattached = await modelStore.reattachExistingDownload();
@@ -152,13 +158,19 @@ export function AppNavigator() {
       }
     }
 
-    void bootstrapModelState().finally(() => {
-      if (active) {
-        setBootstrapped(true);
+    const operation = bootstrapModelState();
+    void runModelBootstrap({ operation, isCurrent: () => active && runId === 1 }).then((result) => {
+      if (!active || runId !== 1) return;
+      if (result.status === 'timeout') {
+        useModelStore.getState().failActiveCheck('Model setup is taking longer than expected.');
+      } else if (result.status === 'failed') {
+        useModelStore.getState().failActiveCheck('Model setup could not be checked. Try again.');
       }
+      setBootstrapped(true);
     });
     return () => {
       active = false;
+      runId += 1;
     };
   }, []);
 

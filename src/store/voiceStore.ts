@@ -1,88 +1,127 @@
 import { create } from 'zustand';
 
 import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
+import type { VoiceSessionStatus } from '../voice/dictationDraft';
 import {
   VoiceModelLifecycle,
   type VoiceModelState,
 } from '../voice/VoiceModelLifecycle';
 import { voicePermissionAdapter } from '../voice/voicePermission';
-import { VoiceRecordingService } from '../voice/VoiceRecordingService';
-import { VoiceTranscriptionService } from '../voice/VoiceTranscriptionService';
+import type { VoiceSession, VoiceSessionRuntime } from '../voice/VoiceSession';
+import { VoiceSessionService } from '../voice/VoiceSessionService';
 
 interface VoiceDependencies {
   lifecycle: VoiceModelLifecycle;
-  recording: VoiceRecordingService;
-  transcription: VoiceTranscriptionService;
+  session: VoiceSessionService;
 }
 
 export interface VoiceStoreState extends VoiceModelState {
   readonly disclosureVisible: boolean;
-  readonly recording: boolean;
-  readonly transcribing: boolean;
+  /** Live session state machine, independent of the model-setup lifecycle. */
+  readonly sessionStatus: VoiceSessionStatus;
+  /** Current best partial transcript for the active dictated segment. */
+  readonly partialTranscript: string;
+  readonly recordingElapsedMs: number;
+  readonly sessionError: string | null;
   readonly storageBytes: number | null;
   showDisclosure(): void;
   hideDisclosure(): void;
   clearError(): void;
   confirmEnable(): Promise<void>;
+  removeModel(): Promise<void>;
   startRecording(): Promise<void>;
-  stopAndTranscribe(): Promise<string>;
+  /** Stops, finalizes, and returns the transcript. NEVER submits a message. */
+  stopAndFinalize(): Promise<string>;
   cancel(): void;
+  /** Returns the session machine to idle once the composer has consumed the result. */
+  acknowledgeResult(): void;
 }
 
 let dependencies = createUnavailableDependencies();
+let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+let recordingStartedAt = 0;
 
 export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   ...dependencies.lifecycle.getState(),
   disclosureVisible: false,
-  recording: false,
-  transcribing: false,
+  sessionStatus: 'idle',
+  partialTranscript: '',
+  recordingElapsedMs: 0,
+  sessionError: null,
   storageBytes: dependencies.lifecycle.storageBytes,
-  showDisclosure: (): void => set({ disclosureVisible: true, error: null }),
+  showDisclosure: (): void => set({ disclosureVisible: true, error: null, sessionError: null }),
   hideDisclosure: (): void => set({ disclosureVisible: false }),
-  clearError: (): void => set({ error: null }),
+  clearError: (): void => set({ error: null, sessionError: null }),
   confirmEnable: async (): Promise<void> => {
     set({ disclosureVisible: false, error: null });
     try {
       await dependencies.lifecycle.enable();
-      set({ ...dependencies.lifecycle.getState() });
-    } catch {
+    } finally {
       set({ ...dependencies.lifecycle.getState() });
     }
+  },
+  removeModel: async (): Promise<void> => {
+    await dependencies.lifecycle.remove();
+    set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', partialTranscript: '' });
   },
   startRecording: async (): Promise<void> => {
     if (get().status !== 'ready') {
       get().showDisclosure();
       return;
     }
-    const permissionGranted = get().permissionGranted ||
-      await dependencies.lifecycle.requestMicPermission();
+    const permissionGranted =
+      get().permissionGranted || (await dependencies.lifecycle.requestMicPermission());
     if (!permissionGranted) {
-      set({ permissionGranted: false, error: 'Microphone permission is required for voice input.' });
+      set({
+        permissionGranted: false,
+        sessionStatus: 'failed',
+        sessionError: 'Microphone permission is required for voice input.',
+      });
       return;
     }
+    set({
+      sessionStatus: 'preparing',
+      partialTranscript: '',
+      recordingElapsedMs: 0,
+      sessionError: null,
+      permissionGranted: true,
+    });
     try {
-      await dependencies.recording.startRecording();
-      set({ recording: true, error: null, permissionGranted: true });
+      await dependencies.session.start((partialText) => {
+        // Each partial fully replaces the active segment; the composer keeps the
+        // user's typed prefix and only swaps the dictated part.
+        set({ partialTranscript: partialText });
+      });
+      startElapsedTimer(set);
+      set({ sessionStatus: 'recording' });
     } catch (error) {
-      set({ error: toMessage(error), recording: false });
+      stopElapsedTimer();
+      set({ sessionStatus: 'failed', sessionError: toMessage(error), partialTranscript: '' });
     }
   },
-  stopAndTranscribe: async (): Promise<string> => {
-    set({ recording: false, transcribing: true, error: null });
-    try {
-      const path = await dependencies.recording.stopRecording();
-      return await dependencies.transcription.transcribe(path);
-    } catch (error) {
-      set({ error: toMessage(error) });
+  stopAndFinalize: async (): Promise<string> => {
+    if (get().sessionStatus !== 'recording') {
       return '';
-    } finally {
-      set({ transcribing: false });
+    }
+    stopElapsedTimer();
+    set({ sessionStatus: 'transcribing' });
+    try {
+      const transcript = await dependencies.session.stop();
+      // 'ready' — the finalized text is now in the draft; stopping never sends.
+      set({ sessionStatus: 'ready', partialTranscript: transcript });
+      return transcript;
+    } catch (error) {
+      set({ sessionStatus: 'failed', sessionError: toMessage(error) });
+      return '';
     }
   },
   cancel: (): void => {
-    dependencies.recording.cancel();
-    dependencies.transcription.cancel();
-    set({ recording: false, transcribing: false });
+    stopElapsedTimer();
+    void dependencies.session.cancel();
+    set({ sessionStatus: 'cancelled', partialTranscript: '', recordingElapsedMs: 0 });
+  },
+  acknowledgeResult: (): void => {
+    set({ sessionStatus: 'idle', partialTranscript: '', sessionError: null });
   },
 }));
 
@@ -90,10 +129,15 @@ let unsubscribeLifecycle = subscribeToLifecycle(dependencies.lifecycle);
 
 export function configureVoiceDependencies(next: VoiceDependencies): void {
   unsubscribeLifecycle();
+  stopElapsedTimer();
   dependencies = next;
   useVoiceStore.setState({
     ...next.lifecycle.getState(),
     storageBytes: next.lifecycle.storageBytes,
+    sessionStatus: 'idle',
+    partialTranscript: '',
+    recordingElapsedMs: 0,
+    sessionError: null,
     error: null,
   });
   unsubscribeLifecycle = subscribeToLifecycle(next.lifecycle);
@@ -105,32 +149,43 @@ function subscribeToLifecycle(lifecycle: VoiceModelLifecycle): () => void {
   });
 }
 
+function startElapsedTimer(set: (patch: Partial<VoiceStoreState>) => void): void {
+  stopElapsedTimer();
+  recordingStartedAt = Date.now();
+  elapsedTimer = setInterval(() => {
+    set({ recordingElapsedMs: Date.now() - recordingStartedAt });
+  }, 250);
+}
+
+function stopElapsedTimer(): void {
+  if (elapsedTimer !== null) {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+}
+
 function createUnavailableDependencies(): VoiceDependencies {
-  const lifecycle = new VoiceModelLifecycle({
-    storageBytes: null,
-    isReady: async () => false,
-    download: async () => {
-      throw new Error('Offline voice is unavailable until its device-verified model is installed.');
+  const lifecycle = new VoiceModelLifecycle(
+    {
+      storageBytes: null,
+      isReady: async () => false,
+      download: async () => {
+        throw new Error('Offline voice is unavailable until its device-verified model is installed.');
+      },
+      verify: async () => false,
+      remove: async () => undefined,
     },
-    verify: async () => false,
-  }, voicePermissionAdapter);
-  const unavailableRecorder = {
-    start: async (): Promise<void> => {
-      throw new Error('Offline voice recording runtime is unavailable.');
+    voicePermissionAdapter,
+  );
+  const unavailableRuntime: VoiceSessionRuntime = {
+    isAvailable: () => false,
+    start: async (): Promise<VoiceSession> => {
+      throw new Error('The offline voice runtime is unavailable.');
     },
-    stop: async (): Promise<string> => { throw new Error('Voice recording has not started.'); },
-    cancel: (): void => undefined,
-  };
-  const unavailableTranscriber = {
-    transcribe: async (): Promise<string> => {
-      throw new Error('Offline voice transcription runtime is unavailable.');
-    },
-    release: (): void => undefined,
   };
   return {
     lifecycle,
-    recording: new VoiceRecordingService(unavailableRecorder, deviceResourcePolicy),
-    transcription: new VoiceTranscriptionService(unavailableTranscriber, deviceResourcePolicy),
+    session: new VoiceSessionService(unavailableRuntime, deviceResourcePolicy),
   };
 }
 

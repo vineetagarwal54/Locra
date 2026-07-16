@@ -18,6 +18,8 @@ export interface VoiceArtifactAdapter {
   isReady(): Promise<boolean>;
   download(onProgress: (progress: number) => void): Promise<void>;
   verify(): Promise<boolean>;
+  /** Deletes the voice model files. Never touches Qwen artifacts or conversations. */
+  remove(): Promise<void>;
 }
 
 export interface MicrophonePermissionAdapter {
@@ -76,6 +78,24 @@ export class VoiceModelLifecycle {
     const permissionGranted = await this.permission.request();
     this.setState({ permissionGranted });
     return permissionGranted;
+  }
+
+  /**
+   * Removes the offline voice model and returns to the disabled state so the user
+   * can retry setup or free the space. Only the voice artifact is deleted — the
+   * Qwen model, projector, and conversations are never affected.
+   */
+  async remove(): Promise<void> {
+    try {
+      await this.artifact.remove();
+    } finally {
+      this.setState({
+        enabled: false,
+        status: 'disabled',
+        downloadProgress: 0,
+        error: null,
+      });
+    }
   }
 
   private setState(patch: Partial<VoiceModelState>): void {

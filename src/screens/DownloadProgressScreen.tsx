@@ -20,7 +20,7 @@ import { createQwenModelPresentation } from '../model/ModelPresentation';
 import { getStorageAvailability, isStorageError } from '../model/StorageCheck';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useModelStore } from '../store/modelStore';
-import type { ModelDownloadStatus } from '../types/models';
+import type { ModelDownloadStatus, ModelSetupPhase } from '../types/models';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DownloadProgress'>;
 
@@ -32,7 +32,12 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
   const autoStart = route.params?.autoStart ?? false;
 
   const downloadStatus = useModelStore((s) => s.downloadStatus);
+  const setupPhase = useModelStore((s) => s.setupPhase);
   const downloadProgress = useModelStore((s) => s.downloadProgress);
+  const verificationProgress = useModelStore((s) => s.verificationProgress);
+  const verificationArtifactProgress = useModelStore((s) => s.verificationArtifactProgress);
+  const verificationArtifactName = useModelStore((s) => s.verificationArtifactName);
+  const canRetryVerification = useModelStore((s) => s.canRetryVerification);
   const integrityVerified = useModelStore((s) => s.integrityVerified);
   const error = useModelStore((s) => s.error);
   const cellularWarningVisible = useModelStore((s) => s.cellularDownloadWarningVisible);
@@ -42,19 +47,23 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
   const dismissCellularDownloadWarning = useModelStore((s) => s.dismissCellularDownloadWarning);
   const resumeDownload = useModelStore((s) => s.resumeDownload);
   const cancelDownload = useModelStore((s) => s.cancelDownload);
+  const verifyPendingArtifacts = useModelStore((s) => s.verifyPendingArtifacts);
+  const redownload = useModelStore((s) => s.redownload);
 
-  const progress = clampProgress(downloadProgress);
+  const isVerifying = setupPhase === 'verifying';
+  const progress = clampProgress(isVerifying ? verificationProgress : downloadProgress);
   const progressPercent = Math.round(progress * 100);
-  const isReady = downloadStatus === 'downloaded' && integrityVerified;
+  const artifactProgressPercent = Math.round(clampProgress(verificationArtifactProgress) * 100);
+  const isReady = setupPhase === 'ready' && integrityVerified;
   const reduceMotion = useReducedMotion();
 
   // Start from the real current progress so a reattached download never replays
   // its bar from 0 (motion.md §7.5).
   const progressValue = useSharedValue(progress);
   useEffect(() => {
-    const next = Math.max(PROGRESS_MIN_PERCENT / 100, progress);
+    const next = isVerifying ? progress : Math.max(PROGRESS_MIN_PERCENT / 100, progress);
     progressValue.value = reduceMotion ? next : withTiming(next, { duration: PROGRESS_ANIM_MS });
-  }, [progress, progressValue, reduceMotion]);
+  }, [isVerifying, progress, progressValue, reduceMotion]);
   const progressFillStyle = useAnimatedStyle(() => ({
     width: `${progressValue.value * 100}%`,
   }));
@@ -73,7 +82,7 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
     const store = useModelStore.getState();
     if (
       autoStart &&
-      (store.downloadStatus === 'not_started' || store.downloadStatus === 'failed')
+      (store.setupPhase === 'not_installed' || store.setupPhase === 'failed')
     ) {
       void (async () => {
         // Pre-flight free-space gate: route to the recovery screen before
@@ -89,6 +98,14 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
       })();
     }
   }, [autoStart, navigation, presentation.storageRequiredBytes]);
+
+  // Fast bootstrap deliberately stops before SHA-256. Once this screen is
+  // mounted, start (or restart after process death) the native worker.
+  useEffect(() => {
+    if (setupPhase === 'verifying') {
+      void verifyPendingArtifacts();
+    }
+  }, [setupPhase, verifyPendingArtifacts]);
 
   // Setup completed and verified → confirm with the Success screen (design.md §7.6).
   useEffect(() => {
@@ -124,8 +141,16 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
   }, [resumeDownload]);
 
   const onRetry = useCallback((): void => {
-    void startDownload();
-  }, [startDownload]);
+    if (canRetryVerification) {
+      void verifyPendingArtifacts();
+    } else {
+      void startDownload();
+    }
+  }, [canRetryVerification, startDownload, verifyPendingArtifacts]);
+
+  const onRedownload = useCallback((): void => {
+    void redownload();
+  }, [redownload]);
 
   const onWaitForWifi = useCallback((): void => {
     dismissCellularDownloadWarning();
@@ -136,8 +161,8 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
     void confirmCellularDownload();
   }, [confirmCellularDownload]);
 
-  const isFailed = downloadStatus === 'failed';
-  const phase = getPhase(downloadStatus, integrityVerified);
+  const isFailed = setupPhase === 'failed';
+  const phase = getPhase(setupPhase);
 
   return (
     <OnboardingScreen
@@ -146,9 +171,12 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
         cellularWarningVisible ? undefined : (
           <SetupFooter
             status={downloadStatus}
+            setupPhase={setupPhase}
             onCancel={onCancel}
             onResume={onResume}
             onRetry={onRetry}
+            onRedownload={onRedownload}
+            canRetryVerification={canRetryVerification}
           />
         )
       }
@@ -158,7 +186,13 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
       </View>
 
       <Text style={styles.title}>
-        {isFailed ? 'Download needs attention' : 'Downloading Intelligence…'}
+        {isFailed
+          ? 'Setup needs attention'
+          : isVerifying
+            ? 'Verifying model files…'
+            : setupPhase === 'preparing'
+              ? 'Preparing on-device AI…'
+              : 'Downloading model…'}
       </Text>
 
       <View style={styles.chip}>
@@ -198,7 +232,11 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
           <View style={styles.progressCard}>
             <View style={styles.progressHeader}>
               <Text style={styles.progressPercent}>{progressPercent}%</Text>
-              <Text style={styles.progressBytes}>{presentation.formatDownloadedOfTotal(progress)}</Text>
+              <Text style={styles.progressBytes} numberOfLines={1}>
+                {isVerifying
+                  ? verificationArtifactName ?? 'Preparing integrity check…'
+                  : presentation.formatDownloadedOfTotal(progress)}
+              </Text>
             </View>
             <View style={styles.progressTrack}>
               <Animated.View style={[styles.progressFill, progressFillStyle]} />
@@ -209,7 +247,11 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
                 size={designTokens.type.caption.fontSize}
                 color={isFailed ? designTokens.color.error : designTokens.color.textSecondary}
               />
-              <Text style={[styles.phaseText, isFailed && styles.phaseTextError]}>{phase}</Text>
+              <Text style={[styles.phaseText, isFailed && styles.phaseTextError]}>
+                {isVerifying && verificationArtifactName !== null
+                  ? `${phase} ${artifactProgressPercent}%`
+                  : phase}
+              </Text>
             </View>
           </View>
 
@@ -217,8 +259,9 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
             <Text style={styles.errorText}>{error}</Text>
           ) : (
             <Text style={styles.note}>
-              You can leave Locra while the model downloads. Progress will appear in your
-              notifications.
+              {isVerifying
+                ? 'One-time integrity check. Usually takes less than a minute.'
+                : 'You can leave Locra while the model downloads. Progress will appear in your notifications.'}
             </Text>
           )}
         </>
@@ -229,13 +272,41 @@ export function DownloadProgressScreen({ navigation, route }: Props) {
 
 interface SetupFooterProps {
   status: ModelDownloadStatus;
+  setupPhase: ModelSetupPhase;
   onCancel: () => void;
   onResume: () => void;
   onRetry: () => void;
+  onRedownload: () => void;
+  canRetryVerification: boolean;
 }
 
-function SetupFooter({ status, onCancel, onResume, onRetry }: SetupFooterProps) {
+function SetupFooter({
+  status,
+  setupPhase,
+  onCancel,
+  onResume,
+  onRetry,
+  onRedownload,
+  canRetryVerification,
+}: SetupFooterProps) {
+  if (setupPhase === 'verifying' || setupPhase === 'preparing') return null;
   if (status === 'failed') {
+    if (canRetryVerification) {
+      return (
+        <View>
+          <PrimaryButton
+            label="Retry verification"
+            onPress={onRetry}
+            accessibilityLabel="Retry model file verification"
+          />
+          <SecondaryTextButton
+            label="Redownload model"
+            onPress={onRedownload}
+            accessibilityLabel="Delete and redownload the model files"
+          />
+        </View>
+      );
+    }
     return (
       <View>
         <PrimaryButton label="Try again" onPress={onRetry} accessibilityLabel="Try the download again" />
@@ -261,12 +332,13 @@ function clampProgress(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function getPhase(status: ModelDownloadStatus, integrityVerified: boolean): string {
-  if (status === 'downloading') return 'DOWNLOADING';
-  if (status === 'paused') return 'PAUSED';
-  if (status === 'failed') return 'FAILED';
-  if (status === 'downloaded') return integrityVerified ? 'COMPLETE' : 'VERIFYING BLOCKS';
-  return 'PREPARING';
+function getPhase(phase: ModelSetupPhase): string {
+  if (phase === 'downloading') return 'Downloading…';
+  if (phase === 'paused') return 'Download paused';
+  if (phase === 'verifying') return 'Verifying model files…';
+  if (phase === 'failed') return 'Setup needs attention';
+  if (phase === 'ready') return 'Model ready';
+  return 'Preparing download…';
 }
 
 const styles = StyleSheet.create({
@@ -320,6 +392,8 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   progressBytes: {
+    flexShrink: 1,
+    marginLeft: designTokens.spacing.space12,
     color: designTokens.color.textSecondary,
     fontSize: designTokens.type.supporting.fontSize,
     fontVariant: ['tabular-nums'],

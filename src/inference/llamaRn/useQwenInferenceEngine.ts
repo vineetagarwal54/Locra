@@ -1,6 +1,7 @@
 import { File } from 'expo-file-system';
 import { useEffect, useRef } from 'react';
 
+import type { GenerationFinishReason } from '../../types/models';
 import type { EngineGenerateRequest, InferenceEngineHandle } from '../InferenceEngineHandle';
 
 import { QwenLlamaRuntime, type LlamaBinding } from './QwenLlamaRuntime';
@@ -24,6 +25,8 @@ interface EngineState {
   generatedTokens: number;
   promptTokens: number;
   totalTokens: number;
+  finishReason: GenerationFinishReason | null;
+  inputShortenedWarning: string | null;
 }
 
 const INITIAL_ENGINE_STATE: EngineState = {
@@ -34,6 +37,8 @@ const INITIAL_ENGINE_STATE: EngineState = {
   generatedTokens: 0,
   promptTokens: 0,
   totalTokens: 0,
+  finishReason: null,
+  inputShortenedWarning: null,
 };
 
 function loadLlamaBinding(): LlamaBinding {
@@ -93,7 +98,14 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
         }
         const controller = new AbortController();
         abortRef.current = controller;
-        setState({ response: '', generating: true, error: null, generatedTokens: 0 });
+        setState({
+          response: '',
+          generating: true,
+          error: null,
+          generatedTokens: 0,
+          finishReason: null,
+          inputShortenedWarning: null,
+        });
         try {
           const result = await runtime.generate({
             messages: request.messages,
@@ -112,6 +124,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             generatedTokens: result.generatedTokens,
             promptTokens: result.promptTokens,
             totalTokens: result.totalTokens,
+            finishReason: result.finishReason,
+            inputShortenedWarning: result.inputShortenedWarning,
           });
           return result.text;
         } catch (error) {
@@ -137,6 +151,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
       getGeneratedTokenCount: (): number => stateRef.current.generatedTokens,
       getPromptTokenCount: (): number => stateRef.current.promptTokens,
       getTotalTokenCount: (): number => stateRef.current.totalTokens,
+      getFinishReason: (): GenerationFinishReason | null => stateRef.current.finishReason,
+      getInputShortenedWarning: (): string | null => stateRef.current.inputShortenedWarning,
       // Locra owns all conversation context; the runtime keeps no native history.
       getMessageHistoryLength: (): number => 0,
       clearHistory: (): void => {},

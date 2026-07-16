@@ -10,7 +10,6 @@ import { getTotalMemorySync } from 'react-native-device-info';
 
 import { checkDeviceCompatibility } from '../../src/model/DeviceCompatibility';
 import { ModelDownloadManager, type ResourceSource } from '../../src/model/ModelDownloadManager';
-import type { ModelDownloadStatus } from '../../src/types/models';
 
 const mockGetTotalMemorySync = getTotalMemorySync as jest.Mock;
 const GB = 1024 * 1024 * 1024;
@@ -95,7 +94,7 @@ describe('Model lifecycle contract', () => {
 
     await manager.startDownload();
 
-    expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH);
+    expect(verifyIntegrity).toHaveBeenCalledWith(MODEL_PATH, EXPECTED_HASH, expect.any(Function));
     expect(manager.getState()).toEqual(
       expect.objectContaining({
         downloadStatus: 'downloaded',
@@ -107,19 +106,14 @@ describe('Model lifecycle contract', () => {
     expect(manager.isReadyForInference()).toBe(true);
   });
 
-  it('reports failed, not ready, and deletes corrupt bytes before publishing failure', async () => {
+  it('reports a recoverable hash failure without deleting the downloaded bytes', async () => {
     const { manager, verifyIntegrity, deleteResources } = makeManager();
     verifyIntegrity.mockResolvedValue(false);
-    let statusAtDelete: ModelDownloadStatus | null = null;
-    deleteResources.mockImplementation(async () => {
-      statusAtDelete = manager.getState().downloadStatus;
-    });
-
     await manager.startDownload();
 
-    expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
-    expect(statusAtDelete).toBe('downloading');
+    expect(deleteResources).not.toHaveBeenCalled();
     expect(manager.getState().downloadStatus).toBe('failed');
+    expect(manager.getState().canRetryVerification).toBe(true);
     expect(manager.getState().integrityVerified).toBe(false);
     expect(manager.isReadyForInference()).toBe(false);
   });
@@ -139,11 +133,14 @@ describe('Model lifecycle contract', () => {
     listDownloadedModels.mockResolvedValue([]);
     await manager.reconcile();
     expect(manager.getState().downloadStatus).toBe('not_started');
+    expect(manager.getState().setupPhase).toBe('not_installed');
     expect(manager.isReadyForInference()).toBe(false);
 
     listDownloadedModels.mockResolvedValue([MODEL_PATH]);
     getFileSize.mockResolvedValue(EXPECTED_SIZE);
     await manager.reconcile();
+    expect(manager.getState().setupPhase).toBe('verifying');
+    await manager.verifyPendingArtifacts();
     expect(manager.getState().downloadStatus).toBe('downloaded');
     expect(manager.isReadyForInference()).toBe(true);
 
@@ -152,7 +149,8 @@ describe('Model lifecycle contract', () => {
     getFileSize.mockResolvedValue(EXPECTED_SIZE - 1);
     await manager.reconcile();
     expect(deleteResources).toHaveBeenCalledWith(...SOURCES);
-    expect(manager.getState().downloadStatus).toBe('not_started');
+    expect(manager.getState().downloadStatus).toBe('failed');
+    expect(manager.getState().setupPhase).toBe('failed');
   });
 
   it('keeps the model lifecycle boundary free of screen and inference imports', () => {
