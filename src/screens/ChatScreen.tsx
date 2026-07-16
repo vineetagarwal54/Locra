@@ -24,7 +24,6 @@ import { MessageBubble } from '../components/chat/MessageBubble';
 import { OfflineIndicator } from '../components/OfflineIndicator';
 import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
-import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
@@ -42,10 +41,6 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Chat'>;
 // points of the bottom; beyond it we assume they scrolled up to re-read and never
 // force a jump back down.
 const AUTO_FOLLOW_THRESHOLD = 96;
-const diagnosticsAvailable = isDiagnosticsExportAvailable({
-  isDevBuild: __DEV__,
-  isInternalBuild: process.env.EXPO_PUBLIC_INTERNAL_BETA === 'true',
-});
 
 // Id of the most recent user turn, used to detect a freshly sent message
 // (text / image / voice all append a user message) so the list can reveal it.
@@ -334,7 +329,7 @@ export function ChatScreen({ navigation, route }: Props) {
             onRetry={onRetry}
             onRegenerate={onRegenerate}
             onContinue={onContinue}
-            {...(diagnosticsAvailable ? { onReportIssue } : {})}
+            onReportIssue={onReportIssue}
           />
         </View>
       );

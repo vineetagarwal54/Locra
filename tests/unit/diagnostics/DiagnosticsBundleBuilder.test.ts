@@ -1,6 +1,7 @@
 import {
   buildDiagnosticsBundleJson,
   buildDiagnosticsMarkdown,
+  sanitizeSensitive,
   type AppDiagnosticsInfo,
 } from '../../../src/diagnostics/DiagnosticsBundleBuilder';
 import type { DiagnosticTurnRecord } from '../../../src/diagnostics/DiagnosticsTraceStore';
@@ -179,5 +180,34 @@ describe('DiagnosticsBundleBuilder', () => {
     expect(JSON.stringify(bundle)).not.toContain('C:\\Users\\me');
     expect(JSON.stringify(bundle)).not.toContain('file:///data/photo.jpg');
     expect(JSON.stringify(bundle)).toContain('[local path omitted]');
+  });
+
+  it('redacts secrets and tokens from message text before writing', () => {
+    const conversation = makeConversation();
+    conversation.messages[0].text =
+      'Use api_key=sk-ABCDEF123456 and Authorization: Bearer abcdef.ghijkl.mnopqr to call it.';
+    conversation.messages[1].text =
+      'token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadpart.signaturepart';
+
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [conversation],
+      turns: [],
+      appInfo: APP_INFO,
+    });
+    const serialized = JSON.stringify(bundle);
+
+    expect(serialized).not.toContain('sk-ABCDEF123456');
+    expect(serialized).not.toContain('abcdef.ghijkl.mnopqr');
+    expect(serialized).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+    expect(serialized).toContain('[redacted]');
+  });
+
+  it('sanitizeSensitive redacts common credential shapes but leaves plain text intact', () => {
+    expect(sanitizeSensitive('secret=hunter2hunter2')).toBe('secret=[redacted]');
+    expect(sanitizeSensitive('password: correcthorse')).toBe('password=[redacted]');
+    expect(sanitizeSensitive('Bearer abcdef1234567890')).toBe('Bearer [redacted]');
+    expect(sanitizeSensitive('The chair is wooden and brown.')).toBe(
+      'The chair is wooden and brown.',
+    );
   });
 });

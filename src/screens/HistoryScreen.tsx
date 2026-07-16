@@ -14,7 +14,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ConversationListItem } from '../components/ConversationListItem';
 import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
-import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
 import {
   type RecencyBucket,
   groupConversationsByRecency,
@@ -22,8 +21,6 @@ import {
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { useHistoryStore } from '../store/historyStore';
 import type { Conversation } from '../types/models';
-
-const diagnosticsExportAvailable = isDiagnosticsExportAvailable({ isDevBuild: __DEV__ });
 
 type Props = NativeStackScreenProps<RootStackParamList, 'History'>;
 
@@ -120,20 +117,18 @@ export function HistoryScreen({ navigation }: Props) {
         </Pressable>
         <Text style={styles.title}>History</Text>
         <View style={styles.headerActions}>
-          {diagnosticsExportAvailable ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Export diagnostics"
-              style={styles.headerButton}
-              onPress={onOpenDiagnosticsExport}
-            >
-              <MaterialCommunityIcons
-                name="bug-outline"
-                size={20}
-                color={designTokens.color.textSecondary}
-              />
-            </Pressable>
-          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Export diagnostics"
+            style={styles.headerButton}
+            onPress={onOpenDiagnosticsExport}
+          >
+            <MaterialCommunityIcons
+              name="bug-outline"
+              size={20}
+              color={designTokens.color.textSecondary}
+            />
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open benchmarks"

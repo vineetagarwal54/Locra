@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LocraSheet } from '../components/LocraSheet';
 import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
-import { isDiagnosticsExportAvailable } from '../diagnostics/DiagnosticsAvailability';
+import { deleteAllDiagnosticsExports } from '../diagnostics/DiagnosticsExportRuntime';
 import { diagnosticsTraceStore } from '../diagnostics/DiagnosticsTraceStore';
 import { RESPONSE_MODES, type ResponseMode } from '../inference/ResponseMode';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
@@ -28,15 +28,15 @@ import { useSettingsStore } from '../store/settingsStore';
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
 
-const diagnosticsAvailable = isDiagnosticsExportAvailable({
-  isDevBuild: __DEV__,
-  isInternalBuild: process.env.EXPO_PUBLIC_INTERNAL_BETA === 'true',
-});
-
 const maintenance = new SettingsMaintenanceService({
   deleteModel: () => useModelStore.getState().cancelDownload(),
   clearTemporaryFiles: clearLocraTemporaryFiles,
-  clearDiagnostics: async () => diagnosticsTraceStore.clear(),
+  // Clearing diagnostics removes stored traces AND every generated export ZIP,
+  // but never conversations or image files.
+  clearDiagnostics: async () => {
+    diagnosticsTraceStore.clear();
+    deleteAllDiagnosticsExports();
+  },
   clearConversations: async () => useHistoryStore.getState().clear(),
 });
 
@@ -216,11 +216,11 @@ export function SettingsScreen({ navigation, route }: Props) {
           <SettingsActionRow
             icon="bug-outline"
             label="Clear diagnostics"
-            detail="Removes locally stored diagnostic traces only."
+            detail="Removes stored diagnostic traces and exported diagnostic files only."
             disabled={running === 'clear-diagnostics'}
             onPress={() => confirmOperation({
               title: 'Clear diagnostics?',
-              message: 'Stored diagnostic traces will be removed. Conversations are not affected.',
+              message: 'Stored diagnostic traces and any exported diagnostic files will be removed. Conversations are not affected.',
               label: 'Clear diagnostics',
               operation: 'clear-diagnostics',
               successMessage: 'Diagnostics cleared.',
@@ -248,19 +248,15 @@ export function SettingsScreen({ navigation, route }: Props) {
           />
         </View>
 
-        {diagnosticsAvailable ? (
-          <>
-            <SectionLabel>BETA TOOLS</SectionLabel>
-            <View style={styles.card}>
-              <SettingsActionRow
-                icon="archive-arrow-up-outline"
-                label="Export diagnostics"
-                detail="Choose conversations and review what is included."
-                onPress={() => navigation.navigate('DiagnosticsExport')}
-              />
-            </View>
-          </>
-        ) : null}
+        <SectionLabel>DIAGNOSTICS</SectionLabel>
+        <View style={styles.card}>
+          <SettingsActionRow
+            icon="archive-arrow-up-outline"
+            label="Export diagnostics"
+            detail="Choose conversations and review what is included. Nothing is uploaded."
+            onPress={() => navigation.navigate('DiagnosticsExport')}
+          />
+        </View>
 
         <SectionLabel>VERSIONS</SectionLabel>
         <View style={styles.card}>

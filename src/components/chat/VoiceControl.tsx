@@ -1,108 +1,128 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 
-import { designTokens, haptics } from '../../constants/theme';
+import { designTokens } from '../../constants/theme';
 import { openAndroidAppSettings } from '../../platform/AppSettings';
 import { useVoiceStore } from '../../store/voiceStore';
-import { VOICE_INPUT_ENABLED } from '../../voice/voiceFeature';
 import { LocraSheet } from '../LocraSheet';
 
-interface VoiceControlProps {
+import type { VoiceMicMode } from './useVoiceDictation';
+
+interface VoiceMicButtonProps {
+  readonly mode: VoiceMicMode;
   readonly disabled: boolean;
-  readonly onTranscript: (text: string) => void;
+  readonly onPress: () => void;
 }
 
-export function VoiceControl({ disabled, onTranscript }: VoiceControlProps) {
-  const enabled = useVoiceStore((state) => state.enabled);
+/**
+ * The composer's microphone / stop control. Presentational only — all session
+ * orchestration lives in {@link useVoiceDictation}. While recording it becomes a
+ * clear Stop control; while finalizing it shows a busy spinner.
+ */
+export function VoiceMicButton({ mode, disabled, onPress }: VoiceMicButtonProps) {
+  const recording = mode === 'recording';
+  const busy = mode === 'transcribing';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={recording ? 'Stop voice recording' : 'Start voice input'}
+      accessibilityState={{ disabled: disabled || busy }}
+      disabled={disabled || busy}
+      style={({ pressed }) => [
+        styles.button,
+        recording && styles.recording,
+        pressed && !disabled && !busy && styles.pressed,
+        (disabled || busy) && styles.disabled,
+      ]}
+      onPress={onPress}
+    >
+      <MaterialCommunityIcons
+        name={busy ? 'loading' : recording ? 'stop' : 'microphone-outline'}
+        size={22}
+        color={recording ? designTokens.color.onPrimary : designTokens.color.primary}
+      />
+    </Pressable>
+  );
+}
+
+/**
+ * The voice setup + error sheets. Handles explicit model-enable confirmation
+ * (with disclosed storage size), permission recovery via Android settings, and
+ * retry/removal when voice-model setup fails.
+ */
+export function VoiceSheets() {
   const status = useVoiceStore((state) => state.status);
-  const recording = useVoiceStore((state) => state.recording);
-  const transcribing = useVoiceStore((state) => state.transcribing);
-  const error = useVoiceStore((state) => state.error);
+  const modelError = useVoiceStore((state) => state.error);
+  const sessionError = useVoiceStore((state) => state.sessionError);
   const disclosureVisible = useVoiceStore((state) => state.disclosureVisible);
   const storageBytes = useVoiceStore((state) => state.storageBytes);
-  const showDisclosure = useVoiceStore((state) => state.showDisclosure);
   const hideDisclosure = useVoiceStore((state) => state.hideDisclosure);
   const clearError = useVoiceStore((state) => state.clearError);
   const confirmEnable = useVoiceStore((state) => state.confirmEnable);
-  const startRecording = useVoiceStore((state) => state.startRecording);
-  const stopAndTranscribe = useVoiceStore((state) => state.stopAndTranscribe);
-  const busy = disabled || transcribing;
+  const removeModel = useVoiceStore((state) => state.removeModel);
 
-  // Hidden until the offline voice runtime lands (voiceFeature.ts): showing a
-  // control that can only ever error is worse than not showing it at all.
-  if (!VOICE_INPUT_ENABLED) {
-    return null;
-  }
-
-  const onPress = (): void => {
-    void haptics.tap();
-    if (!enabled || status !== 'ready') {
-      showDisclosure();
-      return;
-    }
-    if (recording) {
-      void stopAndTranscribe().then((transcript) => {
-        if (transcript !== '') {
-          onTranscript(transcript);
-        }
-      });
-      return;
-    }
-    void startRecording();
-  };
+  const activeError = sessionError ?? modelError;
+  const isPermissionError = activeError?.toLowerCase().includes('permission') === true;
+  const isSetupError = status === 'error';
 
   return (
     <>
-      <View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={recording ? 'Stop voice recording' : 'Start voice input'}
-          accessibilityState={{ disabled: busy }}
-          disabled={busy}
-          style={({ pressed }) => [
-            styles.button,
-            recording && styles.recording,
-            pressed && !busy && styles.pressed,
-            busy && styles.disabled,
-          ]}
-          onPress={onPress}
-        >
-          <MaterialCommunityIcons
-            name={transcribing ? 'loading' : recording ? 'stop' : 'microphone-outline'}
-            size={22}
-            color={recording ? designTokens.color.onPrimary : designTokens.color.primary}
-          />
-        </Pressable>
-      </View>
-
       <LocraSheet
         visible={disclosureVisible}
         title="Enable offline voice"
         message={
-          'Voice audio stays on this device. Additional local storage is required' +
-          (storageBytes === null ? '.' : ` (${formatStorage(storageBytes)}).`)
+          'Voice runs entirely on this device — audio never leaves your phone. ' +
+          'Setting it up downloads a speech model' +
+          (storageBytes === null ? '.' : ` (about ${formatStorage(storageBytes)}).`) +
+          ' Continue?'
         }
         onRequestClose={hideDisclosure}
         actions={[
-          { label: 'Enable', variant: 'primary', onPress: () => { void confirmEnable(); } },
+          { label: 'Download & enable', variant: 'primary', onPress: () => { void confirmEnable(); } },
           { label: 'Not now', variant: 'quiet', onPress: hideDisclosure },
         ]}
       />
 
       <LocraSheet
-        visible={error !== null && !disclosureVisible}
-        title="Voice unavailable"
-        message={error ?? undefined}
+        visible={activeError !== null && !disclosureVisible}
+        title={isSetupError ? 'Voice setup failed' : 'Voice unavailable'}
+        message={activeError ?? undefined}
         onRequestClose={clearError}
-        actions={error?.toLowerCase().includes('permission') === true
-          ? [
-              { label: 'Open Android settings', variant: 'primary', onPress: () => { void openAndroidAppSettings(); } },
-              { label: 'Dismiss', variant: 'quiet', onPress: clearError },
-            ]
-          : [{ label: 'Dismiss', variant: 'primary', onPress: clearError }]}
+        actions={buildErrorActions({
+          isPermissionError,
+          isSetupError,
+          onRetry: () => { void confirmEnable(); },
+          onRemove: () => { void removeModel(); },
+          onSettings: () => { void openAndroidAppSettings(); },
+          onDismiss: clearError,
+        })}
       />
     </>
   );
+}
+
+function buildErrorActions(input: {
+  isPermissionError: boolean;
+  isSetupError: boolean;
+  onRetry: () => void;
+  onRemove: () => void;
+  onSettings: () => void;
+  onDismiss: () => void;
+}): { label: string; variant: 'primary' | 'quiet' | 'destructive'; onPress: () => void }[] {
+  if (input.isPermissionError) {
+    return [
+      { label: 'Open Android settings', variant: 'primary', onPress: input.onSettings },
+      { label: 'Dismiss', variant: 'quiet', onPress: input.onDismiss },
+    ];
+  }
+  if (input.isSetupError) {
+    return [
+      { label: 'Retry setup', variant: 'primary', onPress: input.onRetry },
+      { label: 'Remove voice model', variant: 'destructive', onPress: input.onRemove },
+      { label: 'Dismiss', variant: 'quiet', onPress: input.onDismiss },
+    ];
+  }
+  return [{ label: 'Dismiss', variant: 'primary', onPress: input.onDismiss }];
 }
 
 function formatStorage(bytes: number): string {
@@ -111,9 +131,14 @@ function formatStorage(bytes: number): string {
 
 const styles = StyleSheet.create({
   button: {
-    width: 48, height: 48, alignItems: 'center', justifyContent: 'center',
-    borderRadius: designTokens.radius.pill, backgroundColor: designTokens.color.surface,
-    borderWidth: designTokens.borderWidth, borderColor: designTokens.color.border,
+    width: designTokens.spacing.space24 * 2,
+    height: designTokens.spacing.space24 * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.surface,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
   recording: { backgroundColor: designTokens.color.primary, borderColor: designTokens.color.primary },
   pressed: { backgroundColor: designTokens.color.divider },
