@@ -1,18 +1,18 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Paths } from 'expo-file-system';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { designTokens, haptics } from '../constants/theme';
+import { voiceModelDirectory } from '../model/voice/VoiceModelArtifact';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import {
   createSherpaVoiceRuntime,
   isVoiceRuntimeAvailable,
   voiceModelIsInstalled,
 } from '../voice/SherpaVoiceRuntime';
-import { DEFAULT_VOICE_MODEL, VOICE_MODEL_DIR_NAME } from '../voice/VoiceModelDescriptor';
+import { DEFAULT_VOICE_MODEL } from '../voice/VoiceModelDescriptor';
 import { VoiceValidationRun, type VoiceValidationReport } from '../voice/VoiceValidationMetrics';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VoiceDiagnostics'>;
@@ -23,7 +23,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'VoiceDiagnostics'>;
 const VALIDATION_DURATION_MS = 8_000;
 
 function modelDirectory(): string {
-  return `${Paths.document.uri}/${VOICE_MODEL_DIR_NAME}/${DEFAULT_VOICE_MODEL.id}`;
+  return voiceModelDirectory(DEFAULT_VOICE_MODEL);
 }
 
 export function VoiceDiagnosticsScreen({ navigation }: Props) {

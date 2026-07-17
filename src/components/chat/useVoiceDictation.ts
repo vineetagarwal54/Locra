@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { AppState } from 'react-native';
 
 import { useVoiceStore } from '../../store/voiceStore';
 import {
   isComposerReadOnlyForVoice,
+  isVoiceSessionActive,
   joinDictation,
   type VoiceSessionStatus,
 } from '../../voice/dictationDraft';
@@ -80,10 +82,28 @@ export function useVoiceDictation(params: {
   }, [acknowledgeResult, draftText, sessionStatus, startRecording, stopAndFinalize]);
 
   const onCancel = useCallback((): void => {
-    cancel();
+    // Restore the pre-recording text immediately, keep the composer locked while
+    // native teardown + lease release run, then return the machine to idle.
     setDraftTextRef.current(typedPrefixRef.current);
-    acknowledgeResult();
+    void cancel().then(() => acknowledgeResult());
   }, [acknowledgeResult, cancel]);
+
+  // Cancel + await native cleanup when the app backgrounds or the composer
+  // unmounts mid-session, so the recorder/recognizer and the exclusive voice-input
+  // lease are always released even if the user never taps cancel/stop (item 10).
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next !== 'active' && isVoiceSessionActive(useVoiceStore.getState().sessionStatus)) {
+        void cancel();
+      }
+    });
+    return () => {
+      subscription.remove();
+      if (isVoiceSessionActive(useVoiceStore.getState().sessionStatus)) {
+        void cancel();
+      }
+    };
+  }, [cancel]);
 
   const readOnly = isComposerReadOnlyForVoice(sessionStatus);
   return {

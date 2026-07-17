@@ -156,7 +156,12 @@ describe('voice session store', () => {
     await useVoiceStore.getState().startRecording();
     session.emit('partial in progress');
 
-    useVoiceStore.getState().cancel();
+    // Cancel awaits native teardown + lease release; the composer stays locked in
+    // 'cancelling' until it resolves, then transitions to 'cancelled'.
+    const cancelling = useVoiceStore.getState().cancel();
+    expect(useVoiceStore.getState().sessionStatus).toBe('cancelling');
+    expect(isComposerReadOnlyForVoice(useVoiceStore.getState().sessionStatus)).toBe(true);
+    await cancelling;
 
     expect(session.cancel).toHaveBeenCalledTimes(1);
     expect(useVoiceStore.getState().sessionStatus).toBe('cancelled');

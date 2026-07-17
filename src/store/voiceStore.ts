@@ -32,7 +32,12 @@ export interface VoiceStoreState extends VoiceModelState {
   startRecording(): Promise<void>;
   /** Stops, finalizes, and returns the transcript. NEVER submits a message. */
   stopAndFinalize(): Promise<string>;
-  cancel(): void;
+  /**
+   * Cancels an in-flight session and AWAITS native recorder/recognizer teardown +
+   * lease release before resolving. The composer stays locked ('cancelling') for
+   * the whole duration and only unlocks once this resolves ('cancelled').
+   */
+  cancel(): Promise<void>;
   /** Returns the session machine to idle once the composer has consumed the result. */
   acknowledgeResult(): void;
 }
@@ -115,10 +120,21 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
       return '';
     }
   },
-  cancel: (): void => {
+  cancel: async (): Promise<void> => {
+    const status = get().sessionStatus;
+    // Only a live session can be cancelled; ignore a repeat cancel already in flight.
+    if (status !== 'preparing' && status !== 'recording' && status !== 'transcribing') {
+      return;
+    }
     stopElapsedTimer();
-    void dependencies.session.cancel();
-    set({ sessionStatus: 'cancelled', partialTranscript: '', recordingElapsedMs: 0 });
+    // Enter the locked 'cancelling' state immediately; the composer stays read-only
+    // until the awaited native teardown + lease release below completes.
+    set({ sessionStatus: 'cancelling', partialTranscript: '', recordingElapsedMs: 0 });
+    try {
+      await dependencies.session.cancel();
+    } finally {
+      set({ sessionStatus: 'cancelled' });
+    }
   },
   acknowledgeResult: (): void => {
     set({ sessionStatus: 'idle', partialTranscript: '', sessionError: null });
