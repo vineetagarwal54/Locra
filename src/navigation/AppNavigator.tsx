@@ -49,9 +49,9 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
-  // Internal validation screen (T092 device gate). The Sherpa/AudioStudio packages
-  // it uses are now installed, and SherpaVoiceRuntime loads them lazily, so the JS
-  // bundle stays resolvable in Expo Go / an unbuilt app.
+  // Internal validation screen (T092 device gate). The whisper.rn/AudioStudio
+  // packages it uses are installed, and WhisperVoiceRuntime loads them lazily, so
+  // the JS bundle stays resolvable in Expo Go / an unbuilt app.
   VoiceDiagnostics: undefined;
   Settings: { conversationId?: string } | undefined;
 };
@@ -154,7 +154,7 @@ export function AppNavigator() {
     let runId = 1;
     async function bootstrapModelState(): Promise<void> {
       reconcileAbandonedAttempts();
-      // Install the real offline-voice dependencies (artifact lifecycle + Sherpa
+      // Install the real offline-voice dependencies (artifact lifecycle + whisper
       // streaming session). Never fatal to startup — on any failure the store keeps
       // its default "unavailable" dependencies and the mic simply stays hidden.
       try {

@@ -38,26 +38,18 @@ export function useVoiceDictation(params: {
 }): VoiceDictation {
   const { draftText, setDraftText } = params;
   const sessionStatus = useVoiceStore((state) => state.sessionStatus);
-  const partialTranscript = useVoiceStore((state) => state.partialTranscript);
   const recordingElapsedMs = useVoiceStore((state) => state.recordingElapsedMs);
   const startRecording = useVoiceStore((state) => state.startRecording);
   const stopAndFinalize = useVoiceStore((state) => state.stopAndFinalize);
   const cancel = useVoiceStore((state) => state.cancel);
   const acknowledgeResult = useVoiceStore((state) => state.acknowledgeResult);
 
-  // The text the user had typed before recording began — never overwritten by the
-  // dictated segment. A ref (not state) so partial updates don't need re-binding.
+  // The text the user had typed before recording began — never overwritten while
+  // recording (the draft is NOT modified during recording), only appended to when
+  // the single final transcript arrives on stop.
   const typedPrefixRef = useRef('');
   const setDraftTextRef = useRef(setDraftText);
   setDraftTextRef.current = setDraftText;
-
-  // Stream partials into the draft only while actively recording; the final text
-  // is applied explicitly on stop so there is no double-write.
-  useEffect(() => {
-    if (sessionStatus === 'recording') {
-      setDraftTextRef.current(joinDictation(typedPrefixRef.current, partialTranscript));
-    }
-  }, [sessionStatus, partialTranscript]);
 
   // A failed session preserves the user's original typed text (FR recovery).
   useEffect(() => {
@@ -71,8 +63,11 @@ export function useVoiceDictation(params: {
       void stopAndFinalize().then((finalTranscript) => {
         if (finalTranscript !== '') {
           setDraftTextRef.current(joinDictation(typedPrefixRef.current, finalTranscript));
+          acknowledgeResult();
         }
-        acknowledgeResult();
+        // Empty result: the store is in a 'failed' state with a friendly "no
+        // speech detected" note that the sheet surfaces — leave it so the user
+        // gets feedback and can retry, instead of silently resetting.
       });
       return;
     }

@@ -48,7 +48,6 @@
         }
       ],
       "expo-sqlite",
-      "@siteed/sherpa-onnx.rn",
       [
         "@siteed/audio-studio",
         {

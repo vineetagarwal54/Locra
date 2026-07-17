@@ -58,8 +58,21 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   hideDisclosure: (): void => set({ disclosureVisible: false }),
   clearError: (): void => set({ error: null, sessionError: null }),
   confirmEnable: async (): Promise<void> => {
-    set({ disclosureVisible: false, error: null });
+    set({ disclosureVisible: false, error: null, sessionError: null });
     try {
+      // Ask for microphone access up front — as part of the single "Download &
+      // enable" tap — so the user is never surprised by a separate permission
+      // prompt the first time they later press the mic.
+      const permissionGranted = await dependencies.lifecycle.requestMicPermission();
+      if (!permissionGranted) {
+        set({
+          ...dependencies.lifecycle.getState(),
+          sessionStatus: 'failed',
+          sessionError:
+            'Microphone permission is needed for voice input. Turn it on in Android settings, then try again.',
+        });
+        return;
+      }
       await dependencies.lifecycle.enable();
     } finally {
       set({ ...dependencies.lifecycle.getState() });
@@ -70,7 +83,13 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', partialTranscript: '' });
   },
   startRecording: async (): Promise<void> => {
-    if (get().status !== 'ready') {
+    const modelStatus = get().status;
+    // Enable/download already running from a previous tap — don't stack another
+    // disclosure or download (this is what caused "tap download twice").
+    if (modelStatus === 'downloading' || modelStatus === 'verifying') {
+      return;
+    }
+    if (modelStatus !== 'ready') {
       get().showDisclosure();
       return;
     }
@@ -111,7 +130,16 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     stopElapsedTimer();
     set({ sessionStatus: 'transcribing' });
     try {
-      const transcript = await dependencies.session.stop();
+      const transcript = (await dependencies.session.stop()).trim();
+      if (transcript === '') {
+        // Recorded fine but whisper found no speech (silence / too short / too
+        // quiet). Give clear feedback instead of silently doing nothing.
+        set({
+          sessionStatus: 'failed',
+          sessionError: 'No speech detected. Tap the mic and speak clearly, then stop.',
+        });
+        return '';
+      }
       // 'ready' — the finalized text is now in the draft; stopping never sends.
       set({ sessionStatus: 'ready', partialTranscript: transcript });
       return transcript;
