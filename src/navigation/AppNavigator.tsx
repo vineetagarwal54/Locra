@@ -14,6 +14,7 @@ import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
 import { runModelBootstrap } from '../model/ModelBootstrap';
+import { configureRealVoiceDependencies } from '../model/voice/VoiceComposition';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
@@ -26,6 +27,7 @@ import { NotificationRationaleScreen } from '../screens/NotificationRationaleScr
 import { PrivacyScreen } from '../screens/PrivacyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
+import { VoiceDiagnosticsScreen } from '../screens/VoiceDiagnosticsScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
 import { reconcileAbandonedAttempts } from '../store/historyStore';
 import { useModelStore } from '../store/modelStore';
@@ -47,9 +49,9 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
-  // Registered only after the Sherpa/AudioStudio native packages are installed —
-  // VoiceDiagnosticsScreen statically requires them, so keeping it out of the live
-  // navigator graph keeps the Android JS bundle resolvable until then.
+  // Internal validation screen (T092 device gate). The Sherpa/AudioStudio packages
+  // it uses are now installed, and SherpaVoiceRuntime loads them lazily, so the JS
+  // bundle stays resolvable in Expo Go / an unbuilt app.
   VoiceDiagnostics: undefined;
   Settings: { conversationId?: string } | undefined;
 };
@@ -75,6 +77,7 @@ const Capture = withErrorBoundary(CaptureScreen);
 const History = withErrorBoundary(HistoryScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
 const DiagnosticsExport = withErrorBoundary(DiagnosticsExportScreen);
+const VoiceDiagnostics = withErrorBoundary(VoiceDiagnosticsScreen);
 const Settings = withErrorBoundary(SettingsScreen);
 
 // Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
@@ -132,6 +135,7 @@ function RootStack() {
       <Stack.Screen name="History" component={History} />
       <Stack.Screen name="Benchmark" component={Benchmark} />
       <Stack.Screen name="DiagnosticsExport" component={DiagnosticsExport} />
+      <Stack.Screen name="VoiceDiagnostics" component={VoiceDiagnostics} />
       <Stack.Screen name="Settings" component={Settings} />
     </Stack.Navigator>
   );
@@ -150,6 +154,14 @@ export function AppNavigator() {
     let runId = 1;
     async function bootstrapModelState(): Promise<void> {
       reconcileAbandonedAttempts();
+      // Install the real offline-voice dependencies (artifact lifecycle + Sherpa
+      // streaming session). Never fatal to startup — on any failure the store keeps
+      // its default "unavailable" dependencies and the mic simply stays hidden.
+      try {
+        configureRealVoiceDependencies();
+      } catch {
+        // Keep the store's unavailable fallback.
+      }
       const modelStore = useModelStore.getState();
       modelStore.initializeQwenBundle();
       const reattached = await modelStore.reattachExistingDownload();

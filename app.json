@@ -47,7 +47,17 @@
           "enableOpenCLAndHexagon": true
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "@siteed/sherpa-onnx.rn",
+      [
+        "@siteed/audio-studio",
+        {
+          "enablePhoneStateHandling": false,
+          "enableNotifications": false,
+          "enableBackgroundAudio": false,
+          "enableDeviceDetection": false
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -7,6 +7,10 @@ export type VoiceSessionStatus =
   | 'preparing'
   | 'recording'
   | 'transcribing'
+  // Cancellation requested; native recorder/recognizer teardown and the exclusive
+  // resource-lease release are still in flight. The composer stays LOCKED through
+  // this state and only unlocks once cleanup resolves (→ 'cancelled').
+  | 'cancelling'
   | 'ready'
   | 'cancelled'
   | 'failed';
@@ -16,6 +20,7 @@ const READ_ONLY_STATUSES: ReadonlySet<VoiceSessionStatus> = new Set([
   'preparing',
   'recording',
   'transcribing',
+  'cancelling',
 ]);
 
 /**
