@@ -1,9 +1,9 @@
-// Real download/verify/persist/remove adapter for the offline Sherpa voice model.
+// Real download/verify/persist/remove adapter for the offline Whisper voice model.
 //
 // Lives OUTSIDE `src/voice` on purpose: the offline architecture guard forbids
 // networking calls inside `src/voice`, and downloading the model is a network
-// operation. The recognizer runtime (`src/voice/SherpaVoiceRuntime.ts`) only ever
-// reads the already-downloaded files from local storage.
+// operation. The recognizer runtime (`src/voice/WhisperVoiceRuntime.ts`) only ever
+// reads the already-downloaded file from local storage.
 //
 // The model is stored in its OWN directory (`locra-voice-models/<id>`), entirely
 // separate from the Qwen language model + vision projector, so voice setup and

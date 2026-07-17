@@ -2,8 +2,8 @@
 //
 // Everything above this line (store, services, UI) depends ONLY on these
 // interfaces — never on the native speech/audio packages directly. The real
-// implementation that wires `@siteed/sherpa-onnx.rn` + `@siteed/audio-studio`
-// lives in SherpaVoiceRuntime.ts and satisfies these contracts; tests inject
+// implementation that wires `whisper.rn` + `@siteed/audio-studio`
+// lives in WhisperVoiceRuntime.ts and satisfies these contracts; tests inject
 // fakes. This keeps the whole pipeline testable without the native modules and
 // lets the recognizer/model be swapped without touching callers.
 

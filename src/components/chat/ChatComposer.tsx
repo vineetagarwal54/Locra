@@ -20,7 +20,7 @@ import { LocraSheet } from '../LocraSheet';
 
 import { ResponseModeSelector } from './ResponseModeSelector';
 import { useVoiceDictation } from './useVoiceDictation';
-import { VoiceMicButton, VoiceSheets } from './VoiceControl';
+import { VoiceMicButton, VoiceRecordingBars, VoiceSheets } from './VoiceControl';
 
 type LockVariant = 'self' | 'elsewhere';
 
@@ -242,11 +242,15 @@ export function ChatComposer({
 
       {voice.micMode !== 'idle' ? (
         <View style={styles.recordingRow}>
-          <View style={styles.recordingDot} />
+          {voice.micMode === 'recording' ? (
+            <VoiceRecordingBars />
+          ) : (
+            <View style={styles.recordingDot} />
+          )}
           <Text style={styles.recordingText}>
             {voice.micMode === 'recording'
               ? `Recording… ${voice.elapsedLabel}`
-              : 'Finishing transcription…'}
+              : 'Transcribing…'}
           </Text>
           {voice.micMode === 'recording' ? (
             <Pressable
@@ -325,7 +329,7 @@ export function ChatComposer({
 
           <View style={styles.controlsSpacer} />
 
-          {/* Right-side vertical action column: microphone directly ABOVE Send. */}
+          {/* Right-side actions on one row: microphone next to Send. */}
           <View style={styles.rightColumn}>
             {voice.enabled ? (
               <VoiceMicButton
@@ -537,6 +541,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   rightColumn: {
+    // Microphone and Send sit side by side on the SAME row as the other controls
+    // (not stacked vertically, which made the composer look off).
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: designTokens.spacing.space8,

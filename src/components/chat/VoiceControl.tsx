@@ -1,5 +1,14 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Pressable, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { designTokens } from '../../constants/theme';
 import { openAndroidAppSettings } from '../../platform/AppSettings';
@@ -45,6 +54,36 @@ export function VoiceMicButton({ mode, disabled, onPress }: VoiceMicButtonProps)
   );
 }
 
+// Animated audio-level bars shown WHILE recording, in place of any live text.
+// The user sees motion + a timer + Stop + Cancel — never a partial transcript.
+const BAR_DELAYS_MS = [0, 110, 220, 110, 0];
+
+export function VoiceRecordingBars() {
+  return (
+    <View style={barStyles.row} accessibilityLabel="Recording audio">
+      {BAR_DELAYS_MS.map((delay, index) => (
+        <RecordingBar key={index} delay={delay} />
+      ))}
+    </View>
+  );
+}
+
+function RecordingBar({ delay }: { delay: number }) {
+  const scale = useSharedValue(0.4);
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (reduceMotion) {
+      scale.value = 0.7;
+      return;
+    }
+    scale.value = withDelay(delay, withRepeat(withTiming(1, { duration: 360 }), -1, true));
+  }, [delay, reduceMotion, scale]);
+
+  const style = useAnimatedStyle(() => ({ transform: [{ scaleY: scale.value }] }));
+  return <Animated.View style={[barStyles.bar, style]} />;
+}
+
 /**
  * The voice setup + error sheets. Handles explicit model-enable confirmation
  * (with disclosed storage size), permission recovery via Android settings, and
@@ -62,7 +101,10 @@ export function VoiceSheets() {
   const removeModel = useVoiceStore((state) => state.removeModel);
 
   const activeError = sessionError ?? modelError;
-  const isPermissionError = activeError?.toLowerCase().includes('permission') === true;
+  const lowerError = activeError?.toLowerCase() ?? '';
+  const isPermissionError =
+    lowerError.includes('permission') || lowerError.includes('microphone access');
+  const isNoSpeech = lowerError.includes('no speech');
   const isSetupError = status === 'error';
 
   return (
@@ -73,8 +115,8 @@ export function VoiceSheets() {
         message={
           'Voice runs entirely on this device — audio never leaves your phone. ' +
           'Setting it up downloads a speech model' +
-          (storageBytes === null ? '.' : ` (about ${formatStorage(storageBytes)}).`) +
-          ' Continue?'
+          (storageBytes === null ? '' : ` (about ${formatStorage(storageBytes)})`) +
+          ' and asks for microphone access. Continue?'
         }
         onRequestClose={hideDisclosure}
         actions={[
@@ -85,7 +127,15 @@ export function VoiceSheets() {
 
       <LocraSheet
         visible={activeError !== null && !disclosureVisible}
-        title={isSetupError ? 'Voice setup failed' : 'Voice unavailable'}
+        title={
+          isPermissionError
+            ? 'Microphone access needed'
+            : isNoSpeech
+              ? 'No speech detected'
+              : isSetupError
+                ? 'Voice setup failed'
+                : 'Voice input'
+        }
         message={activeError ?? undefined}
         onRequestClose={clearError}
         actions={buildErrorActions({
@@ -143,4 +193,19 @@ const styles = StyleSheet.create({
   recording: { backgroundColor: designTokens.color.primary, borderColor: designTokens.color.primary },
   pressed: { backgroundColor: designTokens.color.divider },
   disabled: { opacity: 0.45 },
+});
+
+const barStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: designTokens.spacing.space20,
+  },
+  bar: {
+    width: 3,
+    height: designTokens.spacing.space16,
+    marginRight: 3,
+    borderRadius: designTokens.radius.pill,
+    backgroundColor: designTokens.color.primary,
+  },
 });

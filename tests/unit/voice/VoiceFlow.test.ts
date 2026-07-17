@@ -35,6 +35,12 @@ function readyLifecycle(permissionGranted = true): VoiceModelLifecycle {
   );
 }
 
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 beforeEach(() => {
   jest.useFakeTimers();
 });
@@ -64,7 +70,9 @@ describe('offline voice model lifecycle', () => {
     });
 
     const enabling = useVoiceStore.getState().confirmEnable();
-    await Promise.resolve();
+    // Flush the up-front mic-permission request + the isReady check before the
+    // download's first progress tick is observable.
+    await flushMicrotasks();
 
     expect(useVoiceStore.getState()).toEqual(
       expect.objectContaining({ status: 'downloading', downloadProgress: 0.5 }),
@@ -168,15 +176,16 @@ describe('voice session store', () => {
     expect(useVoiceStore.getState().partialTranscript).toBe('');
   });
 
-  it('fails the session on microphone permission denial without starting a recording', async () => {
+  it('asks for microphone permission up front during enable and fails clearly when denied', async () => {
     const runtime = fakeRuntime(fakeSession());
     configureVoiceDependencies({
       lifecycle: readyLifecycle(false),
       session: new VoiceSessionService(runtime, new SingleFlightResourcePolicy()),
     });
-    await useVoiceStore.getState().confirmEnable();
 
-    await useVoiceStore.getState().startRecording();
+    // Permission is requested as part of "Download & enable", so a denial fails
+    // here (not later on the first mic tap) and never starts a recording.
+    await useVoiceStore.getState().confirmEnable();
 
     expect(useVoiceStore.getState().sessionStatus).toBe('failed');
     expect(useVoiceStore.getState().sessionError).toMatch(/permission/i);
