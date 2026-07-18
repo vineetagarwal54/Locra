@@ -12,6 +12,7 @@ import { FactRepository } from '../persistence/FactRepository';
 import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
+import type { SqliteDriver } from '../persistence/types';
 import { SummaryRepository } from '../persistence/SummaryRepository';
 import type { ConversationCandidate } from '../retrieval/ConversationTargetResolver';
 import type { IHistoryStore } from '../types/interfaces';
@@ -36,14 +37,20 @@ const EMPTY_METRICS: MetricsSummary = {
   averageTotalWallTimeMs: 0,
 };
 
-const driver = getDatabase();
+// Repositories are constructed against a lazy driver so importing screens/stores
+// during the database splash cannot open or use SQLite. The first repository call
+// resolves `getDatabase()`, which rejects access until bootstrap is ready.
+const driver = new Proxy({} as SqliteDriver, {
+  get(_target, property: keyof SqliteDriver): SqliteDriver[keyof SqliteDriver] {
+    return getDatabase()[property];
+  },
+});
 export const conversationRepository = new ConversationRepository(driver, {
   getDefaultResponseMode: () => toStoredMode(useSettingsStore.getState().defaultResponseMode),
   onUnlinkImageFiles: unlinkFiles,
 });
 export const messageRepository = new MessageRepository(driver);
 export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
-imageRepository.reconcileAvailability(fileExists);
 export const evidenceRepository = new EvidenceRepository(driver);
 export const chunkRepository = new ChunkRepository(driver);
 export const embeddingRepository = new EmbeddingRepository(driver);
@@ -84,8 +91,16 @@ export function listAllConversationHeadersForDiagnostics(): Conversation[] {
   return rowsToConversationHeaders(rows);
 }
 
-let conversationCache = createConversationListCache(conversationRepository);
+let conversationCache: ReturnType<typeof createConversationListCache> | null = null;
 const messageCaches = new Map<string, ReturnType<typeof createMessageHistoryCache>>();
+
+function ensureConversationCache(): ReturnType<typeof createConversationListCache> {
+  if (conversationCache === null) {
+    imageRepository.reconcileAvailability(fileExists);
+    conversationCache = createConversationListCache(conversationRepository);
+  }
+  return conversationCache;
+}
 
 export interface HistoryStoreState {
   conversations: Conversation[];
@@ -108,19 +123,19 @@ export interface HistoryStoreState {
 }
 
 export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
-  conversations: rowsToConversationHeaders(conversationCache.items()),
+  conversations: [],
   metricsSummary: EMPTY_METRICS,
-  hasMoreConversations: conversationCache.hasMore(),
+  hasMoreConversations: false,
   refresh: (): void => {
     conversationCache = createConversationListCache(conversationRepository);
     set(listSnapshot());
   },
   loadMore: (): void => {
-    loadMoreConversations(conversationCache, conversationRepository);
+    loadMoreConversations(ensureConversationCache(), conversationRepository);
     set(listSnapshot());
   },
   loadNewer: (): void => {
-    loadNewerConversations(conversationCache, conversationRepository);
+    loadNewerConversations(ensureConversationCache(), conversationRepository);
     set(listSnapshot());
   },
   loadOlderMessages: (conversationId: string): void => {
@@ -187,9 +202,9 @@ export const historyStore: IHistoryStore = {
 
 function listSnapshot(): Pick<HistoryStoreState, 'conversations' | 'metricsSummary' | 'hasMoreConversations'> {
   return {
-    conversations: rowsToConversationHeaders(conversationCache.items()),
+    conversations: rowsToConversationHeaders(ensureConversationCache().items()),
     metricsSummary: EMPTY_METRICS,
-    hasMoreConversations: conversationCache.hasMore(),
+    hasMoreConversations: ensureConversationCache().hasMore(),
   };
 }
 

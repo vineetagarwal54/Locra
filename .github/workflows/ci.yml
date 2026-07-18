@@ -1,0 +1,17 @@
+name: JavaScript checks
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run type-check
+      - run: npx eslint src tests --ext .ts,.tsx
+      - run: npm test
+      - run: npx expo config --type public
+      - run: npx expo export --platform android

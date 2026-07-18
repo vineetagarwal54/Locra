@@ -8,7 +8,7 @@ import {
   toStoredMode,
 } from '../../../src/inference/ResponseMode';
 import { ConversationRepository } from '../../../src/persistence/ConversationRepository';
-import { initializeSchema } from '../../../src/persistence/sqlite/Schema';
+import { initializeSchema } from '../../../src/persistence/sqlite/Migrations';
 import { createTestDatabase, type TestDatabase } from '../../helpers/nodeSqliteDriver';
 
 describe('response modes', () => {

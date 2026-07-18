@@ -6,6 +6,8 @@ import {
   isComposerReadOnlyForVoice,
   isVoiceSessionActive,
   joinDictation,
+  MAX_RECORDING_MS,
+  RECORDING_WARNING_MS,
   type VoiceSessionStatus,
 } from '../../voice/dictationDraft';
 import { VOICE_INPUT_ENABLED } from '../../voice/voiceFeature';
@@ -21,6 +23,10 @@ export interface VoiceDictation {
   readonly active: boolean;
   readonly micMode: VoiceMicMode;
   readonly elapsedLabel: string;
+  /** True during the final seconds before the hard recording limit auto-stops. */
+  readonly nearLimit: boolean;
+  /** Whole seconds left before the auto-stop limit (only meaningful while recording). */
+  readonly secondsRemaining: number;
   readonly onMicPress: () => void;
   readonly onCancel: () => void;
   readonly sessionStatus: VoiceSessionStatus;
@@ -28,9 +34,10 @@ export interface VoiceDictation {
 
 /**
  * Wires the voice store into the composer draft: preserves the text typed BEFORE
- * recording, streams partial transcripts into the active dictated segment while
- * recording, restores the original text on cancel/failure, and applies the final
- * transcript on stop — WITHOUT ever submitting the message.
+ * recording, leaves the draft untouched WHILE recording (there are no live
+ * partials), restores the original text on cancel/failure, and applies the single
+ * final transcript once the session reaches 'ready' — WITHOUT ever submitting the
+ * message. The same 'ready' path covers a manual stop and the 30 s auto-stop.
  */
 export function useVoiceDictation(params: {
   draftText: string;
@@ -50,6 +57,8 @@ export function useVoiceDictation(params: {
   const typedPrefixRef = useRef('');
   const setDraftTextRef = useRef(setDraftText);
   setDraftTextRef.current = setDraftText;
+  const acknowledgeResultRef = useRef(acknowledgeResult);
+  acknowledgeResultRef.current = acknowledgeResult;
 
   // A failed session preserves the user's original typed text (FR recovery).
   useEffect(() => {
@@ -58,23 +67,30 @@ export function useVoiceDictation(params: {
     }
   }, [sessionStatus]);
 
+  // Apply the single final transcript when the session reaches 'ready'. This is
+  // the ONE place text is written, so a manual Stop and the 30 s auto-stop behave
+  // identically (and it never fires more than once per session).
+  useEffect(() => {
+    if (sessionStatus !== 'ready') {
+      return;
+    }
+    const finalTranscript = useVoiceStore.getState().finalTranscript;
+    if (finalTranscript !== '') {
+      setDraftTextRef.current(joinDictation(typedPrefixRef.current, finalTranscript));
+    }
+    acknowledgeResultRef.current();
+  }, [sessionStatus]);
+
   const onMicPress = useCallback((): void => {
     if (sessionStatus === 'recording') {
-      void stopAndFinalize().then((finalTranscript) => {
-        if (finalTranscript !== '') {
-          setDraftTextRef.current(joinDictation(typedPrefixRef.current, finalTranscript));
-          acknowledgeResult();
-        }
-        // Empty result: the store is in a 'failed' state with a friendly "no
-        // speech detected" note that the sheet surfaces — leave it so the user
-        // gets feedback and can retry, instead of silently resetting.
-      });
+      // Just request the stop; the 'ready' effect above applies the transcript.
+      void stopAndFinalize();
       return;
     }
     // Starting: capture the current typed text as the preserved prefix.
     typedPrefixRef.current = draftText;
     void startRecording();
-  }, [acknowledgeResult, draftText, sessionStatus, startRecording, stopAndFinalize]);
+  }, [draftText, sessionStatus, startRecording, stopAndFinalize]);
 
   const onCancel = useCallback((): void => {
     // Restore the pre-recording text immediately, keep the composer locked while
@@ -101,17 +117,22 @@ export function useVoiceDictation(params: {
   }, [cancel]);
 
   const readOnly = isComposerReadOnlyForVoice(sessionStatus);
+  const isRecording = sessionStatus === 'recording';
+  const secondsRemaining = Math.max(0, Math.ceil((MAX_RECORDING_MS - recordingElapsedMs) / 1000));
+  const nearLimit = isRecording && recordingElapsedMs >= MAX_RECORDING_MS - RECORDING_WARNING_MS;
   return {
     enabled: VOICE_INPUT_ENABLED,
     readOnly,
     active: readOnly,
     micMode:
-      sessionStatus === 'recording'
+      isRecording
         ? 'recording'
         : sessionStatus === 'preparing' || sessionStatus === 'transcribing'
           ? 'transcribing'
           : 'idle',
     elapsedLabel: formatElapsed(recordingElapsedMs),
+    nearLimit,
+    secondsRemaining,
     onMicPress,
     onCancel,
     sessionStatus,

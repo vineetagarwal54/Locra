@@ -2,6 +2,13 @@
 // the store/UI so the typed-prefix preservation and read-only rules are unit
 // tested directly (no rendering, no native modules).
 
+// Hard cap on a single recording. Whisper transcribes a completed utterance, and
+// unbounded recordings risk memory blow-ups, so the session auto-stops at this
+// limit and begins transcription.
+export const MAX_RECORDING_MS = 30_000;
+// During the final window before the limit, the composer shows a visible warning.
+export const RECORDING_WARNING_MS = 5_000;
+
 export type VoiceSessionStatus =
   | 'idle'
   | 'preparing'

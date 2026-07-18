@@ -15,9 +15,11 @@ import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
 import { runModelBootstrap } from '../model/ModelBootstrap';
 import { configureRealVoiceDependencies } from '../model/voice/VoiceComposition';
+import { cleanupOrphanedVoiceAudio } from '../model/voice/voiceTempCleanup';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { DatabaseRecoveryScreen } from '../screens/DatabaseRecoveryScreen';
 import { DiagnosticsExportScreen } from '../screens/DiagnosticsExportScreen';
 import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
@@ -29,7 +31,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
 import { VoiceDiagnosticsScreen } from '../screens/VoiceDiagnosticsScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
-import { reconcileAbandonedAttempts } from '../store/historyStore';
+import { useDatabaseBootstrapStore } from '../store/databaseBootstrapStore';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 
@@ -143,6 +145,11 @@ function RootStack() {
 
 export function AppNavigator() {
   const engineReady = useModelStore((s) => s.setupPhase === 'ready' && s.integrityVerified);
+  const databaseStatus = useDatabaseBootstrapStore((s) => s.status);
+  const databaseFailure = useDatabaseBootstrapStore((s) => s.failure);
+  const bootstrapDatabase = useDatabaseBootstrapStore((s) => s.bootstrap);
+  const retryDatabase = useDatabaseBootstrapStore((s) => s.retry);
+  const resetDatabase = useDatabaseBootstrapStore((s) => s.resetLocalData);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -153,12 +160,13 @@ export function AppNavigator() {
     let active = true;
     let runId = 1;
     async function bootstrapModelState(): Promise<void> {
-      reconcileAbandonedAttempts();
       // Install the real offline-voice dependencies (artifact lifecycle + whisper
       // streaming session). Never fatal to startup — on any failure the store keeps
       // its default "unavailable" dependencies and the mic simply stays hidden.
       try {
         configureRealVoiceDependencies();
+        // Sweep any orphaned voice temp audio left by a crash mid-recording.
+        cleanupOrphanedVoiceAudio();
       } catch {
         // Keep the store's unavailable fallback.
       }
@@ -186,6 +194,10 @@ export function AppNavigator() {
     };
   }, []);
 
+  useEffect(() => {
+    void bootstrapDatabase();
+  }, [bootstrapDatabase]);
+
   // Route a foreground return (notification tap during an active background
   // download) to the live download screen. Preserves the background download
   // and reattach behavior — it only navigates, never touches the download.
@@ -210,10 +222,22 @@ export function AppNavigator() {
     return () => subscription.remove();
   }, [navigationRef]);
 
-  if (!bootstrapped) {
+  if (!bootstrapped || databaseStatus === 'initializing') {
     return (
       <ErrorBoundary>
         <SplashScreen />
+      </ErrorBoundary>
+    );
+  }
+
+  if (databaseStatus === 'failed' && databaseFailure !== null) {
+    return (
+      <ErrorBoundary>
+        <DatabaseRecoveryScreen
+          failure={databaseFailure}
+          onRetry={() => { void retryDatabase(); }}
+          onReset={() => { void resetDatabase(); }}
+        />
       </ErrorBoundary>
     );
   }
