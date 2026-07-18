@@ -654,7 +654,7 @@ describe('InferenceQueue two-stage first image turns', () => {
         promptTokens: 44,
         modelId: 'GEMMA4_E2B_MM',
         generationConfigId: 'gemma4-e2b-mm-library-default',
-        pipelineVariantId: 'recommended-sampling-v1',
+        pipelineVariantId: 'qwen-visible-sampling-v2',
         deviceNameModel: 'Pixel 8 Pro',
         appBuildId: 'locra-test-build',
         truncated: false,
@@ -852,6 +852,7 @@ describe('InferenceQueue post-processing (FR-054)', () => {
     expect(state.status).toBe('completed');
     expect(state.response).toBe('The mug is blue and the');
     expect(state.limitWarning).toMatch(/cut off/i);
+    expect(state.finishReason).toBe('length');
   });
 
   it('collapses a looping tail and flags it', async () => {
@@ -871,6 +872,35 @@ describe('InferenceQueue post-processing (FR-054)', () => {
     const state = queue.getState();
     expect(state.response).toBe('It is a red bicycle.');
     expect(state.limitWarning).toMatch(/repeat/i);
+    expect(state.finishReason).toBe('looping');
+  });
+
+  it('stops a streaming cycle early without classifying it as user cancellation', async () => {
+    const sentenceCycle =
+      'The laptop is open. Its screen shows a dark editor. It sits on a wooden desk. ';
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: async (generateRequest, onToken, signal) => {
+        if (generateRequest.kind === 'extraction') {
+          return { response: validExtractionJson, tokenCount: 10 };
+        }
+        onToken(sentenceCycle, 12);
+        onToken(sentenceCycle.repeat(2), 24);
+        onToken(sentenceCycle.repeat(3), 36);
+        expect(signal.aborted).toBe(true);
+        throw new Error('native completion stopped');
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    expect(queue.getState()).toEqual(expect.objectContaining({
+      status: 'completed',
+      finishReason: 'looping',
+      response: sentenceCycle.trim(),
+    }));
+    expect(queue.getState().limitWarning).toMatch(/repeat/i);
   });
 });
 

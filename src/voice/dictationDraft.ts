@@ -59,7 +59,7 @@ export function isComposerReadOnlyForVoice(status: VoiceSessionStatus): boolean 
   return READ_ONLY_STATUSES.has(status);
 }
 
-/** True when a session is in flight (used to disable Send / image / past-chat). */
+/** True when a session is in flight (used to disable Send and image controls). */
 export function isVoiceSessionActive(status: VoiceSessionStatus): boolean {
   return isComposerReadOnlyForVoice(status);
 }

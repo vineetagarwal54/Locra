@@ -19,7 +19,7 @@ export interface VoiceDictation {
   readonly enabled: boolean;
   /** The composer text field must be read-only while this is true. */
   readonly readOnly: boolean;
-  /** A live session holds the composer (disable Send / image / past-chat). */
+  /** A live session holds the composer (disable Send and image controls). */
   readonly active: boolean;
   readonly micMode: VoiceMicMode;
   readonly elapsedLabel: string;

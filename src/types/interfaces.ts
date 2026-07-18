@@ -61,12 +61,11 @@ export interface IConversationStore {
   ): () => void;
   submit(
     conversationId: string | 'new',
-    request: { question: string; imagePath: string | null; conversationTargetId?: string }
+    request: { question: string; imagePath: string | null }
   ): Promise<{
     conversationId: string;
     originatingUserMessageId: string;
     assistantMessageId: string;
-    targetNotice?: string;
   }>;
   retryFailedMessage(conversationId: string, assistantMessageId: string): Promise<void>;
   regenerateResponse(conversationId: string, assistantMessageId: string): Promise<void>;

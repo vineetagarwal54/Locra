@@ -88,6 +88,7 @@ export const inferenceEngineAdapter: InferenceEngineAdapter = {
         pinnedExtraction: null,
         finishReason: handle.getFinishReason?.() ?? null,
         inputShortenedWarning: handle.getInputShortenedWarning?.() ?? null,
+        samplingProfile: handle.getSamplingProfile?.() ?? null,
       };
     } finally {
       unsubscribe();

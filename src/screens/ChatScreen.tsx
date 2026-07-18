@@ -27,7 +27,7 @@ import { designTokens, haptics } from '../constants/theme';
 import type { ResponseMode } from '../inference/ResponseMode';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { conversationStore } from '../store/conversationStore';
-import { listConversationTargets, useHistoryStore } from '../store/historyStore';
+import { useHistoryStore } from '../store/historyStore';
 import type {
   Conversation,
   ConversationMessage,
@@ -58,6 +58,8 @@ export function ChatScreen({ navigation, route }: Props) {
   const historyRevision = useHistoryStore((s) => s.conversations);
   const listRef = useRef<FlatList<ConversationMessage> | null>(null);
   const isNearBottomRef = useRef(true);
+  const pendingInitialPositionRef = useRef(true);
+  const pendingSubmittedTurnRef = useRef(false);
 
   const [runtimeState, setRuntimeState] = useState<ConversationRuntimeState | null>(() =>
     conversationStore.getConversationRuntimeState(conversationId)
@@ -67,7 +69,6 @@ export function ChatScreen({ navigation, route }: Props) {
   const [responseMode, setResponseMode] = useState<ResponseMode>(() =>
     conversationStore.getResponseMode(conversationId)
   );
-  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const { confirm, dialog } = useConfirmSheet();
 
   const conversation = useMemo(
@@ -76,10 +77,6 @@ export function ChatScreen({ navigation, route }: Props) {
         ? null
         : useHistoryStore.getState().getConversation(conversationId),
     [conversationId, historyRevision]
-  );
-  const targetCandidates = useMemo(
-    () => listConversationTargets(conversationId),
-    [conversationId, historyRevision],
   );
 
   useEffect(() => {
@@ -92,9 +89,6 @@ export function ChatScreen({ navigation, route }: Props) {
     setResponseMode(conversationStore.getResponseMode(conversationId));
   }, [conversationId, historyRevision]);
 
-  useEffect(() => {
-    setSelectedTargetId(null);
-  }, [conversationId]);
 
   // FR-031: switching away from and back to a conversation (including the
   // not-yet-created 'new' slot) restores its exact draft from conversationStore.
@@ -109,9 +103,8 @@ export function ChatScreen({ navigation, route }: Props) {
   // ── Smart auto-scroll ──────────────────────────────────────────────────────
   const prevLastUserMessageIdRef = useRef<string | null>(null);
 
-  // Switching/resuming a conversation: baseline the last-user-turn tracker and
-  // jump to the latest message without animation, so a resumed thread opens at
-  // the bottom with no visible jump.
+  // Switching/resuming a conversation: position only after deterministic list
+  // layout/content callbacks. No stale pixel offset is restored.
   useEffect(() => {
     const messages =
       conversationId === 'new'
@@ -119,7 +112,8 @@ export function ChatScreen({ navigation, route }: Props) {
         : (useHistoryStore.getState().getConversation(conversationId)?.messages ?? []);
     prevLastUserMessageIdRef.current = lastUserMessageId(messages);
     isNearBottomRef.current = true;
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+    pendingInitialPositionRef.current = true;
+    pendingSubmittedTurnRef.current = false;
   }, [conversationId]);
 
   // A freshly sent turn (text, image, or voice transcript) appends a new user
@@ -130,7 +124,7 @@ export function ChatScreen({ navigation, route }: Props) {
     if (id !== null && id !== prevLastUserMessageIdRef.current) {
       prevLastUserMessageIdRef.current = id;
       isNearBottomRef.current = true;
-      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+      pendingSubmittedTurnRef.current = true;
     }
   }, [conversation?.messages]);
 
@@ -302,9 +296,19 @@ export function ChatScreen({ navigation, route }: Props) {
     }
   }, [conversationId]);
 
-  const onContentSizeChange = useCallback((): void => {
-    if (isNearBottomRef.current) {
+  const applyPendingListPosition = useCallback((): void => {
+    if (pendingInitialPositionRef.current) {
+      pendingInitialPositionRef.current = false;
+      listRef.current?.scrollToEnd({ animated: false });
+      return;
+    }
+    if (pendingSubmittedTurnRef.current) {
+      pendingSubmittedTurnRef.current = false;
       listRef.current?.scrollToEnd({ animated: true });
+      return;
+    }
+    if (isNearBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
     }
   }, []);
 
@@ -322,7 +326,6 @@ export function ChatScreen({ navigation, route }: Props) {
 
       return (
         <View>
-          {message.role === 'assistant' ? <AssistantIdentityRow /> : null}
           <MessageBubble
             message={message}
             streamingText={streamingText}
@@ -390,7 +393,8 @@ export function ChatScreen({ navigation, route }: Props) {
         }
         onScroll={onScroll}
         scrollEventThrottle={16}
-        onContentSizeChange={onContentSizeChange}
+        onContentSizeChange={applyPendingListPosition}
+        onLayout={applyPendingListPosition}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
       <ChatComposer
@@ -405,9 +409,6 @@ export function ChatScreen({ navigation, route }: Props) {
         onOpenCamera={onOpenCamera}
         onDraftChange={setDraft}
         onConversationResolved={onConversationResolved}
-        targetCandidates={targetCandidates}
-        selectedTargetId={selectedTargetId}
-        onTargetChange={setSelectedTargetId}
         responseMode={responseMode}
         onResponseModeChange={(mode) => {
           conversationStore.setResponseMode(conversationId, mode);

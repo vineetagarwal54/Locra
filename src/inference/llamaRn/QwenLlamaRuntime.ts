@@ -15,6 +15,10 @@
 import type { GenerationFinishReason } from '../../types/models';
 import type { ModelRequestMessage } from '../ContextBuilder';
 import { trimMessagesToContextWithReport } from '../ContextWindow';
+import {
+  samplingProfileForRequestKind,
+  type SamplingProfile,
+} from '../GenerationTuning';
 import { getResponseGenerationLimit, type ResponseMode } from '../ResponseMode';
 
 import {
@@ -69,7 +73,31 @@ export interface QwenNativeTokenData {
 export interface QwenCompletionParams {
   messages: QwenChatMessage[];
   n_predict: number;
-  temperature: number;
+  n_probs?: number;
+  top_k?: number;
+  top_p?: number;
+  min_p?: number;
+  xtc_probability?: number;
+  xtc_threshold?: number;
+  typical_p?: number;
+  temperature?: number;
+  penalty_last_n?: number;
+  penalty_repeat?: number;
+  penalty_freq?: number;
+  penalty_present?: number;
+  mirostat?: number;
+  mirostat_tau?: number;
+  mirostat_eta?: number;
+  dry_multiplier?: number;
+  dry_base?: number;
+  dry_allowed_length?: number;
+  dry_penalty_last_n?: number;
+  dry_sequence_breakers?: string[];
+  top_n_sigma?: number;
+  ignore_eos?: boolean;
+  logit_bias?: number[][];
+  seed?: number;
+  guide_tokens?: number[];
 }
 
 export interface LlamaContextLike {
@@ -107,6 +135,7 @@ export interface QwenGenerateRequest {
   signal: AbortSignal;
   onToken: (cumulativeText: string, generatedTokenCount?: number) => void;
   responseMode: ResponseMode;
+  kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
 }
 
 export interface QwenGenerateResult {
@@ -121,6 +150,7 @@ export interface QwenGenerateResult {
   finishReason: GenerationFinishReason;
   /** Set when the supplied input had to be shortened to fit the context window. */
   inputShortenedWarning: string | null;
+  samplingProfile: SamplingProfile;
 }
 
 // ── Typed errors (surfaced to the queue/store boundary) ──────────────────────
@@ -304,6 +334,7 @@ export class QwenLlamaRuntime {
     // Hard output cap handed to the native runtime. Reaching it means the answer
     // is length-truncated (finishReason === 'length'), never a natural stop.
     const generationLimit = getResponseGenerationLimit(request.responseMode);
+    const samplingProfile = samplingProfileForRequestKind(request.kind);
 
     const onAbort = (): void => {
       this.cancel();
@@ -315,7 +346,9 @@ export class QwenLlamaRuntime {
         {
           messages,
           n_predict: generationLimit,
-          temperature: this.config.temperature,
+          temperature: samplingProfile.temperature,
+          top_p: samplingProfile.topP,
+          top_k: samplingProfile.topK,
         },
         (data) => {
           if (firstTokenAt === null) {
@@ -342,6 +375,7 @@ export class QwenLlamaRuntime {
         streamedTokenCount,
         generationLimit,
         inputShortenedWarning,
+        samplingProfile,
       );
     } catch (error) {
       if (error instanceof QwenGenerationCancelledError) {
@@ -399,6 +433,7 @@ export class QwenLlamaRuntime {
     streamedTokenCount: number,
     generationLimit: number,
     inputShortenedWarning: string | null,
+    samplingProfile: SamplingProfile,
   ): QwenGenerateResult {
     const totalWallTimeMs = this.now() - startedAt;
     const timings = result.timings ?? {};
@@ -424,6 +459,7 @@ export class QwenLlamaRuntime {
       totalWallTimeMs,
       finishReason: resolveFinishReason(result, generatedTokens, generationLimit),
       inputShortenedWarning,
+      samplingProfile,
     };
   }
 }

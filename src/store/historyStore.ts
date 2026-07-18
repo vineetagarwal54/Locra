@@ -12,9 +12,8 @@ import { FactRepository } from '../persistence/FactRepository';
 import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
-import type { SqliteDriver } from '../persistence/types';
 import { SummaryRepository } from '../persistence/SummaryRepository';
-import type { ConversationCandidate } from '../retrieval/ConversationTargetResolver';
+import type { SqliteDriver } from '../persistence/types';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
@@ -65,18 +64,6 @@ export function reconcileAbandonedAttempts(): number {
     conversationCache = createConversationListCache(conversationRepository);
   }
   return reconciled;
-}
-
-/** Bounded metadata-only candidates for the request-scoped past-chat picker. */
-export function listConversationTargets(activeConversationId: string): ConversationCandidate[] {
-  return conversationRepository.findTargetCandidates([], 10)
-    .filter((row) => row.id !== activeConversationId)
-    .map((row) => ({
-      id: row.id,
-      title: row.title,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
 }
 
 /** Complete repository-backed headers for diagnostics selection, independent of UI cache eviction. */

@@ -82,6 +82,10 @@ function collapseProseRepeats(prose: string): string {
   if (prose.trim() === '') {
     return prose;
   }
+  const cycleCollapsed = collapseRepeatedSentenceCycle(prose);
+  if (cycleCollapsed !== null) {
+    return cycleCollapsed;
+  }
   // Alternating [paragraph, separator, paragraph, separator, …]; dropping a
   // duplicate paragraph also drops the blank-line separator that precedes it so
   // no double gap is left behind.
@@ -104,6 +108,46 @@ function collapseProseRepeats(prose: string): string {
     previousKey = key;
   }
   return kept.join('');
+}
+
+/**
+ * Finds a normalized 2-4 sentence block repeated three consecutive times anywhere
+ * in prose. Once a model has entered that cycle, text after its first occurrence
+ * is not useful continuation, so the answer is trimmed at the end of that block.
+ */
+function collapseRepeatedSentenceCycle(prose: string): string | null {
+  const leading = prose.match(/^\s*/)?.[0] ?? '';
+  const trailing = prose.match(/\s*$/)?.[0] ?? '';
+  const body = prose.slice(leading.length, prose.length - trailing.length);
+  const sentences = body.match(/[^.!?â€¦]*[.!?â€¦]+(?=\s|$)|[^.!?â€¦]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter((sentence) => sentence !== '') ?? [];
+
+  for (let start = 0; start < sentences.length; start += 1) {
+    for (let blockLength = 2; blockLength <= 4; blockLength += 1) {
+      if (start + blockLength * MIN_LOOP_REPEATS > sentences.length) {
+        continue;
+      }
+      const block = sentences.slice(start, start + blockLength).map(normalizeForCycle);
+      let matches = true;
+      for (let repeat = 1; repeat < MIN_LOOP_REPEATS && matches; repeat += 1) {
+        for (let offset = 0; offset < blockLength; offset += 1) {
+          if (normalizeForCycle(sentences[start + repeat * blockLength + offset]) !== block[offset]) {
+            matches = false;
+            break;
+          }
+        }
+      }
+      if (matches) {
+        return `${leading}${sentences.slice(0, start + blockLength).join(' ')}${trailing}`;
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeForCycle(sentence: string): string {
+  return normalize(sentence).toLocaleLowerCase();
 }
 
 /** Collapses consecutive identical sentences within a single paragraph to one. */

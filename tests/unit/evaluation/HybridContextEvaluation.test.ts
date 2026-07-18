@@ -6,7 +6,7 @@ import {
 describe('hybrid context evaluation harness', () => {
   it('covers every required repeatable category and summarizes measurements', () => {
     expect(new Set(HYBRID_CONTEXT_CASES.map((item) => item.category))).toEqual(new Set([
-      'short-chat', 'long-chat', 'image-follow-up', 'retry', 'selected-chat',
+      'short-chat', 'long-chat', 'image-follow-up', 'retry',
       'response-mode', 'voice', 'memory', 'storage', 'latency',
     ]));
     const harness = new EvaluationHarness();

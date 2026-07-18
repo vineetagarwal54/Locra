@@ -1,6 +1,6 @@
 // T015 — ConversationRepository against a real (node:sqlite) database.
 
-import { ConversationRepository, normalizeTitle } from '../../../src/persistence/ConversationRepository';
+import { ConversationRepository } from '../../../src/persistence/ConversationRepository';
 import { MessageRepository } from '../../../src/persistence/MessageRepository';
 import type { SqliteDriver } from '../../../src/persistence/types';
 import { createTestDatabase, type TestDatabase } from '../../helpers/nodeSqliteDriver';
@@ -36,12 +36,6 @@ describe('ConversationRepository', () => {
   });
   afterEach(() => db.close());
 
-  it('normalizes titles deterministically', () => {
-    expect(normalizeTitle('  My SSD Chat!! ')).toBe('my ssd chat');
-    expect(normalizeTitle('')).toBeNull();
-    expect(normalizeTitle(null)).toBeNull();
-  });
-
   it('creates a conversation copying the global default mode (lowercase)', () => {
     const repo = new ConversationRepository(db.driver, {
       getDefaultResponseMode: () => 'high',
@@ -49,7 +43,7 @@ describe('ConversationRepository', () => {
     });
     const created = repo.createConversation({ id: 'c1', title: 'Trip' });
     expect(created.response_mode).toBe('high');
-    expect(created.normalized_title).toBe('trip');
+    expect(created.normalized_title).toBeNull();
 
     const fetched = repo.getConversation('c1');
     expect(fetched).not.toBeNull();

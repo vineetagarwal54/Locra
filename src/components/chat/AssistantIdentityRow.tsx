@@ -28,18 +28,18 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: designTokens.spacing.space8,
+    marginBottom: designTokens.spacing.space4,
   },
   iconWrap: {
-    width: designTokens.spacing.space24,
-    height: designTokens.spacing.space24,
+    width: designTokens.spacing.space20,
+    height: designTokens.spacing.space20,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: designTokens.radius.circular,
     backgroundColor: designTokens.color.surface,
     borderWidth: designTokens.borderWidth,
     borderColor: designTokens.color.border,
-    marginRight: designTokens.spacing.space8,
+    marginRight: designTokens.spacing.space4,
   },
   label: {
     color: designTokens.color.textSecondary,
