@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: designTokens.spacing.space4,
-    minHeight: designTokens.spacing.space24 + designTokens.spacing.space16,
+    minHeight: designTokens.spacing.space24 + designTokens.spacing.space20,
     paddingVertical: designTokens.spacing.space4,
     paddingLeft: designTokens.spacing.space16,
     paddingRight: designTokens.spacing.space12,

@@ -35,4 +35,8 @@ export interface ObjectiveInferenceResultRecord {
   pipelineVariantId: string;
   deviceNameModel: string;
   appBuildId: string;
+  responseMode?: import('./ResponseMode').ResponseMode;
+  targetTokenCount?: number;
+  generationLimit?: number;
+  samplingProfile?: import('./GenerationTuning').SamplingProfile;
 }

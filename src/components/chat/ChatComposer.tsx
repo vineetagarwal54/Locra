@@ -12,11 +12,9 @@ import { KeyboardStickyView } from 'react-native-keyboard-controller';
 
 import { designTokens, haptics } from '../../constants/theme';
 import type { ResponseMode } from '../../inference/ResponseMode';
-import type { ConversationCandidate } from '../../retrieval/ConversationTargetResolver';
 import { conversationStore } from '../../store/conversationStore';
 import { useMediaStore } from '../../store/mediaStore';
 import type { Draft } from '../../types/models';
-import { LocraSheet } from '../LocraSheet';
 
 import { ResponseModeSelector } from './ResponseModeSelector';
 import { useVoiceDictation } from './useVoiceDictation';
@@ -38,9 +36,6 @@ interface ChatComposerProps {
   onOpenCamera: () => void;
   onDraftChange: (draft: Draft) => void;
   onConversationResolved: (conversationId: string) => void;
-  targetCandidates: readonly ConversationCandidate[];
-  selectedTargetId: string | null;
-  onTargetChange: (conversationId: string | null) => void;
   responseMode: ResponseMode;
   onResponseModeChange: (mode: ResponseMode) => void;
 }
@@ -57,16 +52,12 @@ export function ChatComposer({
   onOpenCamera,
   onDraftChange,
   onConversationResolved,
-  targetCandidates,
-  selectedTargetId,
-  onTargetChange,
   responseMode,
   onResponseModeChange,
 }: ChatComposerProps) {
   const pickImageFromLibrary = useMediaStore((s) => s.pickImageFromLibrary);
   const discardTemporaryImage = useMediaStore((s) => s.discardTemporaryImage);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
-  const [targetPickerVisible, setTargetPickerVisible] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -81,14 +72,13 @@ export function ChatComposer({
 
   const voice = useVoiceDictation({ draftText: draft.text, setDraftText: onChangeText });
 
-  // Voice holds the composer exclusively: disable Send / image / past-chat while a
+  // Voice holds the composer exclusively: disable Send and image controls while a
   // session is active, and make the field read-only while recording/finalizing so
   // the partial transcript cannot be edited — but never lock text editing otherwise.
   const canSend =
     !locked && !submitting && !voice.active && (draft.text.trim() !== '' || draft.imagePath !== null);
   const controlsDisabled = locked || submitting || voice.active;
   const inputEditable = !locked && !submitting && !voice.readOnly;
-  const selectedTarget = targetCandidates.find((candidate) => candidate.id === selectedTargetId);
 
   const setDraftImage = useCallback(
     (imagePath: string | null): void => {
@@ -136,11 +126,9 @@ export function ChatComposer({
       .submit(conversationId, {
         question,
         imagePath,
-        ...(selectedTargetId === null ? {} : { conversationTargetId: selectedTargetId }),
       })
       .then((result) => {
-        setSendError(result.targetNotice ?? null);
-        onTargetChange(null);
+        setSendError(null);
         onDraftChange(conversationStore.getDraft(conversationId));
         onConversationResolved(result.conversationId);
       })
@@ -158,8 +146,6 @@ export function ChatComposer({
     draft.text,
     onConversationResolved,
     onDraftChange,
-    onTargetChange,
-    selectedTargetId,
   ]);
 
   return (
@@ -192,29 +178,6 @@ export function ChatComposer({
               if (draft.imagePath !== null) void discardTemporaryImage(draft.imagePath);
               setDraftImage(null);
             }}
-          >
-            <MaterialCommunityIcons name="close" size={16} color={designTokens.color.primary} />
-          </Pressable>
-        </View>
-      ) : null}
-
-      {selectedTarget !== undefined ? (
-        <View style={styles.attachmentPill}>
-          <MaterialCommunityIcons name="message-text-outline" size={16} color={designTokens.color.primary} />
-          <Text style={styles.attachmentText} numberOfLines={1}>
-            Using: {selectedTarget.title}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Remove past conversation target"
-            disabled={controlsDisabled}
-            hitSlop={designTokens.spacing.space8}
-            style={({ pressed }) => [
-              styles.attachmentRemove,
-              pressed && !controlsDisabled && styles.attachmentRemovePressed,
-              controlsDisabled && styles.disabled,
-            ]}
-            onPress={() => onTargetChange(null)}
           >
             <MaterialCommunityIcons name="close" size={16} color={designTokens.color.primary} />
           </Pressable>
@@ -310,25 +273,6 @@ export function ChatComposer({
             onChange={onResponseModeChange}
           />
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Use a past conversation"
-            accessibilityState={{ disabled: controlsDisabled || targetCandidates.length === 0 }}
-            disabled={controlsDisabled || targetCandidates.length === 0}
-            style={({ pressed }) => [
-              styles.iconButton,
-              pressed && !controlsDisabled && styles.iconButtonPressed,
-              (controlsDisabled || targetCandidates.length === 0) && styles.disabled,
-            ]}
-            onPress={() => setTargetPickerVisible(true)}
-          >
-            <MaterialCommunityIcons
-              name="message-text-outline"
-              size={22}
-              color={designTokens.color.primary}
-            />
-          </Pressable>
-
           <View style={styles.controlsSpacer} />
 
           {/* Right-side actions on one row: microphone next to Send. */}
@@ -385,24 +329,6 @@ export function ChatComposer({
           setSourceModalVisible(false);
         }}
       />
-      <LocraSheet
-        visible={targetPickerVisible}
-        title="Use a past conversation"
-        message="Choose one conversation to use for this request only."
-        onRequestClose={() => setTargetPickerVisible(false)}
-      >
-        {targetCandidates.map((candidate) => (
-          <SourceButton
-            key={candidate.id}
-            icon="message-text-outline"
-            label={candidate.title}
-            onPress={() => {
-              onTargetChange(candidate.id);
-              setTargetPickerVisible(false);
-            }}
-          />
-        ))}
-      </LocraSheet>
     </KeyboardStickyView>
   );
 }
@@ -463,8 +389,8 @@ function SourceButton({ icon, label, onPress, quiet = false }: SourceButtonProps
 const styles = StyleSheet.create({
   dock: {
     paddingHorizontal: designTokens.spacing.space16,
-    paddingTop: designTokens.spacing.space12,
-    paddingBottom: designTokens.spacing.space12,
+    paddingTop: designTokens.spacing.space8,
+    paddingBottom: designTokens.spacing.space8,
     backgroundColor: designTokens.color.canvas,
     // borderTopWidth: designTokens.borderWidth,
     borderTopColor: designTokens.color.divider,
@@ -533,7 +459,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: designTokens.spacing.space8,
-    minHeight: designTokens.spacing.space24 + designTokens.spacing.space16,
+    minHeight: designTokens.spacing.space24 + designTokens.spacing.space20,
     paddingHorizontal: designTokens.spacing.space8,
     paddingVertical: designTokens.spacing.space4,
     // borderTopWidth: designTokens.borderWidth,
@@ -578,8 +504,8 @@ const styles = StyleSheet.create({
     fontWeight: designTokens.type.bodyStrong.fontWeight,
   },
   iconButton: {
-    width: designTokens.spacing.space24 + designTokens.spacing.space16,
-    height: designTokens.spacing.space24 + designTokens.spacing.space16,
+    width: designTokens.spacing.space24 + designTokens.spacing.space20,
+    height: designTokens.spacing.space24 + designTokens.spacing.space20,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: designTokens.radius.pill,
@@ -591,10 +517,10 @@ const styles = StyleSheet.create({
     backgroundColor: designTokens.color.divider,
   },
   input: {
-    minHeight: designTokens.spacing.space24 * 2,
+    minHeight: designTokens.type.body.lineHeight + designTokens.spacing.space16,
     maxHeight: designTokens.spacing.space24 * 5,
     paddingHorizontal: designTokens.spacing.space16,
-    paddingVertical: designTokens.spacing.space12,
+    paddingVertical: designTokens.spacing.space8,
     color: designTokens.color.textPrimary,
     fontSize: designTokens.type.body.fontSize,
     lineHeight: designTokens.type.body.lineHeight,
@@ -604,8 +530,8 @@ const styles = StyleSheet.create({
     color: designTokens.color.textSecondary,
   },
   sendButton: {
-    width: designTokens.spacing.space24 * 2,
-    height: designTokens.spacing.space24 * 2,
+    width: designTokens.spacing.space24 + designTokens.spacing.space20,
+    height: designTokens.spacing.space24 + designTokens.spacing.space20,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: designTokens.radius.pill,
@@ -615,8 +541,8 @@ const styles = StyleSheet.create({
     backgroundColor: designTokens.color.primarySoft,
   },
   stopButton: {
-    width: designTokens.spacing.space24 * 2,
-    height: designTokens.spacing.space24 * 2,
+    width: designTokens.spacing.space24 + designTokens.spacing.space20,
+    height: designTokens.spacing.space24 + designTokens.spacing.space20,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: designTokens.radius.pill,

@@ -6,12 +6,14 @@ import type { Conversation, ConversationMessage, MessageRow } from '../types/mod
 
 type DiagnosticConversations = Pick<ConversationRepository, 'getConversation'>;
 type DiagnosticMessages = Pick<MessageRepository, 'listMessages'>;
+type DiagnosticImages = { getAssetsForMessage(messageId: string): ReadonlyArray<{ available?: number }> };
 
 /** Reads complete selected transcripts from SQL pages, never from bounded UI caches. */
 export class DiagnosticsRepositoryReader {
   constructor(
     private readonly conversations: DiagnosticConversations,
     private readonly messages: DiagnosticMessages,
+    private readonly images?: DiagnosticImages,
   ) {}
 
   read(conversationIds: ReadonlyArray<string>): Conversation[] {
@@ -21,24 +23,34 @@ export class DiagnosticsRepositoryReader {
         return [];
       }
       const rows = this.readAllMessages(conversationId);
-      const messages = rows.map(toDiagnosticMessage);
-      const latest = messages.at(-1);
+      const messages = rows.map((row) => toDiagnosticMessage(row, this.images));
+      const activeAttempts = rows.filter(
+        (row) => row.role === 'assistant' && row.is_active_attempt === 1,
+      );
+      const hasGenerating = activeAttempts.some((attempt) => attempt.status === 'generating');
+      const hasCompleted = rows.some(
+        (row) => row.role === 'assistant' && row.status === 'completed',
+      );
+      const latestActive = activeAttempts.sort((left, right) =>
+        right.created_at - left.created_at || right.id.localeCompare(left.id))[0];
       return [{
         id: conversation.id,
         title: conversation.title,
         createdAt: conversation.created_at,
         updatedAt: conversation.updated_at,
         messages,
-        status: latest?.status === 'generating'
+        status: hasGenerating
           ? 'streaming'
-          : latest?.status === 'failed'
+          : hasCompleted
+            ? 'completed'
+            : latestActive?.status === 'failed'
             ? 'errored'
-            : latest?.status === 'interrupted'
+            : latestActive?.status === 'interrupted'
               ? 'cancelled'
               : messages.length === 0
                 ? 'idle'
                 : 'completed',
-        errorMessage: latest?.errorMessage ?? null,
+        errorMessage: latestActive?.error_message ?? null,
         metrics: null,
         flagged: false,
         flagNote: null,
@@ -64,12 +76,15 @@ export class DiagnosticsRepositoryReader {
   }
 }
 
-function toDiagnosticMessage(row: MessageRow): ConversationMessage {
+function toDiagnosticMessage(row: MessageRow, images?: DiagnosticImages): ConversationMessage {
+  const imageAssets = row.role === 'user' ? images?.getAssetsForMessage(row.id) ?? [] : [];
   return {
     id: row.id,
     role: row.role,
     text: row.text,
-    attachments: [],
+    attachments: imageAssets.map((asset) => ({
+      kind: 'image', path: '', available: asset.available !== 0,
+    })),
     status: row.role === 'user'
       ? 'completed'
       : row.status === 'submitted'
@@ -77,5 +92,6 @@ function toDiagnosticMessage(row: MessageRow): ConversationMessage {
         : row.status,
     errorMessage: row.error_message,
     createdAt: row.created_at,
+    finishReason: row.finish_reason,
   };
 }

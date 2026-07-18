@@ -47,12 +47,12 @@ A user can continue a long conversation and receive an answer that uses the curr
 
 **Acceptance Scenarios**
 
-1. Context is assembled in this fixed order: current request, recent exact visible turns, explicitly referenced image evidence, relevant same-chat retrieved items, explicitly selected past-chat items, durable facts and an eligible older-range summary.
+1. Context is assembled in this fixed order: current request, recent exact visible turns, explicitly referenced image evidence, relevant same-chat retrieved items, durable facts and an eligible older-range summary.
 2. Exact recent turns are never replaced by vector retrieval.
 3. Metadata scope is applied before similarity scoring.
 4. Retrieval uses a fixed threshold, mode-specific result limit, source-message deduplication and deterministic tie-breaking.
 5. If embeddings are unavailable, stale or still being built, Locra falls back to the existing deterministic lexical retrieval and exact context instead of failing.
-6. Identical stored state, request, selected conversation target, response mode and embedding version produce identical context selection and ordering.
+6. Identical stored state, request, response mode and embedding version produce identical context selection and ordering.
 7. When the budget is exceeded, lower-priority items are removed first while the current request, explicit image references and configured recent-turn floor remain.
 
 ---
@@ -105,23 +105,6 @@ Each conversation can use its own response depth without changing the model or a
 
 ---
 
-### User Story 7 — Explicit retrieval from one past conversation (Priority: P3)
-
-A user can ask Locra to use a specific earlier chat, such as an SSD chat or Niagara trip chat, without enabling automatic search across unrelated conversations.
-
-**Acceptance Scenarios**
-
-1. Cross-chat retrieval is off by default.
-2. The user may select a past chat through a chat picker or explicitly name one in the request.
-3. Candidate resolution uses bounded conversation metadata search over normalized title keywords and dates and returns at most 10 candidates.
-4. If exactly one conversation is resolved confidently, retrieval is restricted to that stable conversation ID.
-5. If multiple conversations match, Locra requires user selection and performs no content retrieval until selection.
-6. This feature targets one selected past conversation per request; unrestricted "search all chats" is outside this feature.
-7. Retrieved items preserve source conversation/message/image/timestamp references and are request-scoped.
-8. Past-chat content is never permanently merged into the active conversation's summary, durable facts or active image state.
-
----
-
 ### User Story 8 — Fully offline voice input (Priority: P3)
 
 A user can record speech, receive editable local transcription and explicitly submit it through the same pipeline as typed text.
@@ -148,8 +131,6 @@ A user can record speech, receive editable local transcription and explicitly su
 - A valid older-range summary remains valid when unrelated new turns are appended outside its range.
 - An active retry change inside a summarized range invalidates that summary and facts derived from the superseded visible attempt.
 - Missing image files never cause another image to be silently substituted.
-- Ambiguous chat names open a bounded picker rather than guessing.
-- A deleted selected chat causes the request to continue without cross-chat context and displays a clear notice.
 - Voice model download or permission failure does not modify the current draft.
 - Database schema changes during development may trigger a clearly documented destructive SQL reset.
 
@@ -209,14 +190,6 @@ A user can record speech, receive editable local transcription and explicitly su
 - **FR-035**: Mode changes MUST affect only future requests in that conversation.
 - **FR-036**: Modes MUST use the same model and differ only by bounded context/retrieval/generation configuration. Context budget "units" are character-based estimates measured by the existing `CharacterContextBudgetPolicy` (message text length), NOT tokenizer tokens.
 
-### Explicit past-chat targeting
-
-- **FR-037**: Cross-chat retrieval MUST require an explicitly resolved single target conversation.
-- **FR-038**: Candidate lookup MUST be bounded to at most 10 metadata candidates.
-- **FR-039**: Ambiguity MUST require user selection before content retrieval.
-- **FR-040**: Targeted content MUST be request-scoped and source-attributed.
-- **FR-041**: Automatic or unrestricted all-chat vector retrieval is out of scope.
-
 ### Voice and resource safety
 
 - **FR-042**: Voice transcription MUST be fully on-device after explicit model setup.
@@ -228,7 +201,7 @@ A user can record speech, receive editable local transcription and explicitly su
 ### Evaluation
 
 - **FR-047**: Baselines MUST be recorded before replacing MMKV/lexical context.
-- **FR-048**: Evaluation MUST cover short chat, long chat, image follow-ups, retries, selected past-chat retrieval, all modes, voice, memory, storage and latency.
+- **FR-048**: Evaluation MUST cover short chat, long chat, image follow-ups, retries, all modes, voice, memory, storage and latency.
 - **FR-049**: The new pipeline MUST not regress existing short-chat and first-image-answer quality.
 
 ## Key Entities
@@ -243,7 +216,6 @@ A user can record speech, receive editable local transcription and explicitly su
 - Versioned embedding
 - Older-range summary
 - Durable fact and fact-source link
-- Request-scoped conversation target
 - Per-conversation response mode
 - Voice model state and editable transcript
 - Evaluation case
@@ -259,10 +231,10 @@ A user can record speech, receive editable local transcription and explicitly su
 - **SC-007**: Same inputs produce identical context source selection and ordering.
 - **SC-008**: Image follow-ups reuse stored evidence in 100% of applicable tests.
 - **SC-009**: Summary jobs run only at pinned triggers and new turns outside a covered range do not invalidate the summary.
-- **SC-010**: Targeted cross-chat retrieval searches only the selected conversation and produces zero unrelated-chat leakage.
+- **SC-010**: Retrieval for a chat searches only that active conversation and produces zero other-conversation leakage.
 - **SC-011**: Each conversation retains its own mode and switching modes preserves all existing state.
 - **SC-012**: Voice works offline, never auto-submits and causes zero protected-operation overlap.
-- **SC-013**: Retrieval/assembly completes within 1.5 seconds for active chat and 2 seconds for a selected past chat over the evaluation dataset.
+- **SC-013**: Retrieval/assembly completes within 1.5 seconds for the active chat over the evaluation dataset.
 - **SC-014**: Deleting a conversation leaves zero database or image-file orphans.
 - **SC-015**: Zero network calls occur in normal persistence, retrieval, embedding, compaction, voice transcription, image understanding or answer generation. This is enforced by an automated architecture guard (persistence/retrieval/embedding/compaction/voice modules MUST NOT import or call networking modules) plus final airplane-mode device validation.
 

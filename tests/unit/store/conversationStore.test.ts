@@ -241,66 +241,17 @@ describe('conversationStore', () => {
     );
   });
 
-  it('continues without cross-chat context when a selected target was deleted', async () => {
-    const queue = new FakeInferenceQueue();
-    const history = new FakeHistoryStore();
-    const ids = [...ID_SEQUENCE];
-    const store = createConversationStore({
-      inferenceQueue: queue,
-      historyStore: history,
-      now: () => 1_700_000_000_000,
-      createId: () => ids.shift() ?? `id-${ids.length}`,
-      targetResolver: { resolve: () => ({ kind: 'not-found' }) },
-    });
+  it('treats references to another chat as ordinary same-chat prompts', async () => {
+    const { store, queue } = makeStore();
 
-    const result = await store.submit('new', {
-      question: 'Use that trip conversation.',
-      imagePath: null,
-      conversationTargetId: 'deleted-conversation',
-    });
-
-    expect(result.targetNotice).toMatch(/no longer available/i);
-    expect(queue.submitted).toHaveLength(1);
-  });
-
-  it('asks which past chat when ambiguous, then resumes with the chosen one', async () => {
-    const queue = new FakeInferenceQueue();
-    const history = new FakeHistoryStore();
-    const ids = ['conversation-a', 'user-a', 'assistant-a', 'request-b', 'user-b', 'assistant-b'];
-    const store = createConversationStore({
-      inferenceQueue: queue,
-      historyStore: history,
-      now: () => 1_700_000_000_000,
-      createId: () => ids.shift() ?? `id-${ids.length}`,
-      targetResolver: {
-        resolve: () => ({
-          kind: 'ambiguous',
-          candidates: [
-            { id: 'japan', title: 'Japan trip', createdAt: 1, updatedAt: 2 },
-            { id: 'japan2', title: 'Japan plans', createdAt: 1, updatedAt: 3 },
-          ],
-        }),
-      },
-    });
-
-    // Ambiguous reference -> a clarification turn is posted, no generation runs.
-    const first = await store.submit('new', {
-      question: 'Do you remember our previous chats?',
+    await store.submit('new', {
+      question: 'Use the details from my previous trip chat.',
       imagePath: null,
     });
-    expect(queue.submitted).toHaveLength(0);
-    expect(store.isAnyGenerationInFlight()).toBe(false);
-    const assistant = history
-      .get(first.conversationId)
-      ?.messages.find((message) => message.role === 'assistant');
-    expect(assistant?.status).toBe('completed');
-    expect(assistant?.text).toMatch(/Japan trip/);
-    expect(assistant?.text).toMatch(/Japan plans/);
 
-    // The next reply selects a remembered candidate and generation resumes.
-    const second = await store.submit(first.conversationId, { question: '2', imagePath: null });
-    expect(second.conversationId).toBe(first.conversationId);
     expect(queue.submitted).toHaveLength(1);
+    expect(queue.submitted[0]?.question).toBe('Use the details from my previous trip chat.');
+    expect(queue.submitted[0]).not.toHaveProperty('conversationTargetId');
   });
 
   it('records a benchmark only for a completed attempt, never a failed one', async () => {
@@ -647,7 +598,7 @@ describe('conversationStore', () => {
     );
   });
 
-  it('does not persist a diagnostic turn when no trace was captured', async () => {
+  it('persists a production-safe diagnostic summary when no raw trace was captured', async () => {
     const setSpy = jest.spyOn(storage, 'set');
     setSpy.mockClear();
     const { store, queue } = makeStore();
@@ -658,6 +609,45 @@ describe('conversationStore', () => {
     const recordCall = setSpy.mock.calls.find(([key]) =>
       String(key).startsWith('diagnostics:turn:record:'),
     );
-    expect(recordCall).toBeUndefined();
+    expect(recordCall).toBeDefined();
+    const persisted = JSON.parse(String(recordCall?.[1])) as {
+      trace: unknown;
+      summary: { responseMode: string; targetTokenCount: number; generationLimit: number };
+    };
+    expect(persisted.trace).toBeNull();
+    expect(persisted.summary).toEqual(expect.objectContaining({
+      responseMode: 'Medium', targetTokenCount: 384, generationLimit: 640,
+    }));
+  });
+
+  it.each([
+    ['Low', 192, 320, 4000],
+    ['Medium', 384, 640, 7000],
+    ['High', 768, 1024, 11000],
+  ] as const)('records %s mode configuration in diagnostics', async (
+    mode, targetTokenCount, generationLimit, budgetMaximumUnits,
+  ) => {
+    const setSpy = jest.spyOn(storage, 'set');
+    setSpy.mockClear();
+    const { store, queue } = makeStore();
+    store.setResponseMode('new', mode);
+    await store.submit('new', { question: 'Explain a refrigerator.', imagePath: null });
+    queue.emit(makeInferenceState('completed', 'A refrigerator moves heat outside.'));
+
+    const recordCall = [...setSpy.mock.calls].reverse().find(([key]) =>
+      String(key).startsWith('diagnostics:turn:record:'),
+    );
+    const persisted = JSON.parse(String(recordCall?.[1])) as {
+      summary: {
+        responseMode: string;
+        targetTokenCount: number;
+        generationLimit: number;
+        contextSelection: { budgetMaximumUnits: number };
+      };
+    };
+    expect(persisted.summary).toEqual(expect.objectContaining({
+      responseMode: mode, targetTokenCount, generationLimit,
+    }));
+    expect(persisted.summary.contextSelection.budgetMaximumUnits).toBe(budgetMaximumUnits);
   });
 });

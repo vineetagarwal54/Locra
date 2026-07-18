@@ -64,7 +64,6 @@ describe('response modes', () => {
       recentExactTurns: 6,
       contextBudgetUnits: 4_000,
       sameChatRetrievalLimit: 2,
-      selectedChatRetrievalLimit: 1,
       answerTargetTokens: 192,
       generationLimit: 320,
     });
@@ -72,7 +71,6 @@ describe('response modes', () => {
       recentExactTurns: 10,
       contextBudgetUnits: 7_000,
       sameChatRetrievalLimit: 4,
-      selectedChatRetrievalLimit: 3,
       answerTargetTokens: 384,
       generationLimit: 640,
     });
@@ -80,7 +78,6 @@ describe('response modes', () => {
       recentExactTurns: 16,
       contextBudgetUnits: 11_000,
       sameChatRetrievalLimit: 6,
-      selectedChatRetrievalLimit: 5,
       answerTargetTokens: 768,
       generationLimit: 1_024,
     });

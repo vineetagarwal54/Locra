@@ -4,6 +4,7 @@ import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInfer
 import type { Conversation, ConversationMessage } from '../types/models';
 
 import type { DiagnosticTurnRecord } from './DiagnosticsTraceStore';
+import type { ProductionDiagnosticTurnSummary } from './DiagnosticsTraceStore';
 
 const TITLE_MAX_CHARS = 60;
 
@@ -29,7 +30,7 @@ export interface DiagnosticsMessageJson {
   readonly status: string;
   readonly errorMessage: string | null;
   readonly createdAt: string;
-  readonly attachments: ReadonlyArray<{ kind: string; path: string }>;
+  readonly imageAttachmentCount: number;
 }
 
 export interface DiagnosticsConversationJson {
@@ -50,6 +51,7 @@ export interface DiagnosticsTurnJson {
   readonly refusalRecoveryTriggered: boolean;
   readonly objectiveResult: ObjectiveInferenceResultRecord | null;
   readonly contextDiagnostics: ContextSelectionDiagnostics | null;
+  readonly summary: ProductionDiagnosticTurnSummary | null;
 }
 
 export interface DiagnosticsBundleJson {
@@ -151,17 +153,18 @@ function toMessageJson(message: ConversationMessage): DiagnosticsMessageJson {
     status: message.status,
     errorMessage: message.errorMessage === null ? null : sanitizeSensitive(message.errorMessage),
     createdAt: isoTimestamp(message.createdAt),
-    attachments: [],
+    imageAttachmentCount: message.attachments.filter((attachment) => attachment.kind === 'image').length,
   };
 }
 
 function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
+  const trace = turn.trace;
   return {
     conversationId: turn.conversationId,
     originatingUserMessageId: turn.originatingUserMessageId,
     assistantMessageId: turn.assistantMessageId,
     capturedAt: isoTimestamp(turn.capturedAt),
-    stages: turn.trace.stages.map((stage) => ({
+    stages: (trace?.stages ?? []).map((stage) => ({
       ...stage,
       modelInput: stage.modelInput.map((message) => ({
         role: message.role,
@@ -173,12 +176,13 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
         ? undefined
         : sanitizeSensitive(stage.processedOutput),
     })),
-    finalResponse: turn.trace.finalResponse === null
+    finalResponse: trace?.finalResponse == null
       ? null
-      : sanitizeSensitive(turn.trace.finalResponse),
-    refusalRecoveryTriggered: turn.trace.stages.some((stage) => stage.refusalRetry === true),
+      : sanitizeSensitive(trace.finalResponse),
+    refusalRecoveryTriggered: trace?.stages.some((stage) => stage.refusalRetry === true) ?? false,
     objectiveResult: turn.objectiveResult,
     contextDiagnostics: turn.contextDiagnostics,
+    summary: turn.summary ?? null,
   };
 }
 

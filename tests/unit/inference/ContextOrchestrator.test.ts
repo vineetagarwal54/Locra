@@ -499,14 +499,7 @@ describe('ContextOrchestrator', () => {
         imageAssetId: null, timestamp: 200, contentType: 'chunk', text: 'same chat A', score: 0.9,
       },
     ];
-    const search = jest.fn(({ conversationIds }: { conversationIds: readonly string[] }) =>
-      conversationIds[0] === 'conversation-a'
-        ? retrieved
-        : [{
-            id: 'past', sourceConversationId: 'conversation-b', sourceMessageId: 'past-message',
-            imageAssetId: null, timestamp: 100, contentType: 'chunk' as const,
-            text: 'selected past chat', score: 0.8,
-          }]);
+    const search = jest.fn((_input: { conversationIds: readonly string[] }) => retrieved);
     const messages = [
       ...completedTurn(1, 'Recent question', 'Recent answer'),
       currentMessage(2, 'Current request'),
@@ -524,11 +517,11 @@ describe('ContextOrchestrator', () => {
 
     const first = orchestrator.orchestrate(
       createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
-      { responseMode: 'Medium', selectedConversationId: 'conversation-b' },
+      { responseMode: 'Medium' },
     );
     const second = orchestrator.orchestrate(
       createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
-      { responseMode: 'Medium', selectedConversationId: 'conversation-b' },
+      { responseMode: 'Medium' },
     );
 
     expect(first.context).toEqual(second.context);
@@ -536,9 +529,12 @@ describe('ContextOrchestrator', () => {
     expect(first.context.importantFacts.map((fact) => fact.text)).toEqual([
       '[Untrusted source: conversation conversation-a, message same-message-b] same chat B',
       '[Untrusted source: conversation conversation-a, message same-message-a] same chat A',
-      '[Untrusted selected source: conversation conversation-b, message past-message] selected past chat',
       'durable fact',
     ]);
+    expect(search).toHaveBeenCalledTimes(2);
+    for (const call of search.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ conversationIds: ['conversation-a'] }));
+    }
     expect(first.context.olderSummary).toBe('older range summary');
   });
 

@@ -24,7 +24,6 @@ interface ResponseModeConfig {
   recentExactTurns: number;       // context floor, never dropped
   contextBudgetUnits: number;     // CHARACTER units (CharacterContextBudgetPolicy), NOT tokens
   sameChatRetrievalLimit: number;
-  selectedChatRetrievalLimit: number;
   answerTargetTokens: number;
   generationLimit: number;
 }
@@ -35,7 +34,6 @@ getResponseModeConfig(mode: ResponseMode): ResponseModeConfig;
 |---|---:|---:|---:|
 | recentExactTurns | 6 | 10 | 16 |
 | sameChatRetrievalLimit | 2 | 4 | 6 |
-| selectedChatRetrievalLimit | 1 | 3 | 5 |
 | contextBudgetUnits (chars) | 4,000 | 7,000 | 11,000 |
 | answerTargetTokens | 192 | 384 | 768 |
 | generationLimit | 320 | 640 | 1,024 |

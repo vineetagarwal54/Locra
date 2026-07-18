@@ -1,7 +1,10 @@
 import type { ContextSelectionDiagnostics } from '../inference/ContextOrchestrator';
+import type { SamplingProfile } from '../inference/GenerationTuning';
 import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
+import type { ResponseMode } from '../inference/ResponseMode';
 import { storage } from '../storage/mmkv';
+import type { GenerationFinishReason } from '../types/models';
 
 export interface DiagnosticsStorage {
   set(key: string, value: string | number | boolean | ArrayBuffer): void;
@@ -15,9 +18,43 @@ export interface DiagnosticTurnRecord {
   originatingUserMessageId: string;
   assistantMessageId: string;
   capturedAt: number;
-  trace: InferenceTrace;
+  /** Full raw model I/O; null in production-safe records. */
+  trace: InferenceTrace | null;
   objectiveResult: ObjectiveInferenceResultRecord | null;
+  /** Detailed candidate previews are development-only. */
   contextDiagnostics: ContextSelectionDiagnostics | null;
+  summary?: ProductionDiagnosticTurnSummary;
+}
+
+export type DiagnosticRequestKind = 'text' | 'image' | 'extraction' | 'retry';
+
+export interface ProductionDiagnosticTurnSummary {
+  readonly responseMode: ResponseMode;
+  readonly requestKind: DiagnosticRequestKind;
+  readonly promptTokenCount: number;
+  readonly generatedTokenCount: number;
+  readonly firstTokenTimeMs: number;
+  readonly totalTimeMs: number;
+  readonly finishReason: GenerationFinishReason;
+  readonly looping: boolean;
+  readonly truncated: boolean;
+  readonly contextSelection: {
+    readonly recentTurnsConsidered: number;
+    readonly recentTurnsSelected: number;
+    readonly mediaEvidenceSelected: number;
+    readonly factsSelected: number;
+    readonly summariesSelected: number;
+    readonly budgetMaximumUnits: number;
+    readonly budgetUsedUnits: number;
+  };
+  readonly targetTokenCount: number;
+  readonly generationLimit: number;
+  readonly samplingProfile: SamplingProfile;
+  readonly imageSupplied: boolean;
+  readonly modelId: string;
+  readonly generationConfigId: string;
+  readonly pipelineVariantId: string;
+  readonly appBuildId: string;
 }
 
 interface DiagnosticsIndexEntry {
@@ -206,7 +243,7 @@ function isValidIndexEntry(value: unknown): value is DiagnosticsIndexEntry {
 }
 
 function isValidDiagnosticTurnRecord(value: unknown): value is DiagnosticTurnRecord {
-  if (!isRecord(value) || !isRecord(value.trace)) {
+  if (!isRecord(value)) {
     return false;
   }
   return (
@@ -215,6 +252,6 @@ function isValidDiagnosticTurnRecord(value: unknown): value is DiagnosticTurnRec
     typeof value.originatingUserMessageId === 'string' &&
     typeof value.assistantMessageId === 'string' &&
     typeof value.capturedAt === 'number' &&
-    Array.isArray(value.trace.stages)
+    (value.trace === null || (isRecord(value.trace) && Array.isArray(value.trace.stages)))
   );
 }

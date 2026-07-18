@@ -14,6 +14,7 @@ interface ImagePromptCardProps {
   available?: boolean;
   onRemove?: () => void;
   onRetake?: () => void;
+  compact?: boolean;
 }
 
 export function ImagePromptCard({
@@ -23,6 +24,7 @@ export function ImagePromptCard({
   available = true,
   onRemove,
   onRetake,
+  compact = false,
 }: ImagePromptCardProps) {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -35,7 +37,7 @@ export function ImagePromptCard({
 
   return (
     <>
-      <View style={styles.card}>
+      <View style={[styles.card, compact && styles.compactCard]}>
         <View>
           <Pressable
             accessibilityRole="button"
@@ -45,14 +47,15 @@ export function ImagePromptCard({
           >
             {originalAvailable ? (
               <Image
-                style={styles.image}
+                testID={compact ? 'image-message-thumbnail' : undefined}
+                style={[styles.image, compact && styles.compactImage]}
                 source={{ uri: toPreviewUri(imagePath) }}
                 contentFit="contain"
                 transition={theme.animationTiming}
                 onError={() => setLoadFailed(true)}
               />
             ) : (
-              <View style={styles.unavailable}>
+              <View style={[styles.unavailable, compact && styles.compactImage]}>
                 <MaterialCommunityIcons
                   name="image-off-outline"
                   size={32}
@@ -146,6 +149,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: IMAGE_HEIGHT,
     backgroundColor: designTokens.color.surface,
+  },
+  compactCard: {
+    maxWidth: 220,
+  },
+  compactImage: {
+    height: 120,
   },
   unavailable: {
     height: IMAGE_HEIGHT,

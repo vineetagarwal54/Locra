@@ -149,9 +149,9 @@ describe('buildDiagnosticsZipEntries', () => {
     });
     const json = strFromU8(entries['diagnostics.json']);
 
-    // The image path never reaches the bundle: attachments are dropped entirely.
+    // The image path never reaches the bundle; only safe presence metadata does.
     expect(json).not.toContain('/data/user/0/locra/cache/photo.jpg');
-    expect(JSON.parse(json).conversations[0].messages[0].attachments).toEqual([]);
+    expect(JSON.parse(json).conversations[0].messages[0].imageAttachmentCount).toBe(1);
   });
 });
 
