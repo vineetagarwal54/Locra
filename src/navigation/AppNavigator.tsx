@@ -38,6 +38,7 @@ import { hasCompletedWelcome } from '../store/onboardingStore';
 import { ConversationDrawer } from './ConversationDrawer';
 import { resolveLaunchRoute } from './LaunchRouting';
 
+import { PmtilesSpikeScreen } from '../screens/PmtilesSpikeScreen';
 export type RootStackParamList = {
   Welcome: undefined;
   Privacy: undefined;
@@ -241,31 +242,31 @@ export function AppNavigator() {
       </ErrorBoundary>
     );
   }
-
-  return (
-    <GestureHandlerRootView style={styles.root}>
-      <NavigationContainer ref={navigationRef}>
-        {engineReady ? <InferenceEngineHost /> : null}
-        <Drawer.Navigator
-          screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}
-          drawerContent={(props) => <ConversationDrawer {...props} />}
-        >
-          <Drawer.Screen
-            name="Root"
-            component={RootStack}
-            options={({ route }) => ({
-              // The drawer belongs to the chat experience only — the swipe
-              // gesture must not open it over onboarding, model setup, the
-              // camera viewfinder, or History (design.md §6: hamburger opens
-              // the drawer; motion.md §10 keeps the gesture on chat).
-              swipeEnabled:
-                (getFocusedRouteNameFromRoute(route) ?? resolveInitialRoute()) === 'Chat',
-            })}
-          />
-        </Drawer.Navigator>
-      </NavigationContainer>
-    </GestureHandlerRootView>
-  );
+  return <PmtilesSpikeScreen />;
+  // return (
+  //   <GestureHandlerRootView style={styles.root}>
+  //     <NavigationContainer ref={navigationRef}>
+  //       {engineReady ? <InferenceEngineHost /> : null}
+  //       <Drawer.Navigator
+  //         screenOptions={{ headerShown: false, drawerStyle: styles.drawer }}
+  //         drawerContent={(props) => <ConversationDrawer {...props} />}
+  //       >
+  //         <Drawer.Screen
+  //           name="Root"
+  //           component={RootStack}
+  //           options={({ route }) => ({
+  //             // The drawer belongs to the chat experience only — the swipe
+  //             // gesture must not open it over onboarding, model setup, the
+  //             // camera viewfinder, or History (design.md §6: hamburger opens
+  //             // the drawer; motion.md §10 keeps the gesture on chat).
+  //             swipeEnabled:
+  //               (getFocusedRouteNameFromRoute(route) ?? resolveInitialRoute()) === 'Chat',
+  //           })}
+  //         />
+  //       </Drawer.Navigator>
+  //     </NavigationContainer>
+  //   </GestureHandlerRootView>
+  // );
 }
 
 const styles = StyleSheet.create({

@@ -33,6 +33,7 @@
     "plugins": [
       "expo-asset",
       "expo-image",
+      "@maplibre/maplibre-react-native",
       [
         "@kesha-antonov/react-native-background-downloader",
         {
@@ -56,7 +57,8 @@
           "enableBackgroundAudio": false,
           "enableDeviceDetection": false
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native"
     ],
     "extra": {
       "eas": {
