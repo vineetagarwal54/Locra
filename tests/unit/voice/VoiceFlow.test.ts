@@ -131,7 +131,7 @@ describe('offline voice model lifecycle', () => {
 });
 
 describe('voice session store', () => {
-  it('streams partials, then stops with an editable transcript and NEVER submits', async () => {
+  it('does not surface live text while recording; stop yields the editable final transcript and NEVER submits', async () => {
     const session = fakeSession();
     configureVoiceDependencies({
       lifecycle: readyLifecycle(),
@@ -142,19 +142,21 @@ describe('voice session store', () => {
     await useVoiceStore.getState().startRecording();
     expect(useVoiceStore.getState().sessionStatus).toBe('recording');
 
-    session.emit('hello');
-    session.emit('hello world');
-    expect(useVoiceStore.getState().partialTranscript).toBe('hello world');
+    // Whisper produces no live partials — even if the runtime emitted one, the
+    // draft/state stays empty until the final transcript on stop.
+    session.emit('ignored live partial');
+    expect(useVoiceStore.getState().finalTranscript).toBe('');
 
     const transcript = await useVoiceStore.getState().stopAndFinalize();
 
     // Stopping finalizes and leaves the text ready & editable — it never sends.
     expect(transcript).toBe('editable transcript');
+    expect(useVoiceStore.getState().finalTranscript).toBe('editable transcript');
     expect(useVoiceStore.getState().sessionStatus).toBe('ready');
     expect(isComposerReadOnlyForVoice(useVoiceStore.getState().sessionStatus)).toBe(false);
   });
 
-  it('cancels a recording session, clearing the partial transcript', async () => {
+  it('auto-stops exactly once at the 30 s hard limit and begins transcription', async () => {
     const session = fakeSession();
     configureVoiceDependencies({
       lifecycle: readyLifecycle(),
@@ -162,7 +164,29 @@ describe('voice session store', () => {
     });
     await useVoiceStore.getState().confirmEnable();
     await useVoiceStore.getState().startRecording();
-    session.emit('partial in progress');
+    expect(useVoiceStore.getState().sessionStatus).toBe('recording');
+
+    // Cross the 30 s limit; the elapsed interval must trigger the stop exactly once
+    // even as it keeps ticking afterwards.
+    await jest.advanceTimersByTimeAsync(31_000);
+
+    expect(session.stop).toHaveBeenCalledTimes(1);
+    expect(useVoiceStore.getState().sessionStatus).toBe('ready');
+    expect(useVoiceStore.getState().finalTranscript).toBe('editable transcript');
+
+    // Further ticks (timer already cancelled) never trigger another stop.
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(session.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels a recording session, clearing the final transcript', async () => {
+    const session = fakeSession();
+    configureVoiceDependencies({
+      lifecycle: readyLifecycle(),
+      session: new VoiceSessionService(fakeRuntime(session), new SingleFlightResourcePolicy()),
+    });
+    await useVoiceStore.getState().confirmEnable();
+    await useVoiceStore.getState().startRecording();
 
     // Cancel awaits native teardown + lease release; the composer stays locked in
     // 'cancelling' until it resolves, then transitions to 'cancelled'.
@@ -173,7 +197,7 @@ describe('voice session store', () => {
 
     expect(session.cancel).toHaveBeenCalledTimes(1);
     expect(useVoiceStore.getState().sessionStatus).toBe('cancelled');
-    expect(useVoiceStore.getState().partialTranscript).toBe('');
+    expect(useVoiceStore.getState().finalTranscript).toBe('');
   });
 
   it('asks for microphone permission up front during enable and fails clearly when denied', async () => {

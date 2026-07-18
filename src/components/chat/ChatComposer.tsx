@@ -247,9 +247,11 @@ export function ChatComposer({
           ) : (
             <View style={styles.recordingDot} />
           )}
-          <Text style={styles.recordingText}>
+          <Text style={[styles.recordingText, voice.nearLimit && styles.recordingWarningText]}>
             {voice.micMode === 'recording'
-              ? `Recording… ${voice.elapsedLabel}`
+              ? voice.nearLimit
+                ? `Auto-stopping in ${voice.secondsRemaining}s…`
+                : `Recording… ${voice.elapsedLabel}`
               : 'Transcribing…'}
           </Text>
           {voice.micMode === 'recording' ? (
@@ -570,6 +572,10 @@ const styles = StyleSheet.create({
   recordingText: {
     color: designTokens.color.textSecondary,
     fontSize: designTokens.type.supporting.fontSize,
+  },
+  recordingWarningText: {
+    color: designTokens.color.error,
+    fontWeight: designTokens.type.bodyStrong.fontWeight,
   },
   iconButton: {
     width: designTokens.spacing.space24 + designTokens.spacing.space16,

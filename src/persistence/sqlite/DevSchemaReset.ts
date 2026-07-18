@@ -1,32 +1,15 @@
-// Development-only destructive reset. This is NOT a production migration path:
-// spec 006 is a development-stage SQL cutover (FR-006), so on an incompatible
-// schema version a development build may drop and rebuild the store. A
-// production build must never silently reset — it throws instead, forcing an
-// explicit, deliberate migration decision later.
+// Explicit, deliberate database reset — kept SEPARATE from the normal migration
+// path (Migrations.ts). Normal startup NEVER resets: it migrates forward and
+// preserves conversations. A reset is only reached by:
+//   - a development build choosing to rebuild a mismatched dev store, or
+//   - the user explicitly confirming "Reset local data" on the recovery screen.
+// Both paths drop every table and rebuild a clean latest-schema store; neither is
+// silent.
 
 import type { SqliteDriver } from '../types';
 
-import {
-  initializeSchema,
-  readSchemaVersion,
-  SCHEMA_TABLES,
-  SCHEMA_VERSION,
-} from './Schema';
-
-export interface DevSchemaResetOptions {
-  /** True only in development builds (e.g. from `__DEV__`). */
-  readonly isDevelopment: boolean;
-}
-
-export class IncompatibleSchemaError extends Error {
-  constructor(readonly foundVersion: number, readonly expectedVersion: number) {
-    super(
-      `SQLite schema version ${foundVersion} is incompatible with expected ${expectedVersion}. ` +
-        'A production build will not auto-reset; a migration is required.',
-    );
-    this.name = 'IncompatibleSchemaError';
-  }
-}
+import { initializeSchema } from './Migrations';
+import { SCHEMA_TABLES } from './Schema';
 
 /** Drops every known table (children first) so the schema can be rebuilt cleanly. */
 export function dropAllTables(driver: SqliteDriver): void {
@@ -38,27 +21,12 @@ export function dropAllTables(driver: SqliteDriver): void {
 }
 
 /**
- * Ensures the store is at the current schema version.
- * - Fresh DB (version 0): initialize.
- * - Matching version: no-op.
- * - Mismatched version in development: drop + reinitialize.
- * - Mismatched version in production: throw `IncompatibleSchemaError`.
+ * Destroys ALL local conversation data and rebuilds an empty store at the latest
+ * schema version. Only ever call this from an explicit, confirmed reset path — the
+ * dev rebuild or the recovery screen's "Reset local data" action.
  */
-export function ensureSchemaOrReset(
-  driver: SqliteDriver,
-  options: DevSchemaResetOptions,
-): void {
-  const version = readSchemaVersion(driver);
-  if (version === SCHEMA_VERSION) {
-    return;
-  }
-  if (version === 0) {
-    initializeSchema(driver);
-    return;
-  }
-  if (!options.isDevelopment) {
-    throw new IncompatibleSchemaError(version, SCHEMA_VERSION);
-  }
+export function resetDatabase(driver: SqliteDriver): void {
   dropAllTables(driver);
+  driver.execSync('PRAGMA user_version = 0');
   initializeSchema(driver);
 }

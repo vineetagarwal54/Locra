@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
-import type { VoiceSessionStatus } from '../voice/dictationDraft';
+import { MAX_RECORDING_MS, type VoiceSessionStatus } from '../voice/dictationDraft';
 import {
   VoiceModelLifecycle,
   type VoiceModelState,
@@ -19,8 +19,11 @@ export interface VoiceStoreState extends VoiceModelState {
   readonly disclosureVisible: boolean;
   /** Live session state machine, independent of the model-setup lifecycle. */
   readonly sessionStatus: VoiceSessionStatus;
-  /** Current best partial transcript for the active dictated segment. */
-  readonly partialTranscript: string;
+  /**
+   * The single final transcript, populated only when a session reaches 'ready'.
+   * (Whisper produces no live partials — there is no mid-recording text.)
+   */
+  readonly finalTranscript: string;
   readonly recordingElapsedMs: number;
   readonly sessionError: string | null;
   readonly storageBytes: number | null;
@@ -50,7 +53,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   ...dependencies.lifecycle.getState(),
   disclosureVisible: false,
   sessionStatus: 'idle',
-  partialTranscript: '',
+  finalTranscript: '',
   recordingElapsedMs: 0,
   sessionError: null,
   storageBytes: dependencies.lifecycle.storageBytes,
@@ -80,7 +83,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
   removeModel: async (): Promise<void> => {
     await dependencies.lifecycle.remove();
-    set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', partialTranscript: '' });
+    set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', finalTranscript: '' });
   },
   startRecording: async (): Promise<void> => {
     const modelStatus = get().status;
@@ -105,22 +108,20 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     }
     set({
       sessionStatus: 'preparing',
-      partialTranscript: '',
+      finalTranscript: '',
       recordingElapsedMs: 0,
       sessionError: null,
       permissionGranted: true,
     });
     try {
-      await dependencies.session.start((partialText) => {
-        // Each partial fully replaces the active segment; the composer keeps the
-        // user's typed prefix and only swaps the dictated part.
-        set({ partialTranscript: partialText });
-      });
+      // Whisper transcribes only the completed utterance, so no live-partial
+      // callback is wired — the draft is never touched mid-recording.
+      await dependencies.session.start(() => undefined);
       startElapsedTimer(set);
       set({ sessionStatus: 'recording' });
     } catch (error) {
       stopElapsedTimer();
-      set({ sessionStatus: 'failed', sessionError: toMessage(error), partialTranscript: '' });
+      set({ sessionStatus: 'failed', sessionError: toMessage(error), finalTranscript: '' });
     }
   },
   stopAndFinalize: async (): Promise<string> => {
@@ -140,8 +141,8 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
         });
         return '';
       }
-      // 'ready' — the finalized text is now in the draft; stopping never sends.
-      set({ sessionStatus: 'ready', partialTranscript: transcript });
+      // 'ready' — the composer applies this final transcript; stopping never sends.
+      set({ sessionStatus: 'ready', finalTranscript: transcript });
       return transcript;
     } catch (error) {
       set({ sessionStatus: 'failed', sessionError: toMessage(error) });
@@ -157,7 +158,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     stopElapsedTimer();
     // Enter the locked 'cancelling' state immediately; the composer stays read-only
     // until the awaited native teardown + lease release below completes.
-    set({ sessionStatus: 'cancelling', partialTranscript: '', recordingElapsedMs: 0 });
+    set({ sessionStatus: 'cancelling', finalTranscript: '', recordingElapsedMs: 0 });
     try {
       await dependencies.session.cancel();
     } finally {
@@ -165,7 +166,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     }
   },
   acknowledgeResult: (): void => {
-    set({ sessionStatus: 'idle', partialTranscript: '', sessionError: null });
+    set({ sessionStatus: 'idle', finalTranscript: '', sessionError: null });
   },
 }));
 
@@ -179,7 +180,7 @@ export function configureVoiceDependencies(next: VoiceDependencies): void {
     ...next.lifecycle.getState(),
     storageBytes: next.lifecycle.storageBytes,
     sessionStatus: 'idle',
-    partialTranscript: '',
+    finalTranscript: '',
     recordingElapsedMs: 0,
     sessionError: null,
     error: null,
@@ -197,7 +198,13 @@ function startElapsedTimer(set: (patch: Partial<VoiceStoreState>) => void): void
   stopElapsedTimer();
   recordingStartedAt = Date.now();
   elapsedTimer = setInterval(() => {
-    set({ recordingElapsedMs: Date.now() - recordingStartedAt });
+    const elapsed = Date.now() - recordingStartedAt;
+    set({ recordingElapsedMs: elapsed });
+    // Hard 30 s cap: auto-stop and begin transcription. stopAndFinalize() stops
+    // this timer and no-ops unless still 'recording', so this fires exactly once.
+    if (elapsed >= MAX_RECORDING_MS) {
+      void useVoiceStore.getState().stopAndFinalize();
+    }
   }, 250);
 }
 

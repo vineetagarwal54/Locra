@@ -121,50 +121,67 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
 
     await this.deps.ensureDownloadDir();
     const existingTasks = await this.deps.getExistingDownloadTasks();
+
+    // Classify every required artifact before committing to a reattach. A bundle
+    // can only be resumed cleanly when EVERY not-yet-downloaded artifact has a
+    // genuine live task — otherwise reattaching would pair a live task with a
+    // missing companion and fail the whole bundle mid-flight.
+    const onDisk: string[] = [];
+    const attachable: Array<{ url: string; destination: string; task: BgDownloadTask }> = [];
+    let hasIncompleteArtifact = false;
+
+    for (const url of urls) {
+      const destination = this.deps.destinationForUrl(url);
+      if (this.deps.fileExists(destination)) {
+        onDisk.push(destination);
+        continue;
+      }
+      const task = findTaskForDestination(existingTasks, destination);
+      // Only a genuinely in-flight task (DOWNLOADING/PAUSED), or a DONE task whose
+      // file is actually on disk, may be reattached. A FAILED/STOPPED task, a DONE
+      // task with no file, or no task at all is stale/missing.
+      if (task && isReattachable(task, this.deps.fileExists, destination)) {
+        attachable.push({ url, destination, task });
+      } else {
+        hasIncompleteArtifact = true;
+        if (task) {
+          await safe(() => task.stop());
+        }
+        await safe(() => this.deps.deleteFileIfExists(destination));
+      }
+    }
+
+    // A mixed bundle (some live, some missing) cannot be resumed. Cancel and clean
+    // the incomplete bundle — including the otherwise-valid live tasks and their
+    // partials — and return null so reconciliation starts one clean fresh download.
+    if (hasIncompleteArtifact) {
+      for (const { destination, task } of attachable) {
+        await safe(() => task.stop());
+        await safe(() => this.deps.deleteFileIfExists(destination));
+      }
+      return null;
+    }
+
+    // Nothing needs reattaching (everything already on disk, or no live tasks).
+    if (attachable.length === 0) {
+      return null;
+    }
+
+    // Every not-yet-downloaded artifact has a live task — reattach the bundle.
     const bytes = new Map<string, { downloaded: number; total: number }>();
     const emit = (): void => {
       if (!callback) return;
       callback(progressFor(bytes));
     };
 
-    const promises: Array<Promise<{ path: string; wasDownloaded: boolean }>> = [];
+    const promises: Array<Promise<{ path: string; wasDownloaded: boolean }>> = onDisk.map(
+      (destination) => Promise.resolve({ path: destination, wasDownloaded: false }),
+    );
     const statuses: ReattachedDownloadStatus[] = [];
-    const missingDestinations: string[] = [];
-    let attachedCount = 0;
-
-    for (const url of urls) {
-      const destination = this.deps.destinationForUrl(url);
-      if (this.deps.fileExists(destination)) {
-        promises.push(Promise.resolve({ path: destination, wasDownloaded: false }));
-        continue;
-      }
-
-      const task = findTaskForDestination(existingTasks, destination);
-      // Only a genuinely in-flight task (DOWNLOADING/PAUSED), or a DONE task whose
-      // file is actually on disk, may be reattached. A FAILED or STOPPED task — or a
-      // DONE task with no file — is stale from a prior aborted attempt: stop it and
-      // delete its partial so the caller falls back to a clean fresh download,
-      // instead of opening the screen seeded at a stale ~99% only to fail at once.
-      if (!task || !isReattachable(task, this.deps.fileExists, destination)) {
-        if (task) {
-          await safe(() => task.stop());
-        }
-        await safe(() => this.deps.deleteFileIfExists(destination));
-        missingDestinations.push(destination);
-        continue;
-      }
-
-      attachedCount += 1;
+    for (const { url, destination, task } of attachable) {
       seedProgress(bytes, url, task);
       statuses.push(task.state === 'PAUSED' ? 'paused' : 'downloading');
       promises.push(this.reattachOne(url, destination, task, bytes, emit));
-    }
-
-    if (attachedCount === 0) {
-      return null;
-    }
-    for (const destination of missingDestinations) {
-      promises.push(Promise.reject(new Error(`No existing download task for ${filenameOf(destination)}.`)));
     }
 
     emit();

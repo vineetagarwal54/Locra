@@ -1,7 +1,13 @@
 // The ONE file permitted to import `expo-sqlite` (Constitution VIII / X). Every
 // other persistence module depends on the `SqliteDriver` interface, never on the
 // native module. Opens the canonical store with foreign keys + WAL enabled and
-// brings the schema to the current version (dev-reset on incompatible versions).
+// brings the schema to the latest version via ordered, transactional migrations
+// (Migrations.ts) — it NEVER resets in production.
+//
+// Repositories reach the driver through `getDatabase()`, which only returns once
+// the async bootstrap (DatabaseBootstrap.ts) has migrated the store and marked it
+// ready. Before that it throws, so nothing can touch conversation data before the
+// database is proven usable.
 
 import {
   openDatabaseSync,
@@ -11,16 +17,21 @@ import {
 
 import type { SqlParams, SqliteDriver, SqlRunResult } from '../types';
 
-import { ensureSchemaOrReset } from './DevSchemaReset';
-import { applyAdditiveSchema } from './Schema';
+import { runMigrations } from './Migrations';
 
 export const LOCRA_DATABASE_NAME = 'locra.db';
 
 export interface OpenDatabaseOptions {
   /** Overrides the on-disk database name (tests may use a throwaway name). */
   readonly databaseName?: string;
-  /** True in development builds; enables destructive schema reset (FR-006). */
-  readonly isDevelopment?: boolean;
+}
+
+/** Thrown when a repository asks for the database before bootstrap reaches ready. */
+export class DatabaseNotReadyError extends Error {
+  constructor() {
+    super('The database is not ready. Bootstrap must complete before repositories are used.');
+    this.name = 'DatabaseNotReadyError';
+  }
 }
 
 /** Adapts an `expo-sqlite` handle to the driver-agnostic `SqliteDriver`. */
@@ -48,38 +59,47 @@ export function createSqliteDriver(db: SQLiteDatabase): SqliteDriver {
   };
 }
 
-function resolveIsDevelopment(explicit: boolean | undefined): boolean {
-  if (explicit !== undefined) {
-    return explicit;
-  }
-  return (globalThis as { __DEV__?: boolean }).__DEV__ ?? false;
-}
-
 /**
- * Opens (or creates) the canonical Locra SQLite store, enables foreign keys and
- * WAL, ensures the schema is current, and returns a driver. PRAGMAs are applied
- * before any schema work so cascade deletes are enforced from the first write.
+ * Opens (or creates) the canonical store with foreign keys + WAL enabled, but does
+ * NOT migrate. PRAGMAs are applied before any schema work so cascade deletes are
+ * enforced from the first write. The bootstrap opens the connection, then migrates
+ * separately so it can inspect the version and surface a recoverable failure.
  */
-export function openLocraDatabase(options: OpenDatabaseOptions = {}): SqliteDriver {
+export function openDatabaseConnection(options: OpenDatabaseOptions = {}): SqliteDriver {
   const db = openDatabaseSync(options.databaseName ?? LOCRA_DATABASE_NAME);
   const driver = createSqliteDriver(db);
   driver.execSync('PRAGMA foreign_keys = ON');
   driver.execSync('PRAGMA journal_mode = WAL');
-  ensureSchemaOrReset(driver, {
-    isDevelopment: resolveIsDevelopment(options.isDevelopment),
-  });
-  // Additive tables (e.g. benchmark_run) are created idempotently on every open so
-  // an existing store gains them without a destructive schema-version reset.
-  applyAdditiveSchema(driver);
   return driver;
 }
 
-let sharedDriver: SqliteDriver | null = null;
+/** Opens the store and migrates it to the latest schema version (throws on failure). */
+export function openLocraDatabase(options: OpenDatabaseOptions = {}): SqliteDriver {
+  const driver = openDatabaseConnection(options);
+  runMigrations(driver);
+  return driver;
+}
 
-/** Lazily opens and returns the process-wide database driver. */
+let readyDriver: SqliteDriver | null = null;
+
+/** Registers the migrated driver once the bootstrap has proven the store usable. */
+export function setReadyDatabase(driver: SqliteDriver): void {
+  readyDriver = driver;
+}
+
+/** Clears the ready driver (bootstrap reset / test teardown). */
+export function clearReadyDatabase(): void {
+  readyDriver = null;
+}
+
+/**
+ * Returns the process-wide database driver. Throws {@link DatabaseNotReadyError}
+ * until the async bootstrap has completed successfully, so repositories cannot be
+ * used before the database is ready.
+ */
 export function getDatabase(): SqliteDriver {
-  if (sharedDriver === null) {
-    sharedDriver = openLocraDatabase();
+  if (readyDriver === null) {
+    throw new DatabaseNotReadyError();
   }
-  return sharedDriver;
+  return readyDriver;
 }

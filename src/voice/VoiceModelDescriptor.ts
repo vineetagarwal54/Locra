@@ -43,9 +43,10 @@ export const VOICE_MODEL_DIR_NAME = 'locra-voice-models';
  * Replaceable via {@link VoiceModelDescriptor} (e.g. tiny.en-q5_1 for speed, or
  * small.en-q5_1 for accuracy) without touching the runtime.
  *
- * Source: ggerganov/whisper.cpp on Hugging Face. The SHA-256 below is the real
- * Git-LFS OID for the file, verified on-device after download by the native
- * integrity hasher.
+ * Source: ggerganov/whisper.cpp on Hugging Face, pinned to an IMMUTABLE commit
+ * revision (not `resolve/main`) so the bytes can never shift under us. The SHA-256
+ * below is the real Git-LFS OID for the file at that commit, verified on-device
+ * after download by the native integrity hasher.
  */
 export const DEFAULT_VOICE_MODEL: VoiceModelDescriptor = {
   id: 'whisper-base-en-q5_1',
@@ -53,7 +54,10 @@ export const DEFAULT_VOICE_MODEL: VoiceModelDescriptor = {
   approxSizeBytes: 59_721_011,
   modelFile: 'ggml-base.en-q5_1.bin',
   sampleRate: 16_000,
-  downloadBaseUrl: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main',
+  // Immutable commit pin of ggerganov/whisper.cpp (verified to carry the exact
+  // filename/size/SHA-256 below).
+  downloadBaseUrl:
+    'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1',
   checksums: {
     'ggml-base.en-q5_1.bin': {
       sha256: '4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f',

@@ -18,6 +18,10 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+**/.gradle/
+**/build/
+*.apk
+*.aab
 
 # Metro
 .metro-health-check*
@@ -48,6 +52,14 @@ Thumbs.db
 # generated native folders
 /ios
 /android
+
+# Gradle caches / generated build output (never commit these)
+**/.gradle/
+**/.cxx/
+**/build/
+*.apk
+*.aab
+
 # Qwen spike local files
 spikes/qwen3vl-llamarn/.hf-venv/
 spikes/qwen3vl-llamarn/node_modules/

@@ -5,7 +5,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
-import { initializeSchema } from '../../src/persistence/sqlite/Schema';
+import { initializeSchema } from '../../src/persistence/sqlite/Migrations';
 import type { SqlParams, SqliteDriver } from '../../src/persistence/types';
 
 export interface TestDatabase {
@@ -21,7 +21,7 @@ function toParams(params: SqlParams): SqliteInput[] {
 }
 
 /** Opens an in-memory SQLite database with foreign keys on and the schema applied. */
-export function createTestDatabase(): TestDatabase {
+export function createTestDatabase(options: { readonly initialize?: boolean } = {}): TestDatabase {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
 
@@ -57,6 +57,8 @@ export function createTestDatabase(): TestDatabase {
     },
   };
 
-  initializeSchema(driver);
+  if (options.initialize !== false) {
+    initializeSchema(driver);
+  }
   return { driver, close: () => db.close() };
 }

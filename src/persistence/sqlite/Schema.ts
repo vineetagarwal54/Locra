@@ -1,19 +1,45 @@
 // Spec 006 — canonical SQL schema (data-model.md). Pure SQL + a driver-agnostic
 // initializer so the schema contract is testable without the native module.
 // Table creation order respects foreign-key parent-before-child dependencies.
+//
+// The schema is built and upgraded through ordered, transactional migrations
+// (see Migrations.ts): v1 = core tables, v2 = benchmark_run, v3 = message
+// finish_reason. This file owns the DDL; the migration runner owns the ordering,
+// transactions, and version stamping.
 
 import type { SqliteDriver } from '../types';
 
-/** Bump when the schema changes incompatibly. Dev builds reset on mismatch (FR-006). */
-export const SCHEMA_VERSION = 1;
+/**
+ * The schema version a fresh/upgraded store is brought to. Kept in sync with the
+ * last entry of MIGRATIONS (Migrations.ts asserts they match). Bump alongside a
+ * new migration.
+ */
+export const SCHEMA_VERSION = 3;
 
 /**
- * Additive, self-contained tables that can be (re)created on every open with no
- * destructive schema-version bump. `benchmark_run` records the timing of each
- * SUCCESSFULLY completed assistant attempt (user-facing Benchmarks); it never
- * feeds context/retrieval and cascades away with its conversation.
+ * Idempotently adds a column to an existing table. `ALTER TABLE ADD COLUMN` is not
+ * `IF NOT EXISTS`-aware, so the column is only added when absent — letting a legacy
+ * store gain the column without a destructive rebuild. Exported for the v3 migration.
  */
-const ADDITIVE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
+export function addColumnIfMissing(
+  driver: SqliteDriver,
+  table: string,
+  column: string,
+  definition: string,
+): void {
+  const columns = driver.getAllSync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((existing) => existing.name === column)) {
+    return;
+  }
+  driver.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+/**
+ * v2 — `benchmark_run` records the timing of each SUCCESSFULLY completed assistant
+ * attempt (user-facing Benchmarks); it never feeds context/retrieval and cascades
+ * away with its conversation. All statements are idempotent (`IF NOT EXISTS`).
+ */
+export const BENCHMARK_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
   `CREATE TABLE IF NOT EXISTS benchmark_run (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
@@ -32,40 +58,12 @@ const ADDITIVE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     ON benchmark_run (kind, created_at DESC, id DESC)`,
 ];
 
-/** Applies additive tables idempotently so existing stores gain them without a reset. */
-export function applyAdditiveSchema(driver: SqliteDriver): void {
-  driver.withTransactionSync(() => {
-    for (const statement of ADDITIVE_SCHEMA_STATEMENTS) {
-      driver.execSync(statement);
-    }
-    addColumnIfMissing(driver, 'message', 'finish_reason', 'TEXT');
-  });
-}
-
 /**
- * Idempotently adds a column to an existing table. `ALTER TABLE ADD COLUMN` is not
- * `IF NOT EXISTS`-aware, so the column is only added when absent — letting existing
- * stores gain the column without a destructive schema-version reset.
+ * v1 — ordered DDL that builds the core store. Parents precede children so foreign
+ * keys resolve. Every child of `conversation` cascades on delete so a conversation
+ * deletion leaves zero orphans (FR-005/006, SC-014). All statements are idempotent.
  */
-function addColumnIfMissing(
-  driver: SqliteDriver,
-  table: string,
-  column: string,
-  definition: string,
-): void {
-  const columns = driver.getAllSync<{ name: string }>(`PRAGMA table_info(${table})`);
-  if (columns.some((existing) => existing.name === column)) {
-    return;
-  }
-  driver.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-}
-
-/**
- * Ordered DDL statements that build the entire store. Parents precede children
- * so foreign keys resolve. Every child of `conversation` cascades on delete so a
- * conversation deletion leaves zero orphans (FR-005/006, SC-014).
- */
-export const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
+export const CORE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
   // conversation — unit of isolation and deletion.
   `CREATE TABLE IF NOT EXISTS conversation (
     id TEXT PRIMARY KEY,
@@ -266,8 +264,16 @@ export const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     ON summary (conversation_id)`,
   `CREATE INDEX IF NOT EXISTS ix_summary_status
     ON summary (conversation_id, status)`,
+];
 
-  ...ADDITIVE_SCHEMA_STATEMENTS,
+/**
+ * The complete target schema (v1 core + v2 benchmark), used to describe the
+ * contract. The migration runner builds this incrementally; a fresh store ends
+ * in exactly this shape.
+ */
+export const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
+  ...CORE_SCHEMA_STATEMENTS,
+  ...BENCHMARK_SCHEMA_STATEMENTS,
 ];
 
 /** Table names in dependency order (children before parents for DROP). */
@@ -284,16 +290,6 @@ export const SCHEMA_TABLES: ReadonlyArray<string> = [
   'message',
   'conversation',
 ];
-
-/** Creates every table/index and stamps `user_version`. Idempotent. */
-export function initializeSchema(driver: SqliteDriver): void {
-  driver.withTransactionSync(() => {
-    for (const statement of SCHEMA_STATEMENTS) {
-      driver.execSync(statement);
-    }
-  });
-  driver.execSync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
-}
 
 /** Reads the persisted schema version (0 when never initialized). */
 export function readSchemaVersion(driver: SqliteDriver): number {

@@ -83,6 +83,7 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
   let context: WhisperContext | null = null;
   let transcription: { stop: () => Promise<void> } | null = null;
   let released = false;
+  let finalized = false;
 
   // Accumulate every Float32 PCM chunk the recorder streams; on stop they are
   // concatenated into one buffer and handed to whisper.
@@ -118,7 +119,10 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
   if (tempFileUri === undefined && startResult.fileUri !== '') {
     tempFileUri = startResult.fileUri;
   }
-  console.log(`[Locra][voice] recording started uri=${startResult.fileUri}`);
+  if (__DEV__) {
+    // Sanitized dev-only diagnostic — no file path, no audio, no transcript.
+    console.log('[Locra][voice] recording started');
+  }
 
   let recorderStopped = false;
   const stopRecorder = async (): Promise<void> => {
@@ -126,7 +130,9 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
       return;
     }
     recorderStopped = true;
-    subscription.remove();
+    // Stop the recorder FIRST so its final buffered AudioData chunk is still
+    // delivered to the live listener, THEN remove the listener. Removing it before
+    // stopRecording() would truncate the tail of the recording.
     try {
       const recording = await recorder.stopRecording();
       if (recording?.fileUri !== undefined && recording.fileUri !== '') {
@@ -135,6 +141,7 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
     } catch {
       // Best-effort; a lost/interrupted recorder must not throw on teardown.
     }
+    subscription.remove();
   };
 
   const release = async (): Promise<void> => {
@@ -165,12 +172,19 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
     // never receives a partial, so the composer draft is untouched while recording.
     onPartial: (): void => undefined,
     stop: async (): Promise<string> => {
+      // Idempotent: a second stop (e.g. manual tap racing the auto-stop) never
+      // re-runs the recorder/transcription or appends duplicate samples.
+      if (finalized) {
+        return '';
+      }
+      finalized = true;
       await stopRecorder();
       try {
         const pcm = concatSamples(chunks, totalSamples);
-        console.log(
-          `[Locra][voice] captured samples=${pcm.length} (~${(pcm.length / SAMPLE_RATE).toFixed(1)}s)`,
-        );
+        if (__DEV__) {
+          // Sanitized: recording length only — no path, no audio, no transcript.
+          console.log(`[Locra][voice] recorded ${(pcm.length / SAMPLE_RATE).toFixed(1)}s`);
+        }
         if (pcm.length === 0) {
           return '';
         }
@@ -191,7 +205,10 @@ async function startSession(config: WhisperVoiceRuntimeConfig): Promise<VoiceSes
         transcription = handle;
         const result = await handle.promise;
         const text = result.isAborted ? '' : cleanTranscript(result.result);
-        console.log(`[Locra][voice] transcript="${text}" aborted=${result.isAborted}`);
+        if (__DEV__) {
+          // Sanitized: length + aborted flag only — never the transcript text.
+          console.log(`[Locra][voice] transcript length=${text.length} aborted=${result.isAborted}`);
+        }
         return text;
       } finally {
         // Always release the context and delete the temp audio — on success AND
