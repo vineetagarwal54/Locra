@@ -256,6 +256,14 @@ export function SettingsScreen({ navigation, route }: Props) {
             detail="Choose conversations and review what is included. Nothing is uploaded."
             onPress={() => navigation.navigate('DiagnosticsExport')}
           />
+          {/* Temporary internal entry for the offline-voice device gate (T092).
+              Remove once VOICE_INPUT_ENABLED is validated on device. */}
+          <SettingsActionRow
+            icon="microphone-outline"
+            label="Voice validation"
+            detail="Runs one offline speech session and records device metrics. Internal."
+            onPress={() => navigation.navigate('VoiceDiagnostics')}
+          />
         </View>
 
         <SectionLabel>VERSIONS</SectionLabel>

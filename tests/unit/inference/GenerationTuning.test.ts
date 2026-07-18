@@ -6,27 +6,29 @@ import {
   CURRENT_PIPELINE_VARIANT_ID,
   GENERATION_CONFIG_IDS,
   PIPELINE_VARIANT_IDS,
+  QWEN_EXTRACTION_SAMPLING_PROFILE,
+  QWEN_VISIBLE_SAMPLING_PROFILE,
 } from '../../../src/inference/GenerationTuning';
 import { LOCRA_SYSTEM_PROMPT } from '../../../src/inference/SystemPrompt';
 
 describe('generation tuning', () => {
-  it('keeps only stable generation identifiers and no custom runtime sampling object', () => {
-    const source = readFileSync(
-      join(process.cwd(), 'src/inference/GenerationTuning.ts'),
-      'utf8',
-    );
-
-    expect(source).not.toMatch(/LOCRA_GENERATION_CONFIG|GenerationConfig\s*=/);
-    expect(source).not.toMatch(/temperature:|topP:|minP:|repetitionPenalty:/);
+  it('pins visible and structured sampling separately', () => {
+    expect(QWEN_VISIBLE_SAMPLING_PROFILE).toEqual({
+      id: 'qwen3-vl-visible-official-v1', temperature: 0.7, topP: 0.8, topK: 20,
+    });
+    expect(QWEN_EXTRACTION_SAMPLING_PROFILE).toEqual({
+      id: 'qwen3-vl-structured-extraction-v1', temperature: 0, topP: 1, topK: 1,
+    });
   });
 
-  it('never references topK, maxTokens, or sequenceLength', () => {
+  it('uses only verified llama.rn snake-case sampling names at the native boundary', () => {
     const source = readFileSync(
-      join(process.cwd(), 'src/inference/GenerationTuning.ts'),
+      join(process.cwd(), 'src/inference/llamaRn/QwenLlamaRuntime.ts'),
       'utf8',
     );
 
-    expect(source).not.toMatch(/topK:|config\.topK/);
+    expect(source).toMatch(/top_k:/);
+    expect(source).toMatch(/top_p:/);
     expect(source).not.toMatch(/maxTokens|sequenceLength/);
   });
 
@@ -36,11 +38,11 @@ describe('generation tuning', () => {
     ]);
     expect(PIPELINE_VARIANT_IDS).toEqual([
       'baseline-current',
-      'recommended-sampling-v1',
+      'qwen-visible-sampling-v2',
       'two-stage-v1',
     ]);
     expect(CURRENT_GENERATION_CONFIG_ID).toBe('qwen3-vl-2b-instruct-v1');
-    expect(CURRENT_PIPELINE_VARIANT_ID).toBe('recommended-sampling-v1');
+    expect(CURRENT_PIPELINE_VARIANT_ID).toBe('qwen-visible-sampling-v2');
   });
 
   it('uses a short positive-first persistent system prompt', () => {

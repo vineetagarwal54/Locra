@@ -56,11 +56,10 @@ Each maps to spec user stories (US) and success criteria (SC).
 2. Send the same request under Low, Medium, High in different conversations. **Expect**: monotonic differences in context budget (character-based), retrieval depth, and answer length; same model.
 3. Change one conversation's mode. **Expect**: only that conversation and only future requests are affected; other conversations unchanged; no messages/embeddings/summaries/drafts lost.
 
-### V7 — Explicit past-chat retrieval (US7 / SC-010)
-1. Create several chats with overlapping titles. Ask "use my <name> chat". **Expect**: only that resolved conversation ID is searched; sources retain references.
-2. Give an ambiguous description. **Expect**: a bounded (≤10) selection list; no retrieval until you pick.
-3. Reference a deleted chat. **Expect**: a clear "cannot find that chat" notice; the request continues without cross-chat context; no substitute used.
-4. Across the run, confirm **0** automatic cross-chat injections when not explicitly requested, and that no unrestricted all-chat search exists.
+### V7 — Current-conversation isolation (SC-010)
+1. Create several conversations with overlapping vocabulary, then ask a follow-up in one conversation. **Expect**: retrieval searches only the open conversation.
+2. Reopen that conversation and ask about its earlier image. **Expect**: its durable evidence remains available.
+3. Confirm that no content from any other conversation enters assembled context.
 
 ### V8 — Offline voice (US8 / SC-012)
 1. Put the device in airplane mode. Enable voice (first-time: storage disclosure + mic permission + local download/verify).

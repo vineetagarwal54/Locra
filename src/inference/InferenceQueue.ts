@@ -30,6 +30,7 @@ import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   LOOPING_ANSWER_NOTICE,
+  samplingProfileForRequestKind,
   TRUNCATED_ANSWER_NOTICE,
 } from './GenerationTuning';
 import { prepareImageForInference } from './ImageEnhancer';
@@ -123,6 +124,7 @@ interface ActiveRequest {
   readonly controller: AbortController;
   readonly trace: InferenceTrace | null;
   cancelled: boolean;
+  loopingStopped: boolean;
 }
 
 interface LifecycleGate<T> {
@@ -200,7 +202,9 @@ export class InferenceQueue implements IInferenceQueue {
     const lifecycleRequest = this.createLifecycleRequest(request, options);
     const traceEnabled = this.deps.isTraceEnabled?.() ?? isDevelopmentInferenceTraceEnabled();
     const trace = traceEnabled ? this.stampTraceAttribution(createInferenceTrace(), lifecycleRequest) : null;
-    const active: ActiveRequest = { controller: new AbortController(), trace, cancelled: false };
+    const active: ActiveRequest = {
+      controller: new AbortController(), trace, cancelled: false, loopingStopped: false,
+    };
     this.active = active;
     const lifecycleGates = createLifecycleGates();
     this.lifecycleGates = lifecycleGates;
@@ -281,7 +285,10 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markInferenceEnd();
       const processedAnswer = postProcessAnswer(result.response);
       this.recordFinalTraceResponse(active, processedAnswer.text);
-      const finishReason = result.finishReason ?? 'natural';
+      const finishReason = resolveQualityFinishReason(
+        result.finishReason ?? 'natural',
+        processedAnswer.verdict,
+      );
       const notice = resolveCompletionNotice(
         processedAnswer.verdict,
         finishReason,
@@ -300,6 +307,7 @@ export class InferenceQueue implements IInferenceQueue {
           processedAnswer.verdict,
           result,
           recorder,
+          responseMode,
         ),
         inferenceTrace: active.trace,
       });
@@ -569,10 +577,23 @@ export class InferenceQueue implements IInferenceQueue {
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 
+    let lastStreamedResponse = '';
+    let lastGeneratedTokenCount = 0;
     const onToken = (cumulative: string, generatedTokenCount?: number): void => {
       if (active.cancelled) return;
+      lastStreamedResponse = cumulative;
+      lastGeneratedTokenCount = generatedTokenCount ?? lastGeneratedTokenCount;
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
+      if (cumulative.length >= 200 && /[.!?â€¦]\s*$/.test(cumulative)) {
+        const streamedQuality = postProcessAnswer(cumulative);
+        if (streamedQuality.verdict === 'looping') {
+          active.loopingStopped = true;
+          this.setState({ response: streamedQuality.text });
+          active.controller.abort();
+          return;
+        }
+      }
       this.lifecycleActor.send({
         type: 'TOKEN',
         response: cumulative,
@@ -581,11 +602,24 @@ export class InferenceQueue implements IInferenceQueue {
       this.setState({ response: cumulative });
     };
 
-    const result = await this.deps.engine.generate(
-      generateRequest,
-      onToken,
-      active.controller.signal,
-    );
+    let result: EngineGenerateResult;
+    try {
+      result = await this.deps.engine.generate(
+        generateRequest,
+        onToken,
+        active.controller.signal,
+      );
+    } catch (error) {
+      if (!active.loopingStopped) {
+        throw error;
+      }
+      result = {
+        response: lastStreamedResponse,
+        tokenCount: lastGeneratedTokenCount,
+        finishReason: 'looping',
+        samplingProfile: samplingProfileForRequestKind(generateRequest.kind),
+      };
+    }
     this.recordVisibleTraceStage(active, stage, generateRequest, result);
 
     const originalQuestion = generateRequest.originalQuestion ?? '';
@@ -628,7 +662,8 @@ export class InferenceQueue implements IInferenceQueue {
     answerText: string,
     verdict: 'complete' | 'truncated' | 'looping',
     result: EngineGenerateResult,
-    recorder: InferenceMetricsRecorder
+    recorder: InferenceMetricsRecorder,
+    responseMode: ResponseMode,
   ): ObjectiveInferenceResultRecord {
     const timings = recorder.buildObjectiveTimings();
     const metadata = this.resolveDeviceBuildMetadata();
@@ -646,6 +681,11 @@ export class InferenceQueue implements IInferenceQueue {
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
       deviceNameModel: metadata.deviceNameModel,
       appBuildId: metadata.appBuildId,
+      responseMode,
+      targetTokenCount: getResponseModeConfig(responseMode).answerTargetTokens,
+      generationLimit: getResponseModeConfig(responseMode).generationLimit,
+      samplingProfile:
+        result.samplingProfile ?? samplingProfileForRequestKind('answer'),
     };
     if (result.promptTokenCount !== undefined) {
       record.promptTokens = result.promptTokenCount;
@@ -780,7 +820,7 @@ export function createInferenceQueue(
 
 function resolveCompletionNotice(
   verdict: 'complete' | 'truncated' | 'looping',
-  finishReason: 'natural' | 'length' | 'cancelled' | 'failed',
+  finishReason: 'natural' | 'length' | 'looping' | 'cancelled' | 'failed',
   inputShortenedWarning: string | null,
 ): string | null {
   // The authoritative hard-cap stop, or the heuristic mid-sentence tail check,
@@ -792,6 +832,19 @@ function resolveCompletionNotice(
         ? LOOPING_ANSWER_NOTICE
         : null;
   return [inputShortenedWarning, answerNotice].filter((notice) => notice !== null).join(' ') || null;
+}
+
+function resolveQualityFinishReason(
+  runtimeReason: 'natural' | 'length' | 'looping' | 'cancelled' | 'failed',
+  verdict: 'complete' | 'truncated' | 'looping',
+): 'natural' | 'length' | 'looping' | 'cancelled' | 'failed' {
+  if (verdict === 'looping' || runtimeReason === 'looping') {
+    return 'looping';
+  }
+  if (verdict === 'truncated' && runtimeReason === 'natural') {
+    return 'length';
+  }
+  return runtimeReason;
 }
 
 function toMessage(error: unknown): string {

@@ -162,6 +162,9 @@ export class ModelDownloadManager {
       await this.finishDownload(pending, currentRun);
     } catch (error) {
       if (!this.isCurrent(currentRun)) return;
+      // Preserve the real native error for diagnostics/logcat; the UI shows a
+      // sanitized, connection-oriented message.
+      recordDownloadDiagnostic(error);
       await this.safeDelete();
       await this.clearVerificationRecord();
       this.fail(toDownloadMessage(error));
@@ -172,6 +175,11 @@ export class ModelDownloadManager {
     if (this.activeDownloadPromise !== null) return true;
     if (!this.deps.fetcher.reattachExistingDownloads) return false;
     const currentRun = this.nextRun();
+    // Clear any stale failure and show a neutral "preparing" state while the async
+    // preflight (native task inspection) runs, so a prior error never flashes and
+    // the screen never opens on a leftover failed state. If nothing is reattached,
+    // the caller's reconcile() immediately supersedes this transient phase.
+    this.setState({ setupPhase: 'preparing', error: null });
     try {
       const reattached = await this.deps.fetcher.reattachExistingDownloads((progress) => {
         if (this.isCurrent(currentRun)) this.setState({ downloadProgress: progress });
@@ -324,6 +332,7 @@ export class ModelDownloadManager {
       await this.finishDownload(pending, currentRun);
     } catch (error) {
       if (!this.isCurrent(currentRun)) return;
+      recordDownloadDiagnostic(error);
       try { await this.deps.fetcher.cancelFetching(...this.deps.sources); } catch { /* already complete */ }
       await this.safeDelete();
       await this.clearVerificationRecord();
@@ -572,6 +581,13 @@ function toDownloadMessage(error: unknown): string {
   return error instanceof Error && error.message.trim() !== ''
     ? 'Model download failed. Check your connection and try again.'
     : 'Model download failed. Try again.';
+}
+
+// Surfaces the raw native download error to device logs (adb logcat / dev
+// console) so the real cause is not lost behind the sanitized UI message.
+function recordDownloadDiagnostic(error: unknown): void {
+  const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.warn('[Locra] Model download failed:', detail);
 }
 
 function getFilename(path: string): string {

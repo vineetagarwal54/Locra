@@ -14,9 +14,12 @@ import { ErrorBoundary, withErrorBoundary } from '../components/ErrorBoundary';
 import { InferenceEngineHost } from '../components/InferenceEngineHost';
 import { SplashScreen } from '../components/SplashScreen';
 import { runModelBootstrap } from '../model/ModelBootstrap';
+import { configureRealVoiceDependencies } from '../model/voice/VoiceComposition';
+import { cleanupOrphanedVoiceAudio } from '../model/voice/voiceTempCleanup';
 import { BenchmarkScreen } from '../screens/BenchmarkScreen';
 import { CaptureScreen } from '../screens/CaptureScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import { DatabaseRecoveryScreen } from '../screens/DatabaseRecoveryScreen';
 import { DiagnosticsExportScreen } from '../screens/DiagnosticsExportScreen';
 import { DownloadProgressScreen } from '../screens/DownloadProgressScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
@@ -26,8 +29,9 @@ import { NotificationRationaleScreen } from '../screens/NotificationRationaleScr
 import { PrivacyScreen } from '../screens/PrivacyScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { SuccessScreen } from '../screens/SuccessScreen';
+import { VoiceDiagnosticsScreen } from '../screens/VoiceDiagnosticsScreen';
 import { WelcomeScreen } from '../screens/WelcomeScreen';
-import { reconcileAbandonedAttempts } from '../store/historyStore';
+import { useDatabaseBootstrapStore } from '../store/databaseBootstrapStore';
 import { useModelStore } from '../store/modelStore';
 import { hasCompletedWelcome } from '../store/onboardingStore';
 
@@ -47,9 +51,9 @@ export type RootStackParamList = {
   History: undefined;
   Benchmark: undefined;
   DiagnosticsExport: { conversationId?: string; responseId?: string } | undefined;
-  // Registered only after the Sherpa/AudioStudio native packages are installed —
-  // VoiceDiagnosticsScreen statically requires them, so keeping it out of the live
-  // navigator graph keeps the Android JS bundle resolvable until then.
+  // Internal validation screen (T092 device gate). The whisper.rn/AudioStudio
+  // packages it uses are installed, and WhisperVoiceRuntime loads them lazily, so
+  // the JS bundle stays resolvable in Expo Go / an unbuilt app.
   VoiceDiagnostics: undefined;
   Settings: { conversationId?: string } | undefined;
 };
@@ -75,6 +79,7 @@ const Capture = withErrorBoundary(CaptureScreen);
 const History = withErrorBoundary(HistoryScreen);
 const Benchmark = withErrorBoundary(BenchmarkScreen);
 const DiagnosticsExport = withErrorBoundary(DiagnosticsExportScreen);
+const VoiceDiagnostics = withErrorBoundary(VoiceDiagnosticsScreen);
 const Settings = withErrorBoundary(SettingsScreen);
 
 // Launch gate, checked in order (per the onboarding flow, design.md §3.2 /
@@ -132,6 +137,7 @@ function RootStack() {
       <Stack.Screen name="History" component={History} />
       <Stack.Screen name="Benchmark" component={Benchmark} />
       <Stack.Screen name="DiagnosticsExport" component={DiagnosticsExport} />
+      <Stack.Screen name="VoiceDiagnostics" component={VoiceDiagnostics} />
       <Stack.Screen name="Settings" component={Settings} />
     </Stack.Navigator>
   );
@@ -139,6 +145,11 @@ function RootStack() {
 
 export function AppNavigator() {
   const engineReady = useModelStore((s) => s.setupPhase === 'ready' && s.integrityVerified);
+  const databaseStatus = useDatabaseBootstrapStore((s) => s.status);
+  const databaseFailure = useDatabaseBootstrapStore((s) => s.failure);
+  const bootstrapDatabase = useDatabaseBootstrapStore((s) => s.bootstrap);
+  const retryDatabase = useDatabaseBootstrapStore((s) => s.retry);
+  const resetDatabase = useDatabaseBootstrapStore((s) => s.resetLocalData);
 
   // Reattach native background downloads before filesystem reconciliation, so
   // an in-progress model download survives process death and routes to setup.
@@ -149,7 +160,16 @@ export function AppNavigator() {
     let active = true;
     let runId = 1;
     async function bootstrapModelState(): Promise<void> {
-      reconcileAbandonedAttempts();
+      // Install the real offline-voice dependencies (artifact lifecycle + whisper
+      // streaming session). Never fatal to startup — on any failure the store keeps
+      // its default "unavailable" dependencies and the mic simply stays hidden.
+      try {
+        configureRealVoiceDependencies();
+        // Sweep any orphaned voice temp audio left by a crash mid-recording.
+        cleanupOrphanedVoiceAudio();
+      } catch {
+        // Keep the store's unavailable fallback.
+      }
       const modelStore = useModelStore.getState();
       modelStore.initializeQwenBundle();
       const reattached = await modelStore.reattachExistingDownload();
@@ -173,6 +193,10 @@ export function AppNavigator() {
       runId += 1;
     };
   }, []);
+
+  useEffect(() => {
+    void bootstrapDatabase();
+  }, [bootstrapDatabase]);
 
   // Route a foreground return (notification tap during an active background
   // download) to the live download screen. Preserves the background download
@@ -198,10 +222,22 @@ export function AppNavigator() {
     return () => subscription.remove();
   }, [navigationRef]);
 
-  if (!bootstrapped) {
+  if (!bootstrapped || databaseStatus === 'initializing') {
     return (
       <ErrorBoundary>
         <SplashScreen />
+      </ErrorBoundary>
+    );
+  }
+
+  if (databaseStatus === 'failed' && databaseFailure !== null) {
+    return (
+      <ErrorBoundary>
+        <DatabaseRecoveryScreen
+          failure={databaseFailure}
+          onRetry={() => { void retryDatabase(); }}
+          onReset={() => { void resetDatabase(); }}
+        />
       </ErrorBoundary>
     );
   }

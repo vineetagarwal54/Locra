@@ -8,7 +8,7 @@ import * as Sharing from 'expo-sharing';
 import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
 import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
-import { conversationRepository, messageRepository } from '../store/historyStore';
+import { conversationRepository, imageRepository, messageRepository } from '../store/historyStore';
 import { useModelStore } from '../store/modelStore';
 
 import { getCurrentDeviceBuildMetadata } from './DeviceBuildMetadataProvider';
@@ -64,7 +64,7 @@ export function prepareDiagnosticsExportBundle(
 ): Promise<DiagnosticsExportPrepareResult> {
   return prepareDiagnosticsExport(conversationIds, options, {
     readConversations: (ids) =>
-      new DiagnosticsRepositoryReader(conversationRepository, messageRepository).read(ids),
+      new DiagnosticsRepositoryReader(conversationRepository, messageRepository, imageRepository).read(ids),
     listTurns: (ids) => diagnosticsTraceStore.list(ids),
     resolveAppInfo,
     fileSystem: realFileSystem,

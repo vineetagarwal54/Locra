@@ -32,14 +32,6 @@ export interface ConversationRepositoryDeps {
   onUnlinkImageFiles?: (paths: ReadonlyArray<string>) => void;
 }
 
-export interface ConversationTargetCandidateRow {
-  readonly id: string;
-  readonly title: string;
-  readonly normalized_title: string;
-  readonly created_at: number;
-  readonly updated_at: number;
-}
-
 const CONVERSATION_SELECT = `
   SELECT conversation.*,
     COALESCE(
@@ -75,19 +67,6 @@ const CONVERSATION_SELECT = `
       WHERE message.conversation_id = conversation.id
     ) AS has_image
   FROM conversation`;
-
-/** Deterministic title normalization for candidate lookup (US7) and dedup. */
-export function normalizeTitle(title: string | null | undefined): string | null {
-  if (title === null || title === undefined) {
-    return null;
-  }
-  const normalized = title
-    .normalize('NFKC')
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
-  return normalized === '' ? null : normalized;
-}
 
 export class ConversationRepository {
   private readonly now: () => number;
@@ -164,41 +143,6 @@ export class ConversationRepository {
     );
   }
 
-  /**
-   * The single most recently updated conversation other than `activeId` — the
-   * referent of a natural "our previous chat" / "last time" request (US7). Returns
-   * null when the active conversation is the only one.
-   */
-  getMostRecentOther(activeId: string): ConversationTargetCandidateRow | null {
-    return this.driver.getFirstSync<ConversationTargetCandidateRow>(
-      `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
-       WHERE deleted_at IS NULL AND id != ?
-       ORDER BY updated_at DESC, id DESC LIMIT 1`,
-      [activeId],
-    );
-  }
-
-  findTargetCandidates(tokens: readonly string[], limit = 10): ConversationTargetCandidateRow[] {
-    const boundedLimit = Math.min(10, Math.max(1, Math.floor(limit)));
-    const normalizedTokens = tokens.map((token) => normalizeTitle(token)).filter(
-      (token): token is string => token !== null,
-    );
-    if (normalizedTokens.length === 0) {
-      return this.driver.getAllSync<ConversationTargetCandidateRow>(
-        `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
-         WHERE deleted_at IS NULL AND normalized_title IS NOT NULL
-         ORDER BY updated_at DESC, id DESC LIMIT ?`, [boundedLimit],
-      );
-    }
-    const conditions = normalizedTokens.map(() => 'normalized_title LIKE ?').join(' AND ');
-    return this.driver.getAllSync<ConversationTargetCandidateRow>(
-      `SELECT id, title, normalized_title, created_at, updated_at FROM conversation
-       WHERE deleted_at IS NULL AND normalized_title IS NOT NULL AND ${conditions}
-       ORDER BY updated_at DESC, id DESC LIMIT ?`,
-      [...normalizedTokens.map((token) => `%${token}%`), boundedLimit],
-    );
-  }
-
   createConversation(input: CreateConversationInput = {}): ConversationRow {
     const id = input.id ?? this.createId();
     const timestamp = this.now();
@@ -206,7 +150,7 @@ export class ConversationRepository {
     const row: ConversationRow = {
       id,
       title,
-      normalized_title: normalizeTitle(title),
+      normalized_title: null,
       response_mode: input.responseMode ?? this.getDefaultResponseMode(),
       created_at: timestamp,
       updated_at: timestamp,
@@ -227,8 +171,10 @@ export class ConversationRepository {
     const sets: string[] = [];
     const params: (string | number | null)[] = [];
     if (patch.title !== undefined) {
-      sets.push('title = ?', 'normalized_title = ?');
-      params.push(patch.title, normalizeTitle(patch.title));
+      // Deprecated legacy column: clear it as titles change. History search uses
+      // the canonical title/message query and never reads this field.
+      sets.push('title = ?', 'normalized_title = NULL');
+      params.push(patch.title);
     }
     if (patch.responseMode !== undefined) {
       sets.push('response_mode = ?');

@@ -175,7 +175,7 @@ describe('DiagnosticsBundleBuilder', () => {
       appInfo: APP_INFO,
     });
 
-    expect(bundle.conversations[0]?.messages[0]?.attachments).toEqual([]);
+    expect(bundle.conversations[0]?.messages[0]?.imageAttachmentCount).toBe(1);
     expect(JSON.stringify(bundle)).not.toContain('/tmp/photo.jpg');
     expect(JSON.stringify(bundle)).not.toContain('C:\\Users\\me');
     expect(JSON.stringify(bundle)).not.toContain('file:///data/photo.jpg');

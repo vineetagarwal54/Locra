@@ -92,4 +92,26 @@ describe('AnswerPostProcessor (FR-054)', () => {
 
     expect(result.text).toContain('retry()\nretry()\nretry()');
   });
+
+  it('trims a three-sentence cycle repeated three times to its first occurrence', () => {
+    const cycle = [
+      'The laptop is open.',
+      'Its screen shows a dark editor.',
+      'It sits on a wooden desk.',
+    ].join(' ');
+    const result = postProcessAnswer(`The image shows a workspace. ${cycle} ${cycle} ${cycle}`);
+
+    expect(result).toEqual({
+      text: `The image shows a workspace. ${cycle}`,
+      verdict: 'looping',
+    });
+  });
+
+  it('does not modify legitimate nonconsecutive repeated prose blocks', () => {
+    const prose =
+      'Turn it off. Wait ten seconds. Check the cable. Turn it off. Wait ten seconds. ' +
+      'Then inspect the outlet before trying again.';
+
+    expect(postProcessAnswer(prose)).toEqual({ text: prose, verdict: 'complete' });
+  });
 });

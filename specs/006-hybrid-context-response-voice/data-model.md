@@ -21,8 +21,7 @@ conversation 1 ──∞ summary
 conversation 1 ──∞ durable_fact
 durable_fact ∞ ──∞ message through durable_fact_source
 
-conversation_target, conversation_candidate and voice_transcript are transient.
-voice model state and global default response mode may remain in MMKV.
+Voice transcript state is transient. Voice model state and the global default response mode may remain in MMKV.
 ```
 
 ## Persisted Entities
@@ -33,7 +32,7 @@ voice model state and global default response mode may remain in MMKV.
 |---|---|---|
 | id | TEXT PK | Stable identity; never derived from title. |
 | title | TEXT | Display/discovery metadata. |
-| normalized_title | TEXT idx | Deterministic lowercase/token-normalized candidate lookup. |
+| normalized_title | TEXT idx | Deprecated legacy field; retained as nullable for production-safe schema compatibility and no longer written or queried. |
 | response_mode | TEXT NOT NULL | Stored lowercase `low`/`medium`/`high`; copied from global default at creation; mapped to the runtime `Low`/`Medium`/`High` union via one tested conversion function. |
 | created_at | INTEGER | |
 | updated_at | INTEGER | Updated when a visible message/attempt changes. |
@@ -42,7 +41,7 @@ voice model state and global default response mode may remain in MMKV.
 **Indexes**
 
 - `(updated_at DESC, id DESC)`
-- `(normalized_title, updated_at DESC, id DESC)`
+- Legacy `(normalized_title, updated_at DESC, id DESC)` index remains until a future production-safe migration removes the deprecated column.
 
 ### message
 
@@ -233,7 +232,6 @@ Code-owned immutable profiles:
 |---|---:|---:|---:|
 | Recent exact turns | 6 | 10 | 16 |
 | Same-chat retrieval limit | 2 | 4 | 6 |
-| Selected-chat retrieval limit | 1 | 3 | 5 |
 | Context budget units (characters) | 4,000 | 7,000 | 11,000 |
 | Answer target tokens | 192 | 384 | 768 |
 | Generation limit | 320 | 640 | 1,024 |
@@ -242,29 +240,6 @@ Code-owned immutable profiles:
 - Conversation choice is persisted lowercase in `conversation.response_mode` and converted to/from the runtime `Low`/`Medium`/`High` union through one tested conversion function.
 - Global default remains a small MMKV setting and only initializes a new conversation.
 - The cosine similarity retrieval threshold is a versioned constant pinned at **0.62**, co-located with these profiles in `ResponseMode.ts` / retrieval config; changeable only through recorded evaluation.
-
-### conversation_target
-
-Transient request scope:
-
-| Field | Type |
-|---|---|
-| targetConversationId | string or null |
-| origin | `active`, `named`, `selected` |
-| sourceLabel | title/date snapshot for attribution |
-
-Exactly one selected past conversation is allowed; no all-chat target exists.
-
-### conversation_candidate
-
-Transient picker record:
-
-- conversation ID
-- title
-- updated date
-- optional short metadata preview
-
-At most 10 candidates.
 
 ### voice_model_state
 
