@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
     "@kesha-antonov/react-native-background-downloader": "^4.5.6",
+    "@maplibre/maplibre-react-native": "11.3.6",
     "@react-navigation/drawer": "^7.12.8",
     "@react-navigation/native": "^7.3.7",
     "@react-navigation/native-stack": "^7.17.9",
@@ -81,16 +82,16 @@
     }
   },
   "expo": {
-  "doctor": {
-    "reactNativeDirectoryCheck": {
-      "exclude": [
-        "react-native-nitro-image",
-        "@siteed/audio-studio",
-        "whisper.rn",
-        "locra-model-integrity"
-      ]
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-nitro-image",
+          "@siteed/audio-studio",
+          "whisper.rn",
+          "locra-model-integrity"
+        ]
+      }
     }
-  }
-},
+  },
   "private": true
 }
