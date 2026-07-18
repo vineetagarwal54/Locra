@@ -208,7 +208,6 @@ This removes the earlier ambiguity about allowing recording to overlap generatio
 |---|---:|---:|---:|
 | Recent exact turns | 6 | 10 | 16 |
 | Same-chat retrieval limit | 2 | 4 | 6 |
-| Selected-chat retrieval limit | 1 | 3 | 5 |
 | Context budget units (characters) | 4,000 | 7,000 | 11,000 |
 | Answer target tokens | 192 | 384 | 768 |
 | Generation limit | 320 | 640 | 1,024 |
@@ -216,21 +215,6 @@ This removes the earlier ambiguity about allowing recording to overlap generatio
 Changing mode affects only future requests; summaries and embeddings are mode-independent. Context budget units are character-based estimates (`CharacterContextBudgetPolicy`), not tokenizer tokens.
 
 **Storage & conversion**: Modes are stored lowercase (`low`/`medium`/`high`) in SQL and mapped to the runtime `Low`/`Medium`/`High` union through one tested conversion function (single source of the mapping, both directions).
-
-## R11 — Explicit past-chat targeting
-
-**Decision**: Allow exactly one request-scoped selected past conversation.
-
-**Resolution**
-
-1. User selects a chat directly, or named-chat intent is detected.
-2. Query normalized title tokens and optional date metadata only.
-3. Return at most 10 candidates.
-4. If one clear match exists, resolve its stable ID.
-5. Otherwise require user selection.
-6. Only after resolution may content/vector retrieval query that conversation.
-
-**Out of scope**: automatic cross-chat memory and unrestricted all-chat search.
 
 ## R12 — Pagination and cache
 
@@ -240,7 +224,6 @@ Changing mode affects only future requests; summaries and embeddings are mode-in
 
 - Conversation: `(updated_at DESC, id DESC)`.
 - Message: `(conversation_id, created_at DESC, id DESC)`.
-- Candidate title lookup: normalized title plus `(updated_at DESC, id DESC)`.
 - Embedding compatibility/scope: `(conversation_id, model_version, state)`.
 
 **Cache**

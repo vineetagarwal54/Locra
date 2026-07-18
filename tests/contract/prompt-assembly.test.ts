@@ -61,7 +61,6 @@ describe('canonical follow-up assembly', () => {
         recentExactTurns: 6,
         contextBudgetUnits: 4_000,
         sameChatRetrievalLimit: 2,
-        selectedChatRetrievalLimit: 1,
         answerTargetTokens: 192,
         generationLimit: 320,
       },

@@ -5,7 +5,6 @@ export type EvaluationCategory =
   | 'long-chat'
   | 'image-follow-up'
   | 'retry'
-  | 'selected-chat'
   | 'response-mode'
   | 'voice'
   | 'memory'
@@ -48,7 +47,6 @@ export const HYBRID_CONTEXT_CASES: readonly RepeatableEvaluationCase[] = [
   caseDefinition('early-fact-recovery', 'long-chat', ['Medium', 'High'], ['Store an early fact.', 'Recall after 30 turns.']),
   caseDefinition('persisted-image-evidence', 'image-follow-up', ['Medium'], ['Inspect an image.', 'Ask two text follow-ups.']),
   caseDefinition('immutable-retry', 'retry', ['Medium'], ['Interrupt an answer.', 'Retry the failed attempt.']),
-  caseDefinition('one-chat-target', 'selected-chat', ['Low', 'Medium', 'High'], ['Select one past chat.', 'Ask a scoped question.']),
   caseDefinition('mode-monotonicity', 'response-mode', ['Low', 'Medium', 'High'], ['Run the same bounded request.']),
   caseDefinition('editable-voice-draft', 'voice', ['Medium'], ['Transcribe offline.', 'Edit before explicit send.']),
   caseDefinition('constrained-memory', 'memory', ['Low', 'Medium', 'High'], ['Run long context and record peak memory.']),
@@ -101,4 +99,3 @@ function caseDefinition(
 function average(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
-

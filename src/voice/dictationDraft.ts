@@ -2,11 +2,22 @@
 // the store/UI so the typed-prefix preservation and read-only rules are unit
 // tested directly (no rendering, no native modules).
 
+// Hard cap on a single recording. Whisper transcribes a completed utterance, and
+// unbounded recordings risk memory blow-ups, so the session auto-stops at this
+// limit and begins transcription.
+export const MAX_RECORDING_MS = 30_000;
+// During the final window before the limit, the composer shows a visible warning.
+export const RECORDING_WARNING_MS = 5_000;
+
 export type VoiceSessionStatus =
   | 'idle'
   | 'preparing'
   | 'recording'
   | 'transcribing'
+  // Cancellation requested; native recorder/recognizer teardown and the exclusive
+  // resource-lease release are still in flight. The composer stays LOCKED through
+  // this state and only unlocks once cleanup resolves (→ 'cancelled').
+  | 'cancelling'
   | 'ready'
   | 'cancelled'
   | 'failed';
@@ -16,6 +27,7 @@ const READ_ONLY_STATUSES: ReadonlySet<VoiceSessionStatus> = new Set([
   'preparing',
   'recording',
   'transcribing',
+  'cancelling',
 ]);
 
 /**
@@ -47,7 +59,7 @@ export function isComposerReadOnlyForVoice(status: VoiceSessionStatus): boolean 
   return READ_ONLY_STATUSES.has(status);
 }
 
-/** True when a session is in flight (used to disable Send / image / past-chat). */
+/** True when a session is in flight (used to disable Send and image controls). */
 export function isVoiceSessionActive(status: VoiceSessionStatus): boolean {
   return isComposerReadOnlyForVoice(status);
 }

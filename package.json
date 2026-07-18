@@ -8,19 +8,21 @@
     "@react-navigation/drawer": "^7.12.8",
     "@react-navigation/native": "^7.3.7",
     "@react-navigation/native-stack": "^7.17.9",
-    "expo": "~56.0.15",
-    "expo-asset": "~56.0.19",
-    "expo-blur": "~56.0.3",
+    "@siteed/audio-studio": "^3.2.1",
+    "buffer": "^6.0.3",
+    "expo": "~56.0.16",
+    "expo-asset": "~56.0.20",
+    "expo-blur": "~56.0.4",
     "expo-clipboard": "~56.0.4",
     "expo-crypto": "~56.0.4",
-    "expo-dev-client": "~56.0.22",
+    "expo-dev-client": "~56.0.23",
     "expo-file-system": "~56.0.8",
     "expo-font": "56.0.7",
     "expo-haptics": "~56.0.3",
     "expo-image": "~56.0.11",
-    "expo-image-manipulator": "~56.0.21",
+    "expo-image-manipulator": "~56.0.22",
     "expo-network": "~56.0.5",
-    "expo-sharing": "~56.0.21",
+    "expo-sharing": "~56.0.22",
     "expo-sqlite": "~56.0.5",
     "expo-status-bar": "~56.0.4",
     "fflate": "^0.8.3",
@@ -39,6 +41,7 @@
     "react-native-screens": "4.25.2",
     "react-native-vision-camera": "^5.1.0",
     "react-native-worklets": "0.8.3",
+    "whisper.rn": "0.6.0",
     "xstate": "^5.32.4",
     "zustand": "^5.0.14"
   },
@@ -78,13 +81,16 @@
     }
   },
   "expo": {
-    "doctor": {
-      "reactNativeDirectoryCheck": {
-        "exclude": [
-          "react-native-nitro-image"
-        ]
-      }
+  "doctor": {
+    "reactNativeDirectoryCheck": {
+      "exclude": [
+        "react-native-nitro-image",
+        "@siteed/audio-studio",
+        "whisper.rn",
+        "locra-model-integrity"
+      ]
     }
-  },
+  }
+},
   "private": true
 }

@@ -1,7 +1,8 @@
-// Offline voice input is fully wired to the real Sherpa-ONNX streaming runtime
-// (see SherpaVoiceRuntime.ts + VoiceSessionService.ts), but stays HIDDEN until the
-// native packages (`@siteed/sherpa-onnx.rn`, `@siteed/audio-studio`) are installed
-// and an Android release build + physical-device validation (T092) pass. Showing a
-// microphone that cannot record is worse than hiding it, so this remains `false`
-// until that on-device validation succeeds — do NOT flip it on a JS-only change.
-export const VOICE_INPUT_ENABLED = false;
+// Offline voice input is fully wired to the real whisper.rn (whisper.cpp) runtime
+// (see WhisperVoiceRuntime.ts + VoiceSessionService.ts + VoiceComposition.ts). The
+// Android release build compiled the native packages (`whisper.rn`,
+// `@siteed/audio-studio`), so the microphone is enabled here to allow on-device
+// validation (Settings → "Voice validation", the T092 gate). If that validation
+// surfaces a problem, flip this back to `false` to hide the mic without reverting
+// the implementation.
+export const VOICE_INPUT_ENABLED = true;

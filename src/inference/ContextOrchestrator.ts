@@ -162,7 +162,6 @@ export interface ContextOrchestrationResult {
 export interface ContextOrchestrationOptions {
   readonly diagnosticsEnabled?: boolean;
   readonly responseMode?: ResponseMode;
-  readonly selectedConversationId?: string;
   readonly referencedImage?: Omit<EvidenceReference, 'conversationId'>;
   readonly queryVector?: Float32Array;
 }
@@ -235,27 +234,11 @@ export class ContextOrchestrator {
     usedUnits = mediaEvidence.usedUnits;
 
     const sameChatRetrieved = selectRetrievedWithinBudget(
-      this.retrieve(snapshot, [snapshot.conversationId], responseModeLimit(options.responseMode, false), options),
+      this.retrieve(snapshot, [snapshot.conversationId], responseModeLimit(options.responseMode), options),
       usedUnits,
       policy,
-      false,
     );
     usedUnits = sameChatRetrieved.usedUnits;
-
-    const selectedChatRetrieved = options.selectedConversationId === undefined
-      ? { items: [] as ContextMemoryFact[], usedUnits }
-      : selectRetrievedWithinBudget(
-          this.retrieve(
-            snapshot,
-            [options.selectedConversationId],
-            responseModeLimit(options.responseMode, true),
-            options,
-          ),
-          usedUnits,
-          policy,
-          true,
-        );
-    usedUnits = selectedChatRetrieved.usedUnits;
 
     const durableFacts = this.sources.listDurableFacts?.(snapshot.conversationId)
       ?? memory.importantFacts;
@@ -298,7 +281,6 @@ export class ContextOrchestrator {
         mediaEvidence: mediaEvidence.items.map(cloneMediaEvidence),
         importantFacts: [
           ...sameChatRetrieved.items,
-          ...selectedChatRetrieved.items,
           ...importantFacts.items.map(cloneMemoryFact),
         ],
         olderSummary: summaryEntries.summary === undefined
@@ -505,9 +487,9 @@ function responseModeBudgetPolicy(
   });
 }
 
-function responseModeLimit(mode: ResponseMode | undefined, selected: boolean): number {
+function responseModeLimit(mode: ResponseMode | undefined): number {
   const config = getResponseModeConfig(mode ?? 'Medium');
-  return selected ? config.selectedChatRetrievalLimit : config.sameChatRetrievalLimit;
+  return config.sameChatRetrievalLimit;
 }
 
 function selectProtectedEvidence(
@@ -576,12 +558,11 @@ function selectRetrievedWithinBudget(
   retrieved: readonly RetrievedItem[],
   initialUsedUnits: number,
   policy: ContextBudgetPolicy,
-  selectedConversation: boolean,
 ): { items: ContextMemoryFact[]; usedUnits: number } {
   const items: ContextMemoryFact[] = [];
   let usedUnits = initialUsedUnits;
   for (const item of retrieved) {
-    const sourceKind = selectedConversation ? 'Untrusted selected source' : 'Untrusted source';
+    const sourceKind = 'Untrusted source';
     const text =
       `[${sourceKind}: conversation ${item.sourceConversationId}, message ${item.sourceMessageId}] ` +
       item.text;

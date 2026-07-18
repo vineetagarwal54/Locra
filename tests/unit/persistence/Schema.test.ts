@@ -4,8 +4,10 @@
 // Real-SQLite deletion/orphan behavior is validated once on-device (Polish/T079).
 
 import {
-  applyAdditiveSchema,
   initializeSchema,
+} from '../../../src/persistence/sqlite/Migrations';
+import {
+  addColumnIfMissing,
   readSchemaVersion,
   SCHEMA_STATEMENTS,
   SCHEMA_TABLES,
@@ -93,7 +95,7 @@ describe('SQL schema contract', () => {
     expect(DDL).toMatch(/ux_embedding_chunk[\s\S]*WHERE chunk_id IS NOT NULL AND state = 'ready'/);
   });
 
-  it('initializeSchema runs each statement inside a transaction and stamps user_version', () => {
+  it('initializeSchema runs ordered migrations transactionally and stamps the latest user_version', () => {
     const executed: string[] = [];
     let inTransaction = false;
     let stampedVersion = 0;
@@ -120,7 +122,8 @@ describe('SQL schema contract', () => {
 
     initializeSchema(driver);
 
-    expect(executed.length).toBe(SCHEMA_STATEMENTS.length);
+    // v3 backfills `finish_reason` with ALTER TABLE after the v1/v2 DDL.
+    expect(executed.length).toBe(SCHEMA_STATEMENTS.length + 1);
     expect(stampedVersion).toBe(SCHEMA_VERSION);
     expect(inTransaction).toBe(false);
   });
@@ -145,11 +148,11 @@ describe('SQL schema contract', () => {
       );
       expect(columnNames(database.driver)).not.toContain('finish_reason');
 
-      applyAdditiveSchema(database.driver);
+      addColumnIfMissing(database.driver, 'message', 'finish_reason', 'TEXT');
       expect(columnNames(database.driver)).toContain('finish_reason');
 
       // Idempotent: a second pass must not throw (column already present).
-      expect(() => applyAdditiveSchema(database.driver)).not.toThrow();
+      expect(() => addColumnIfMissing(database.driver, 'message', 'finish_reason', 'TEXT')).not.toThrow();
     } finally {
       database.close();
     }

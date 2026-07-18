@@ -75,6 +75,51 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     );
   });
 
+  it('passes Qwen official visible-VL sampling and records the actual profile', async () => {
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({ content: 'done' }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      kind: 'chat',
+      responseMode: 'Medium',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(completion).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: 0.7, top_p: 0.8, top_k: 20 }),
+      expect.any(Function),
+    );
+    expect(result.samplingProfile).toEqual({
+      id: 'qwen3-vl-visible-official-v1', temperature: 0.7, topP: 0.8, topK: 20,
+    });
+  });
+
+  it('uses the separately configured low-variance profile for extraction', async () => {
+    const completion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({ content: '{}' }),
+    );
+    const { runtime } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    await runtime.generate({
+      messages: MESSAGES,
+      kind: 'extraction',
+      responseMode: 'High',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(completion).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: 0, top_p: 1, top_k: 1 }),
+      expect.any(Function),
+    );
+  });
+
   it('reports a natural finish when the model stops on its own', async () => {
     const completion = jest.fn(
       async (): Promise<QwenNativeCompletionResult> => ({

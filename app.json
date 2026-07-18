@@ -47,7 +47,16 @@
           "enableOpenCLAndHexagon": true
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "@siteed/audio-studio",
+        {
+          "enablePhoneStateHandling": false,
+          "enableNotifications": false,
+          "enableBackgroundAudio": false,
+          "enableDeviceDetection": false
+        }
+      ]
     ],
     "extra": {
       "eas": {

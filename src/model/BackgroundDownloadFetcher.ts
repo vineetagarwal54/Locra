@@ -72,6 +72,9 @@ interface ActiveDownload {
 export class BackgroundDownloadFetcher implements ResourceFetcherLike {
   // Active downloads keyed by the source URL, so pause/resume/cancel can find them.
   private readonly active = new Map<string, ActiveDownload>();
+  // Monotonic counter feeding unique native task IDs so a fresh download can never
+  // collide with a leftover task ID from a prior (failed/stopped) attempt.
+  private taskSeq = 0;
 
   constructor(private readonly deps: BackgroundDownloadFetcherDeps) {}
 
@@ -81,6 +84,10 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
   ): Promise<{ paths: string[]; wasDownloaded: boolean[] }> {
     const urls = sources.filter(isUrl);
     await this.deps.ensureDownloadDir();
+    // A fresh download starts from a clean slate: stop any stale native task and
+    // delete any partial file left by a prior aborted attempt, so we never resume
+    // a broken/failed transfer or clash with a leftover task.
+    await this.cleanStaleArtifacts(urls);
 
     // Unified 0..1 progress across all in-flight files, dominated by the
     // ~1.1 GB language GGUF, so the aggregate bundle progress advances smoothly.
@@ -114,41 +121,67 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
 
     await this.deps.ensureDownloadDir();
     const existingTasks = await this.deps.getExistingDownloadTasks();
+
+    // Classify every required artifact before committing to a reattach. A bundle
+    // can only be resumed cleanly when EVERY not-yet-downloaded artifact has a
+    // genuine live task — otherwise reattaching would pair a live task with a
+    // missing companion and fail the whole bundle mid-flight.
+    const onDisk: string[] = [];
+    const attachable: Array<{ url: string; destination: string; task: BgDownloadTask }> = [];
+    let hasIncompleteArtifact = false;
+
+    for (const url of urls) {
+      const destination = this.deps.destinationForUrl(url);
+      if (this.deps.fileExists(destination)) {
+        onDisk.push(destination);
+        continue;
+      }
+      const task = findTaskForDestination(existingTasks, destination);
+      // Only a genuinely in-flight task (DOWNLOADING/PAUSED), or a DONE task whose
+      // file is actually on disk, may be reattached. A FAILED/STOPPED task, a DONE
+      // task with no file, or no task at all is stale/missing.
+      if (task && isReattachable(task, this.deps.fileExists, destination)) {
+        attachable.push({ url, destination, task });
+      } else {
+        hasIncompleteArtifact = true;
+        if (task) {
+          await safe(() => task.stop());
+        }
+        await safe(() => this.deps.deleteFileIfExists(destination));
+      }
+    }
+
+    // A mixed bundle (some live, some missing) cannot be resumed. Cancel and clean
+    // the incomplete bundle — including the otherwise-valid live tasks and their
+    // partials — and return null so reconciliation starts one clean fresh download.
+    if (hasIncompleteArtifact) {
+      for (const { destination, task } of attachable) {
+        await safe(() => task.stop());
+        await safe(() => this.deps.deleteFileIfExists(destination));
+      }
+      return null;
+    }
+
+    // Nothing needs reattaching (everything already on disk, or no live tasks).
+    if (attachable.length === 0) {
+      return null;
+    }
+
+    // Every not-yet-downloaded artifact has a live task — reattach the bundle.
     const bytes = new Map<string, { downloaded: number; total: number }>();
     const emit = (): void => {
       if (!callback) return;
       callback(progressFor(bytes));
     };
 
-    const promises: Array<Promise<{ path: string; wasDownloaded: boolean }>> = [];
+    const promises: Array<Promise<{ path: string; wasDownloaded: boolean }>> = onDisk.map(
+      (destination) => Promise.resolve({ path: destination, wasDownloaded: false }),
+    );
     const statuses: ReattachedDownloadStatus[] = [];
-    const missingDestinations: string[] = [];
-    let attachedCount = 0;
-
-    for (const url of urls) {
-      const destination = this.deps.destinationForUrl(url);
-      if (this.deps.fileExists(destination)) {
-        promises.push(Promise.resolve({ path: destination, wasDownloaded: false }));
-        continue;
-      }
-
-      const task = findTaskForDestination(existingTasks, destination);
-      if (!task) {
-        missingDestinations.push(destination);
-        continue;
-      }
-
-      attachedCount += 1;
+    for (const { url, destination, task } of attachable) {
       seedProgress(bytes, url, task);
       statuses.push(task.state === 'PAUSED' ? 'paused' : 'downloading');
       promises.push(this.reattachOne(url, destination, task, bytes, emit));
-    }
-
-    if (attachedCount === 0) {
-      return null;
-    }
-    for (const destination of missingDestinations) {
-      promises.push(Promise.reject(new Error(`No existing download task for ${filenameOf(destination)}.`)));
     }
 
     emit();
@@ -173,7 +206,7 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
       return Promise.resolve({ path: destination, wasDownloaded: false });
     }
     return new Promise((resolve, reject) => {
-      const task = this.deps.createDownloadTask({ id: filenameOf(destination), url, destination });
+      const task = this.deps.createDownloadTask({ id: this.uniqueTaskId(destination), url, destination });
       this.active.set(url, { task, reject });
       task
         .progress(({ bytesDownloaded, bytesTotal }) => {
@@ -260,6 +293,37 @@ export class BackgroundDownloadFetcher implements ResourceFetcherLike {
     return files.filter(isModelArtifact);
   }
 
+  // Stops any stale native task and deletes any partial file for sources that are
+  // not already fully downloaded, so a fresh `fetch` starts clean. Files that are
+  // already present on disk are left untouched for reuse (no re-download).
+  private async cleanStaleArtifacts(urls: string[]): Promise<void> {
+    const existing = await this.safeExistingTasks();
+    for (const url of urls) {
+      const destination = this.deps.destinationForUrl(url);
+      if (this.deps.fileExists(destination)) {
+        continue;
+      }
+      const stale = findTaskForDestination(existing, destination);
+      if (stale) {
+        await safe(() => stale.stop());
+      }
+      await safe(() => this.deps.deleteFileIfExists(destination));
+    }
+  }
+
+  private async safeExistingTasks(): Promise<BgDownloadTask[]> {
+    try {
+      return await this.deps.getExistingDownloadTasks();
+    } catch {
+      return [];
+    }
+  }
+
+  private uniqueTaskId(destination: string): string {
+    this.taskSeq += 1;
+    return `${filenameOf(destination)}-${Date.now()}-${this.taskSeq}`;
+  }
+
   private async forEachActive(
     sources: ResourceSource[],
     action: (task: BgDownloadTask) => Promise<void>,
@@ -291,6 +355,23 @@ function filenameOf(absolutePath: string): string {
 function findTaskForDestination(tasks: BgDownloadTask[], destination: string): BgDownloadTask | undefined {
   const destinationId = filenameOf(destination);
   return tasks.find((task) => task.id === destinationId || task.destination === destination);
+}
+
+// Whether a surviving native task represents a resumable transfer. Genuine
+// in-flight (DOWNLOADING/PAUSED) tasks are reattached; a DONE task counts only
+// when its file is really on disk. FAILED/STOPPED/PENDING tasks are stale.
+function isReattachable(
+  task: BgDownloadTask,
+  fileExists: (absolutePath: string) => boolean,
+  destination: string,
+): boolean {
+  if (task.state === 'DOWNLOADING' || task.state === 'PAUSED') {
+    return true;
+  }
+  if (task.state === 'DONE') {
+    return fileExists(destination);
+  }
+  return false;
 }
 
 function seedProgress(

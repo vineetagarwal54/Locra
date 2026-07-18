@@ -35,7 +35,7 @@ search(input: {
   queryVector: Float32Array;
   conversationIds: string[];   // scope filter applied BEFORE scoring (FR-016); resolved upstream (default = active only)
   threshold: number;           // pinned 0.62 (FR-017)
-  limit: number;               // mode-specific (same-chat vs selected-chat) result cap
+  limit: number;               // mode-specific same-chat result cap
 }): Promise<RetrievedItem[]>;
 ```
 
@@ -65,25 +65,11 @@ search(input): Promise<RetrievedItem[]>; // deterministic token-overlap; used wh
 chunk(message: { id; text; conversationId; imageAssetId? }): Chunk[]; // 800/120 windows above threshold; else one unit (FR-023 refs)
 ```
 
-## ConversationTargetResolver (single-chat targeting; FR-037/038/039/041)
-
-```ts
-resolve(reference: { rawText?: string; selectedId?: string }): Promise<
-  | { kind: 'active' }                                     // default; no cross-chat
-  | { kind: 'scoped'; conversationId: string }            // exactly one resolved past chat
-  | { kind: 'ambiguous'; candidates: ConversationCandidate[] } // ≤10; require user selection
-  | { kind: 'not-found' }                                 // referenced chat deleted/missing
->;
-```
-
-- Default scope is `active`; broadens only to **exactly one** explicitly named/selected past conversation. Candidate lookup is bounded to **≤10** via `normalized_title` tokens + dates; **no content/vector search before resolution**.
-- Unbounded "search all chats" is **out of scope** — the resolver never returns a multi/all-chat scope.
-
 ## ContextOrchestrator (refactored in the hybrid-context phase)
 
-`orchestrate(projection, { responseMode, target })` assembles context in the fixed priority order (FR-015):
+`orchestrate(projection, { responseMode })` assembles context in the fixed priority order (FR-015):
 
-1. current request → 2. recent exact turns (mode floor, never dropped) → 3. explicitly referenced image evidence → 4. same-chat vector-retrieved items → 5. explicitly selected past-chat retrieved items → 6. durable facts → 7. eligible older-range summary.
+1. current request → 2. recent exact turns (mode floor, never dropped) → 3. explicitly referenced image evidence → 4. same-chat vector-retrieved items → 5. durable facts → 6. eligible older-range summary.
 
 - Consumes the SQL **canonical projection** (active completed attempts only).
 - Vector retrieval **supplements** and never replaces the recent-turn floor (FR-017); budget overflow drops lowest-priority-first while keeping current request + referenced image + recent-turn floor.

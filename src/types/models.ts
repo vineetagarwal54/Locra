@@ -17,7 +17,7 @@ export type MessageStatus = 'generating' | 'completed' | 'failed' | 'interrupted
  * - `cancelled`: the user stopped generation.
  * - `failed`: generation errored before finishing.
  */
-export type GenerationFinishReason = 'natural' | 'length' | 'cancelled' | 'failed';
+export type GenerationFinishReason = 'natural' | 'length' | 'looping' | 'cancelled' | 'failed';
 
 export interface Attachment {
   kind: AttachmentKind;

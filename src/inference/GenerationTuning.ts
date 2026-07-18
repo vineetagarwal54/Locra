@@ -8,19 +8,48 @@ export const CURRENT_GENERATION_CONFIG_ID: GenerationConfigId = 'qwen3-vl-2b-ins
 
 export const PIPELINE_VARIANT_IDS = [
   'baseline-current',
-  'recommended-sampling-v1',
+  'qwen-visible-sampling-v2',
   'two-stage-v1',
 ] as const;
 
 export type PipelineVariantId = (typeof PIPELINE_VARIANT_IDS)[number];
 
-export const CURRENT_PIPELINE_VARIANT_ID: PipelineVariantId = 'recommended-sampling-v1';
+export const CURRENT_PIPELINE_VARIANT_ID: PipelineVariantId = 'qwen-visible-sampling-v2';
+
+export interface SamplingProfile {
+  readonly id: string;
+  readonly temperature: number;
+  readonly topP: number;
+  readonly topK: number;
+}
+
+/** Qwen's published visible VL sampling values, using llama.rn 0.12.5 names at the native boundary. */
+export const QWEN_VISIBLE_SAMPLING_PROFILE: SamplingProfile = {
+  id: 'qwen3-vl-visible-official-v1',
+  temperature: 0.7,
+  topP: 0.8,
+  topK: 20,
+};
+
+/** Low-variance profile for JSON extraction/compaction; never applied to visible prose. */
+export const QWEN_EXTRACTION_SAMPLING_PROFILE: SamplingProfile = {
+  id: 'qwen3-vl-structured-extraction-v1',
+  temperature: 0,
+  topP: 1,
+  topK: 1,
+};
+
+export function samplingProfileForRequestKind(
+  kind: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction' | undefined,
+): SamplingProfile {
+  return kind === 'extraction' || kind === 'extractionRetry' || kind === 'compaction'
+    ? QWEN_EXTRACTION_SAMPLING_PROFILE
+    : QWEN_VISIBLE_SAMPLING_PROFILE;
+}
 
 /**
- * App-level output cap (there is no native max-tokens setting to configure on
- * this library version). Once the engine reports this many generated tokens
- * mid-stream, InferenceQueue stops generation and completes with the partial
- * answer plus a visible notice.
+ * Visible notice used when native `n_predict` or quality assessment shows that
+ * an answer ended before completing its thought.
  */
 export const TRUNCATED_ANSWER_NOTICE =
   'This answer may have been cut off before it finished.';

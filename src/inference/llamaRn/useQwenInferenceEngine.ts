@@ -2,6 +2,7 @@ import { File } from 'expo-file-system';
 import { useEffect, useRef } from 'react';
 
 import type { GenerationFinishReason } from '../../types/models';
+import type { SamplingProfile } from '../GenerationTuning';
 import type { EngineGenerateRequest, InferenceEngineHandle } from '../InferenceEngineHandle';
 
 import { QwenLlamaRuntime, type LlamaBinding } from './QwenLlamaRuntime';
@@ -27,6 +28,7 @@ interface EngineState {
   totalTokens: number;
   finishReason: GenerationFinishReason | null;
   inputShortenedWarning: string | null;
+  samplingProfile: SamplingProfile | null;
 }
 
 const INITIAL_ENGINE_STATE: EngineState = {
@@ -39,6 +41,7 @@ const INITIAL_ENGINE_STATE: EngineState = {
   totalTokens: 0,
   finishReason: null,
   inputShortenedWarning: null,
+  samplingProfile: null,
 };
 
 function loadLlamaBinding(): LlamaBinding {
@@ -110,6 +113,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
           const result = await runtime.generate({
             messages: request.messages,
             responseMode: request.responseMode,
+            kind: request.kind,
             signal: controller.signal,
             onToken: (cumulativeText, generatedTokenCount) => {
               setState({
@@ -126,6 +130,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             totalTokens: result.totalTokens,
             finishReason: result.finishReason,
             inputShortenedWarning: result.inputShortenedWarning,
+            samplingProfile: result.samplingProfile,
           });
           return result.text;
         } catch (error) {
@@ -153,6 +158,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
       getTotalTokenCount: (): number => stateRef.current.totalTokens,
       getFinishReason: (): GenerationFinishReason | null => stateRef.current.finishReason,
       getInputShortenedWarning: (): string | null => stateRef.current.inputShortenedWarning,
+      getSamplingProfile: (): SamplingProfile | null => stateRef.current.samplingProfile,
       // Locra owns all conversation context; the runtime keeps no native history.
       getMessageHistoryLength: (): number => 0,
       clearHistory: (): void => {},

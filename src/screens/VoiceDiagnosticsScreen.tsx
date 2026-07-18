@@ -1,19 +1,19 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Paths } from 'expo-file-system';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { designTokens, haptics } from '../constants/theme';
+import { voiceModelDirectory } from '../model/voice/VoiceModelArtifact';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { DEFAULT_VOICE_MODEL } from '../voice/VoiceModelDescriptor';
+import { VoiceValidationRun, type VoiceValidationReport } from '../voice/VoiceValidationMetrics';
 import {
-  createSherpaVoiceRuntime,
+  createWhisperVoiceRuntime,
   isVoiceRuntimeAvailable,
   voiceModelIsInstalled,
-} from '../voice/SherpaVoiceRuntime';
-import { DEFAULT_VOICE_MODEL, VOICE_MODEL_DIR_NAME } from '../voice/VoiceModelDescriptor';
-import { VoiceValidationRun, type VoiceValidationReport } from '../voice/VoiceValidationMetrics';
+} from '../voice/WhisperVoiceRuntime';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'VoiceDiagnostics'>;
 
@@ -23,7 +23,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'VoiceDiagnostics'>;
 const VALIDATION_DURATION_MS = 8_000;
 
 function modelDirectory(): string {
-  return `${Paths.document.uri}/${VOICE_MODEL_DIR_NAME}/${DEFAULT_VOICE_MODEL.id}`;
+  return voiceModelDirectory(DEFAULT_VOICE_MODEL);
 }
 
 export function VoiceDiagnosticsScreen({ navigation }: Props) {
@@ -93,7 +93,7 @@ export function VoiceDiagnosticsScreen({ navigation }: Props) {
         </Pressable>
         {!runtimeAvailable ? (
           <Text style={styles.muted}>
-            The Sherpa-ONNX voice runtime is not present in this build. Install the native packages
+            The whisper.rn voice runtime is not present in this build. Install the native packages
             and rebuild, then return here.
           </Text>
         ) : !modelInstalled ? (
@@ -113,18 +113,18 @@ async function runValidation(config: {
   modelDirectory: string;
 }): Promise<VoiceValidationReport> {
   const run = new VoiceValidationRun(config.descriptor);
-  const runtime = createSherpaVoiceRuntime(config);
+  const runtime = createWhisperVoiceRuntime(config);
   run.markStart();
   const session = await runtime.start();
   run.markInitialized();
-  session.onPartial(() => {
-    run.markPartial();
-    run.sampleMemory(readJsHeapBytes());
-  });
+  run.sampleMemory(readJsHeapBytes());
+  // Record for the validation window, then transcribe the completed audio. There
+  // are no live partials — "Final latency" below is the whole whisper decode time.
   await new Promise<void>((resolve) => setTimeout(resolve, VALIDATION_DURATION_MS));
   run.markStopRequested();
   await session.stop();
   run.markFinal();
+  run.sampleMemory(readJsHeapBytes());
   run.markReleaseStart();
   await session.release();
   run.markReleaseDone();
@@ -140,11 +140,8 @@ function readJsHeapBytes(): number | null {
 function ReportView({ report }: { report: VoiceValidationReport }) {
   return (
     <>
-      <Row label="First partial" value={formatMs(report.firstPartialLatencyMs)} />
-      <Row label="Mean partial interval" value={formatMs(report.meanPartialIntervalMs)} />
-      <Row label="Partial updates" value={String(report.partialUpdateCount)} />
-      <Row label="Final latency" value={formatMs(report.finalTranscriptLatencyMs)} />
-      <Row label="Init" value={formatMs(report.initMs)} />
+      <Row label="Transcribe latency" value={formatMs(report.finalTranscriptLatencyMs)} />
+      <Row label="Recorder start" value={formatMs(report.initMs)} />
       <Row label="Release" value={formatMs(report.releaseMs)} />
       <Row label="Peak JS heap" value={report.peakMemoryBytes === null ? '—' : formatBytes(report.peakMemoryBytes)} />
       <Row label="Cancelled" value={report.cancelled ? 'yes' : 'no'} />

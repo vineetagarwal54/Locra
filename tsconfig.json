@@ -6,6 +6,13 @@
     "strictNullChecks": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["jest", "node"]
+    "types": ["jest", "node"],
+    "paths": {
+      // whisper.rn's package `exports` map defines only `./*` subpaths and no root
+      // `.` entry, so `moduleResolution: bundler` cannot resolve the bare
+      // `whisper.rn` import to its bundled types. Point it at the real published
+      // declarations (Metro still resolves the runtime module via its RN fields).
+      "whisper.rn": ["./node_modules/whisper.rn/lib/typescript/index.d.ts"]
+    }
   }
 }

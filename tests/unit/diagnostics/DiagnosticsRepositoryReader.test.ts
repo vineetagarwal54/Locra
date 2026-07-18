@@ -62,4 +62,29 @@ describe('DiagnosticsRepositoryReader', () => {
       'assistant-2',
     ]);
   });
+
+  it('exports image presence without a path and keeps a completed conversation completed after an interrupted retry', () => {
+    const completed = messageRow('assistant-1', 20, 'assistant');
+    const interrupted: MessageRow = {
+      ...messageRow('assistant-2', 30, 'assistant'),
+      status: 'interrupted',
+      finish_reason: 'cancelled',
+    };
+    const reader = new DiagnosticsRepositoryReader(
+      { getConversation: jest.fn(() => conversationRow()) },
+      { listMessages: jest.fn(() => ({
+        items: [interrupted, completed, messageRow('user-1', 10, 'user')],
+        nextCursor: null,
+      })) },
+      { getAssetsForMessage: jest.fn((id: string) => id === 'user-1' ? [{ available: 1 }] : []) },
+    );
+
+    const conversation = reader.read(['conversation-a'])[0];
+
+    expect(conversation?.status).toBe('completed');
+    expect(conversation?.messages[0]?.attachments).toEqual([
+      { kind: 'image', path: '', available: true },
+    ]);
+    expect(conversation?.messages[2]?.status).toBe('interrupted');
+  });
 });

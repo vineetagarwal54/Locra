@@ -1,4 +1,8 @@
-import { diagnosticsTraceStore } from '../diagnostics/DiagnosticsTraceStore';
+import {
+  diagnosticsTraceStore,
+  type DiagnosticRequestKind,
+  type ProductionDiagnosticTurnSummary,
+} from '../diagnostics/DiagnosticsTraceStore';
 import {
   CompactionService,
   createRegisteredEngineCompactionGenerator,
@@ -14,16 +18,22 @@ import {
   mergeVisualEvidenceIntoMemory,
   type ContextSelectionDiagnostics,
 } from '../inference/ContextOrchestrator';
+import {
+  CURRENT_GENERATION_CONFIG_ID,
+  CURRENT_PIPELINE_VARIANT_ID,
+  samplingProfileForRequestKind,
+} from '../inference/GenerationTuning';
 import { inferenceQueue } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
-import { DEFAULT_RESPONSE_MODE, type ResponseMode, toStoredMode } from '../inference/ResponseMode';
+import {
+  DEFAULT_RESPONSE_MODE,
+  getResponseModeConfig,
+  type ResponseMode,
+  toStoredMode,
+} from '../inference/ResponseMode';
 import { durableImageStorage } from '../media/DurableImageStorage';
 import { ChunkingService } from '../retrieval/ChunkingService';
-import {
-  ConversationTargetResolver,
-  type ConversationCandidate,
-} from '../retrieval/ConversationTargetResolver';
 import { HybridRetriever } from '../retrieval/HybridRetriever';
 import { LexicalFallbackRetriever } from '../retrieval/LexicalFallbackRetriever';
 import type { RetrievalCandidate } from '../retrieval/types';
@@ -74,7 +84,6 @@ export interface ConversationStoreDependencies {
     kind: BenchmarkKind;
     metrics: PerformanceMetrics;
   }) => void;
-  targetResolver?: Pick<ConversationTargetResolver, 'resolve'>;
   checkpointAssistantText?: (assistantMessageId: string, text: string) => void;
   persistImage?: (conversationId: string, sourcePath: string) => Promise<string>;
 }
@@ -85,6 +94,8 @@ interface ActiveGeneration {
   assistantMessageId: string;
   contextDiagnostics?: ContextSelectionDiagnostics;
   responseMode: ResponseMode;
+  requestKind: DiagnosticRequestKind;
+  imageSupplied: boolean;
   lastObservedText: string;
   lastCheckpointText: string;
   lastCheckpointAt: number;
@@ -102,16 +113,12 @@ interface SubmitResult {
   conversationId: string;
   originatingUserMessageId: string;
   assistantMessageId: string;
-  targetNotice?: string;
 }
 
 export class ConversationStore implements IConversationStore {
   private readonly runtimeStates = new Map<string, ConversationRuntimeState>();
   private readonly drafts = new Map<string, Draft>();
   private readonly responseModes = new Map<string, ResponseMode>();
-  // When a past-chat reference is ambiguous we ask which one and remember the
-  // bounded candidates so the NEXT message in that chat can resolve the pick.
-  private readonly pendingTargets = new Map<string, readonly ConversationCandidate[]>();
   private readonly listeners = new Map<
     string,
     Set<(state: ConversationRuntimeState | null) => void>
@@ -144,7 +151,7 @@ export class ConversationStore implements IConversationStore {
 
   async submit(
     conversationId: string | 'new',
-    request: { question: string; imagePath: string | null; conversationTargetId?: string }
+    request: { question: string; imagePath: string | null }
   ): Promise<SubmitResult> {
     this.assertCanStartGeneration();
 
@@ -154,21 +161,6 @@ export class ConversationStore implements IConversationStore {
       ? null
       : await this.dependencies.persistImage(resolvedConversationId, request.imagePath);
     const durableRequest = { ...request, imagePath: durableImagePath };
-
-    // Cross-chat targeting is request-scoped only and is NEVER merged permanently
-    // into this chat's summaries/facts/image state. An ambiguous reference posts a
-    // clarification turn instead of generating.
-    const targetOutcome = this.resolveConversationTarget(resolvedConversationId, durableRequest);
-    if (targetOutcome.kind === 'clarify') {
-      return this.injectTargetClarification(
-        conversationId,
-        resolvedConversationId,
-        durableRequest,
-        targetOutcome.candidates,
-      );
-    }
-    const selectedConversationId = targetOutcome.selectedConversationId;
-    const targetNotice = targetOutcome.notice;
 
     const previousConversation = this.dependencies.historyStore.get(resolvedConversationId);
     const baseConversation =
@@ -214,6 +206,8 @@ export class ConversationStore implements IConversationStore {
       originatingUserMessageId,
       assistantMessageId,
       responseMode: effectiveResponseMode,
+      requestKind: durableRequest.imagePath === null ? 'text' : 'image',
+      imageSupplied: durableRequest.imagePath !== null,
       lastObservedText: '',
       lastCheckpointText: '',
       lastCheckpointAt: 0,
@@ -222,7 +216,7 @@ export class ConversationStore implements IConversationStore {
     const inferenceRequest = this.createInferenceRequest(activeGeneration, durableRequest, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
-      { responseMode: effectiveResponseMode, selectedConversationId },
+      { responseMode: effectiveResponseMode, diagnosticsEnabled: true },
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const conversationWithMemory: Conversation = {
@@ -246,7 +240,6 @@ export class ConversationStore implements IConversationStore {
       conversationId: activeGeneration.conversationId,
       originatingUserMessageId: activeGeneration.originatingUserMessageId,
       assistantMessageId: activeGeneration.assistantMessageId,
-      ...(targetNotice === undefined ? {} : { targetNotice }),
     };
   }
 
@@ -383,6 +376,8 @@ export class ConversationStore implements IConversationStore {
       originatingUserMessageId: input.userMessageId,
       assistantMessageId: replacementAssistantMessageId,
       responseMode: input.conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
+      requestKind: 'retry',
+      imageSupplied: input.imagePath !== null,
       lastObservedText: '',
       lastCheckpointText: '',
       lastCheckpointAt: 0,
@@ -409,7 +404,7 @@ export class ConversationStore implements IConversationStore {
     };
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversationWithoutMemory, input.userMessageId),
-      { responseMode: activeGeneration.responseMode },
+      { responseMode: activeGeneration.responseMode, diagnosticsEnabled: true },
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const updatedConversation: Conversation = {
@@ -494,99 +489,6 @@ export class ConversationStore implements IConversationStore {
       return;
     }
     this.dependencies.setPersistedResponseMode(conversationId, mode);
-  }
-
-  private resolveConversationTarget(
-    resolvedConversationId: string,
-    request: { question: string; conversationTargetId?: string },
-  ):
-    | { kind: 'scope'; selectedConversationId?: string; notice?: string }
-    | { kind: 'clarify'; candidates: readonly ConversationCandidate[] } {
-    // If we previously asked which past chat, try to resolve this reply to a pick.
-    const pending = this.pendingTargets.get(resolvedConversationId);
-    if (pending !== undefined) {
-      this.pendingTargets.delete(resolvedConversationId);
-      const picked = pickPendingCandidate(pending, request.question);
-      if (picked !== null) {
-        return { kind: 'scope', selectedConversationId: picked.id };
-      }
-    }
-
-    const target = this.dependencies.targetResolver.resolve({
-      rawText: request.question,
-      activeConversationId: resolvedConversationId,
-      ...(request.conversationTargetId === undefined
-        ? {}
-        : { selectedId: request.conversationTargetId }),
-    });
-    if (target.kind === 'ambiguous') {
-      return { kind: 'clarify', candidates: target.candidates };
-    }
-    if (target.kind === 'not-found') {
-      return {
-        kind: 'scope',
-        notice: 'The chat you referred to is no longer available. Continuing without it.',
-      };
-    }
-    if (target.kind === 'scoped') {
-      return { kind: 'scope', selectedConversationId: target.conversationId };
-    }
-    return { kind: 'scope' };
-  }
-
-  /**
-   * Posts a normal completed assistant turn asking which past chat the user meant,
-   * without running the model, and remembers the candidates for the next reply.
-   */
-  private injectTargetClarification(
-    conversationId: string | 'new',
-    resolvedConversationId: string,
-    request: { question: string; imagePath: string | null },
-    candidates: readonly ConversationCandidate[],
-  ): SubmitResult {
-    const timestamp = this.dependencies.now();
-    const baseConversation =
-      this.dependencies.historyStore.get(resolvedConversationId)
-      ?? this.createEmptyConversation(resolvedConversationId);
-    const originatingUserMessageId = this.dependencies.createId('user-message');
-    const assistantMessageId = this.dependencies.createId('assistant-message');
-    const updatedConversation: Conversation = {
-      ...baseConversation,
-      updatedAt: timestamp,
-      status: 'completed',
-      errorMessage: null,
-      messages: [
-        ...baseConversation.messages,
-        {
-          id: originatingUserMessageId,
-          role: 'user',
-          text: request.question,
-          attachments:
-            request.imagePath === null ? [] : [{ kind: 'image', path: request.imagePath }],
-          status: 'completed',
-          errorMessage: null,
-          createdAt: timestamp,
-        },
-        {
-          id: assistantMessageId,
-          role: 'assistant',
-          text: buildTargetClarification(candidates),
-          attachments: [],
-          status: 'completed',
-          errorMessage: null,
-          createdAt: timestamp + 1,
-        },
-      ],
-    };
-
-    this.dependencies.historyStore.save(updatedConversation);
-    this.pendingTargets.set(resolvedConversationId, candidates);
-    this.clearDraft(conversationId);
-    return {
-      conversationId: resolvedConversationId,
-      originatingUserMessageId,
-      assistantMessageId,
-    };
   }
 
   private handleInferenceState(state: InferenceState): void {
@@ -718,19 +620,62 @@ export class ConversationStore implements IConversationStore {
 
   private recordDiagnosticTurn(activeGeneration: ActiveGeneration, state: InferenceState): void {
     const trace = state.inferenceTrace;
-    if (trace === null || trace === undefined || !isDevelopmentInferenceTraceEnabled()) {
-      return;
-    }
+    const development = isDevelopmentInferenceTraceEnabled();
+    const objective = state.objectiveResult ?? null;
+    const modeConfig = getResponseModeConfig(activeGeneration.responseMode);
+    const context = activeGeneration.contextDiagnostics;
+    const finishReason = resolveMessageFinishReason(
+      state,
+      state.status === 'completed'
+        ? 'completed'
+        : state.status === 'cancelled'
+          ? 'interrupted'
+          : 'failed',
+    );
+    const summary: ProductionDiagnosticTurnSummary = {
+      responseMode: activeGeneration.responseMode,
+      requestKind: activeGeneration.requestKind,
+      promptTokenCount: objective?.promptTokens ?? 0,
+      generatedTokenCount: objective?.generatedTokens ?? 0,
+      firstTokenTimeMs: objective?.answerTtftMs ?? state.metrics?.firstTokenLatencyMs ?? 0,
+      totalTimeMs: objective?.totalEndToEndLatencyMs ?? state.metrics?.totalWallTimeMs ?? 0,
+      finishReason,
+      looping: finishReason === 'looping' || objective?.looping === true,
+      truncated: finishReason === 'length' || objective?.truncated === true,
+      contextSelection: {
+        recentTurnsConsidered: context?.recentTurnsConsidered ?? 0,
+        recentTurnsSelected: context?.recentTurnsSelected.length ?? 0,
+        mediaEvidenceSelected:
+          context?.mediaEvidenceCandidates.filter((candidate) => candidate.selected).length ?? 0,
+        factsSelected: context?.factCandidates.filter((candidate) => candidate.selected).length ?? 0,
+        summariesSelected:
+          context?.summaryCandidates.filter((candidate) => candidate.selected).length ?? 0,
+        budgetMaximumUnits: context?.budget.maximumUnits ?? modeConfig.contextBudgetUnits,
+        budgetUsedUnits: context?.budget.usedUnits ?? 0,
+      },
+      targetTokenCount: modeConfig.answerTargetTokens,
+      generationLimit: modeConfig.generationLimit,
+      samplingProfile:
+        objective?.samplingProfile ?? samplingProfileForRequestKind(
+          activeGeneration.requestKind === 'image' ? 'answer' : 'chat',
+        ),
+      imageSupplied: activeGeneration.imageSupplied,
+      modelId: objective?.modelId ?? 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+      generationConfigId: objective?.generationConfigId ?? CURRENT_GENERATION_CONFIG_ID,
+      pipelineVariantId: objective?.pipelineVariantId ?? CURRENT_PIPELINE_VARIANT_ID,
+      appBuildId: objective?.appBuildId ?? 'unknown-build',
+    };
 
     diagnosticsTraceStore.append({
-      id: trace.id,
+      id: trace?.id ?? `turn-${activeGeneration.assistantMessageId}`,
       conversationId: activeGeneration.conversationId,
       originatingUserMessageId: activeGeneration.originatingUserMessageId,
       assistantMessageId: activeGeneration.assistantMessageId,
       capturedAt: this.dependencies.now(),
-      trace,
-      objectiveResult: state.objectiveResult ?? null,
-      contextDiagnostics: activeGeneration.contextDiagnostics ?? null,
+      trace: development ? trace ?? null : null,
+      objectiveResult: development ? objective : null,
+      contextDiagnostics: development ? activeGeneration.contextDiagnostics ?? null : null,
+      summary,
     });
   }
 
@@ -892,7 +837,6 @@ export function createConversationStore(
     recordBenchmark: () => undefined,
     checkpointAssistantText: () => undefined,
     persistImage: async (_conversationId, sourcePath) => sourcePath,
-    targetResolver: { resolve: () => ({ kind: 'active' }) },
     ...dependencies,
   });
 }
@@ -982,7 +926,6 @@ export const conversationStore: IConversationStore = createConversationStore({
   checkpointAssistantText: (assistantMessageId, text) => {
     messageRepository.updateAssistantStreamingText(assistantMessageId, text);
   },
-  targetResolver: new ConversationTargetResolver(conversationRepository),
 });
 
 const runtimeCompactionService = new CompactionService({
@@ -991,73 +934,6 @@ const runtimeCompactionService = new CompactionService({
   facts: factRepository,
   generator: createRegisteredEngineCompactionGenerator(),
 });
-
-const ORDINAL_WORDS: Readonly<Record<string, number>> = {
-  first: 1,
-  second: 2,
-  third: 3,
-  fourth: 4,
-  fifth: 5,
-};
-
-/** Formats the "which past chat did you mean?" turn from bounded candidates. */
-function buildTargetClarification(candidates: readonly ConversationCandidate[]): string {
-  const list = candidates
-    .map((candidate, index) => `${index + 1}. ${candidateTitle(candidate)}`)
-    .join('\n');
-  return (
-    'You have a few past conversations that could match:\n\n' +
-    `${list}\n\n` +
-    "Reply with the number or name of the one you'd like me to use, and I'll pull " +
-    'context from it for your next message.'
-  );
-}
-
-/** Resolves a clarification reply to one remembered candidate, or null if unclear. */
-function pickPendingCandidate(
-  candidates: readonly ConversationCandidate[],
-  reply: string,
-): ConversationCandidate | null {
-  const normalized = reply.toLowerCase().trim();
-
-  const explicitIndex = readCandidateIndex(normalized);
-  if (explicitIndex !== null && explicitIndex >= 0 && explicitIndex < candidates.length) {
-    return candidates[explicitIndex];
-  }
-
-  const byTitle = candidates.filter((candidate) => {
-    const tokens = titleTokens(candidate.title);
-    return tokens.length > 0 && tokens.every((token) => normalized.includes(token));
-  });
-  return byTitle.length === 1 ? byTitle[0] : null;
-}
-
-/** Reads a 1-based selection ("2", "option 2", "the second one") as a 0-based index. */
-function readCandidateIndex(normalized: string): number | null {
-  for (const [word, value] of Object.entries(ORDINAL_WORDS)) {
-    if (new RegExp(`\\b${word}\\b`).test(normalized)) {
-      return value - 1;
-    }
-  }
-  const explicit = normalized.match(/^(?:option|number|chat|#)?\s*([1-9])\b/);
-  if (explicit !== null) {
-    return Number(explicit[1]) - 1;
-  }
-  return null;
-}
-
-function candidateTitle(candidate: ConversationCandidate): string {
-  const trimmed = candidate.title?.trim();
-  return trimmed === undefined || trimmed === '' ? 'Untitled chat' : trimmed;
-}
-
-function titleTokens(title: string | null | undefined): string[] {
-  const stopWords = new Set(['the', 'and', 'for', 'chat', 'notes', 'plan', 'plans']);
-  return (title ?? '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length >= 3 && !stopWords.has(token));
-}
 
 /**
  * Builds the prompt for a continuation attempt. It gives the model the original

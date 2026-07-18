@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { designTokens, haptics } from '../../constants/theme';
 import type { ConversationMessage } from '../../types/models';
 
+import { AssistantIdentityRow } from './AssistantIdentityRow';
 import { ImagePromptCard } from './ImagePromptCard';
 import { MarkdownText } from './MarkdownText';
 import { copyText, shareText } from './MessageActions';
@@ -17,6 +18,14 @@ interface MessageBubbleProps {
   onRegenerate?: (assistantMessageId: string) => void;
   onContinue?: (assistantMessageId: string) => void;
   onReportIssue?: (assistantMessageId: string) => void;
+}
+
+interface ActionSpec {
+  readonly label: string;
+  readonly hint?: string;
+  readonly icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  readonly disabled?: boolean;
+  readonly onPress: () => void;
 }
 
 export function MessageBubble({
@@ -45,25 +54,21 @@ export function MessageBubble({
 
 function UserMessage({ message }: { message: ConversationMessage }) {
   const imageAttachment = message.attachments.find((attachment) => attachment.kind === 'image');
-  if (imageAttachment !== undefined) {
-    return (
-      <View style={styles.userWrap}>
+  return (
+    <View testID="user-message-group" style={styles.userWrap}>
+      {imageAttachment === undefined ? (
+        <View testID="user-message-card" style={styles.userBubble}>
+          <Text selectable style={styles.userText}>{message.text}</Text>
+        </View>
+      ) : (
         <ImagePromptCard
           imagePath={imageAttachment.path}
           question={message.text}
           available={imageAttachment.available}
+          compact
         />
-        <MessageActionRow text={message.text} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.userWrap}>
-      <View style={styles.userBubble}>
-        <Text selectable style={styles.userText}>{message.text}</Text>
-      </View>
-      <MessageActionRow text={message.text} />
+      )}
+      <CopyShareActions text={message.text} alignment="right" />
     </View>
   );
 }
@@ -75,225 +80,220 @@ function AssistantMessage({
   onRegenerate,
   onContinue,
   onReportIssue,
-}: {
-  message: ConversationMessage;
-  streamingText: string;
-  onRetry?: (assistantMessageId: string) => void;
-  onRegenerate?: (assistantMessageId: string) => void;
-  onContinue?: (assistantMessageId: string) => void;
-  onReportIssue?: (assistantMessageId: string) => void;
-}) {
+}: Required<Pick<MessageBubbleProps, 'message' | 'streamingText'>> &
+  Pick<MessageBubbleProps, 'onRetry' | 'onRegenerate' | 'onContinue' | 'onReportIssue'>) {
   const text = message.status === 'generating' ? streamingText : message.text;
   const isTruncated = message.status === 'completed' && message.finishReason === 'length';
-
-  if (message.status === 'failed') {
-    return (
-      <View style={styles.assistantWrap}>
-        <View style={[styles.assistantBubble, styles.failedBubble]}>
-          <View style={styles.failedHeader}>
-            <MaterialCommunityIcons
-              name="alert-circle-outline"
-              size={18}
-              color={designTokens.color.error}
-            />
-            <Text style={styles.failedTitle}>Response failed</Text>
-          </View>
-          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
-          <Text style={styles.failedText}>
-            {message.errorMessage ?? 'Locra could not finish that answer.'}
-          </Text>
-          {onRetry !== undefined ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Retry failed response"
-              style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
-              onPress={() => {
-                void haptics.tap();
-                onRetry(message.id);
-              }}
-            >
-              <Text style={styles.retryButtonLabel}>Retry</Text>
-            </Pressable>
-          ) : null}
-          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
-          <MessageActionRow text={text} />
-        </View>
-      </View>
-    );
-  }
-
-  if (message.status === 'interrupted') {
-    return (
-      <View style={styles.assistantWrap}>
-        <View style={styles.assistantBubble}>
-          {text.trim() !== '' ? <MarkdownText text={text} /> : null}
-          <Text style={styles.assistantMuted}>This response was stopped.</Text>
-          {onRetry !== undefined ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Retry interrupted response"
-              style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
-              onPress={() => {
-                void haptics.tap();
-                onRetry(message.id);
-              }}
-            >
-              <Text style={styles.retryButtonLabel}>Retry</Text>
-            </Pressable>
-          ) : null}
-          <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
-          <MessageActionRow text={text} />
-        </View>
-      </View>
-    );
-  }
+  const isFailed = message.status === 'failed';
+  const isInterrupted = message.status === 'interrupted';
 
   return (
     <View style={styles.assistantWrap}>
-      <View style={styles.assistantBubble}>
+      <View
+        testID="assistant-message-card"
+        style={[styles.assistantBubble, isFailed && styles.failedBubble]}
+      >
+        <AssistantIdentityRow />
+        {isFailed ? <FailureHeader /> : null}
         {message.status === 'generating' && text.trim() === '' ? (
           <StreamingMessage />
-        ) : (
+        ) : text.trim() !== '' ? (
           <MarkdownText text={text} />
-        )}
-        {isTruncated ? (
-          <Text style={styles.assistantMuted}>
-            This answer was cut off at the length limit.
+        ) : null}
+        {isFailed ? (
+          <Text style={styles.statusText}>
+            {message.errorMessage ?? 'Locra could not finish that answer.'}
           </Text>
         ) : null}
-        {message.status === 'completed' ? (
-          <View style={styles.followUpActions}>
-            {isTruncated && onContinue !== undefined ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Continue this answer"
-                style={({ pressed }) => [styles.retryButton, pressed && styles.retryButtonPressed]}
-                onPress={() => {
-                  void haptics.tap();
-                  onContinue(message.id);
-                }}
-              >
-                <Text style={styles.retryButtonLabel}>Continue</Text>
-              </Pressable>
-            ) : null}
-            {onRegenerate !== undefined ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Regenerate this response"
-                style={({ pressed }) => [styles.regenerateButton, pressed && styles.retryButtonPressed]}
-                onPress={() => {
-                  void haptics.tap();
-                  onRegenerate(message.id);
-                }}
-              >
-                <MaterialCommunityIcons
-                  name="refresh"
-                  size={15}
-                  color={designTokens.color.textSecondary}
-                />
-                <Text style={styles.messageActionLabel}>Regenerate</Text>
-              </Pressable>
-            ) : null}
-          </View>
+        {isInterrupted ? <Text style={styles.statusText}>This response was stopped.</Text> : null}
+        {isTruncated ? (
+          <Text style={styles.statusText}>This answer was cut off at the length limit.</Text>
         ) : null}
         {message.status !== 'generating' ? (
-          <>
-            <ReportIssueButton messageId={message.id} onReportIssue={onReportIssue} />
-            <MessageActionRow text={text} />
-          </>
+          <AssistantActionRow
+            message={message}
+            text={text}
+            onRetry={onRetry}
+            onRegenerate={onRegenerate}
+            onContinue={onContinue}
+            onReportIssue={onReportIssue}
+          />
         ) : null}
       </View>
     </View>
   );
 }
 
-function MessageActionRow({ text }: { text: string }) {
-  const [state, setState] = useState<'idle' | 'copying' | 'sharing' | 'copied' | 'failed'>('idle');
-  const busy = state === 'copying' || state === 'sharing';
-
-  const run = async (kind: 'copy' | 'share'): Promise<void> => {
-    if (busy) return;
-    setState(kind === 'copy' ? 'copying' : 'sharing');
-    try {
-      if (kind === 'copy') {
-        await copyText(text);
-        setState('copied');
-      } else {
-        await shareText(text);
-        setState('idle');
-      }
-    } catch {
-      setState('failed');
-    }
-  };
-
-  if (text.trim() === '') return null;
+function FailureHeader() {
   return (
-    <View style={styles.messageActions}>
-      <MessageActionButton
-        label={state === 'copied' ? 'Copied' : 'Copy'}
-        icon={state === 'copied' ? 'check' : 'content-copy'}
-        disabled={busy}
-        onPress={() => { void run('copy'); }}
-      />
-      <MessageActionButton
-        label="Share"
-        icon="share-variant-outline"
-        disabled={busy}
-        onPress={() => { void run('share'); }}
-      />
-      {state === 'failed' ? <Text style={styles.actionError}>Action failed</Text> : null}
+    <View style={styles.failedHeader}>
+      <MaterialCommunityIcons name="alert-circle-outline" size={18} color={designTokens.color.error} />
+      <Text style={styles.failedTitle}>Response failed</Text>
     </View>
   );
 }
 
-function MessageActionButton({
-  label,
-  icon,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  icon: keyof typeof MaterialCommunityIcons.glyphMap;
-  disabled: boolean;
-  onPress: () => void;
+function AssistantActionRow({
+  message,
+  text,
+  onRetry,
+  onRegenerate,
+  onContinue,
+  onReportIssue,
+}: Pick<MessageBubbleProps, 'onRetry' | 'onRegenerate' | 'onContinue' | 'onReportIssue'> & {
+  message: ConversationMessage;
+  text: string;
 }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'sharing' | 'copied' | 'failed'>('idle');
+  const busy = state === 'copying' || state === 'sharing';
+  const actions: ActionSpec[] = [];
+
+  if ((message.status === 'failed' || message.status === 'interrupted') && onRetry !== undefined) {
+    actions.push({
+      label: 'Retry response',
+      hint: 'Starts a new response attempt.',
+      icon: 'refresh',
+      onPress: () => onRetry(message.id),
+    });
+  } else if (message.status === 'completed' && onRegenerate !== undefined) {
+    actions.push({
+      label: 'Regenerate response',
+      hint: 'Creates a new answer while preserving this attempt.',
+      icon: 'refresh',
+      onPress: () => onRegenerate(message.id),
+    });
+  }
+  if (onReportIssue !== undefined) {
+    actions.push({
+      label: 'Report issue',
+      hint: 'Opens diagnostics for this response.',
+      icon: 'flag-outline',
+      onPress: () => onReportIssue(message.id),
+    });
+  }
+  if (text.trim() !== '') {
+    actions.push(copyAction(text, state, busy, setState), shareAction(text, busy, setState));
+  }
+  if (message.finishReason === 'length' && onContinue !== undefined) {
+    actions.push({
+      label: 'Continue response',
+      hint: 'Continues this length-limited answer.',
+      icon: 'arrow-right-circle-outline',
+      onPress: () => onContinue(message.id),
+    });
+  }
+
+  return <IconActionRow actions={actions} failed={state === 'failed'} alignment="left" />;
+}
+
+function CopyShareActions({ text, alignment }: { text: string; alignment: 'left' | 'right' }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'sharing' | 'copied' | 'failed'>('idle');
+  if (text.trim() === '') return null;
+  const busy = state === 'copying' || state === 'sharing';
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${label} message`}
-      disabled={disabled}
-      style={({ pressed }) => [styles.messageAction, pressed && styles.retryButtonPressed, disabled && styles.actionDisabled]}
-      onPress={onPress}
-    >
-      <MaterialCommunityIcons name={icon} size={15} color={designTokens.color.textSecondary} />
-      <Text style={styles.messageActionLabel}>{label}</Text>
-    </Pressable>
+    <IconActionRow
+      actions={[copyAction(text, state, busy, setState), shareAction(text, busy, setState)]}
+      failed={state === 'failed'}
+      alignment={alignment}
+    />
   );
 }
 
-function ReportIssueButton({
-  messageId,
-  onReportIssue,
-}: {
-  messageId: string;
-  onReportIssue?: (assistantMessageId: string) => void;
-}) {
-  if (onReportIssue === undefined) {
-    return null;
+function copyAction(
+  text: string,
+  state: string,
+  busy: boolean,
+  setState: (state: 'idle' | 'copying' | 'sharing' | 'copied' | 'failed') => void,
+): ActionSpec {
+  return {
+    label: state === 'copied' ? 'Message copied' : 'Copy message',
+    hint: 'Copies the message text to the clipboard.',
+    icon: state === 'copied' ? 'check' : 'content-copy',
+    disabled: busy,
+    onPress: () => { void runTextAction('copy', text, setState); },
+  };
+}
+
+function shareAction(
+  text: string,
+  busy: boolean,
+  setState: (state: 'idle' | 'copying' | 'sharing' | 'copied' | 'failed') => void,
+): ActionSpec {
+  return {
+    label: 'Share message',
+    hint: 'Opens the system share sheet.',
+    icon: 'share-variant-outline',
+    disabled: busy,
+    onPress: () => { void runTextAction('share', text, setState); },
+  };
+}
+
+async function runTextAction(
+  kind: 'copy' | 'share',
+  text: string,
+  setState: (state: 'idle' | 'copying' | 'sharing' | 'copied' | 'failed') => void,
+): Promise<void> {
+  setState(kind === 'copy' ? 'copying' : 'sharing');
+  try {
+    if (kind === 'copy') {
+      await copyText(text);
+      setState('copied');
+    } else {
+      await shareText(text);
+      setState('idle');
+    }
+  } catch {
+    setState('failed');
   }
+}
+
+function IconActionRow({
+  actions,
+  failed,
+  alignment,
+}: {
+  actions: readonly ActionSpec[];
+  failed: boolean;
+  alignment: 'left' | 'right';
+}) {
+  if (actions.length === 0) return null;
+  return (
+    <View
+      testID={alignment === 'right' ? 'user-message-actions' : 'assistant-message-actions'}
+      style={[styles.actionRow, alignment === 'right' && styles.actionRowRight]}
+    >
+      {actions.map((action) => (
+        <IconActionButton key={action.label} action={action} />
+      ))}
+      {failed ? <Text style={styles.actionError}>Action failed</Text> : null}
+    </View>
+  );
+}
+
+function IconActionButton({ action }: { action: ActionSpec }) {
+  const disabled = action.disabled ?? false;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Report issue with this response"
-      style={({ pressed }) => [styles.reportButton, pressed && styles.retryButtonPressed]}
+      accessibilityLabel={action.label}
+      accessibilityHint={action.hint}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.actionButton,
+        pressed && !disabled && styles.actionButtonPressed,
+        disabled && styles.actionButtonDisabled,
+      ]}
       onPress={() => {
         void haptics.tap();
-        onReportIssue(messageId);
+        action.onPress();
       }}
     >
-      <MaterialCommunityIcons name="flag-outline" size={16} color={designTokens.color.textSecondary} />
-      <Text style={styles.reportButtonLabel}>Report issue</Text>
+      <MaterialCommunityIcons
+        name={action.icon}
+        size={18}
+        color={designTokens.color.textSecondary}
+      />
     </Pressable>
   );
 }
@@ -301,11 +301,11 @@ function ReportIssueButton({
 const styles = StyleSheet.create({
   userWrap: {
     alignItems: 'flex-end',
-    marginBottom: designTokens.spacing.space16,
+    marginBottom: designTokens.spacing.space12,
   },
   assistantWrap: {
     alignItems: 'flex-start',
-    marginBottom: designTokens.spacing.space16,
+    marginBottom: designTokens.spacing.space12,
   },
   userBubble: {
     maxWidth: '86%',
@@ -323,17 +323,19 @@ const styles = StyleSheet.create({
   assistantBubble: {
     maxWidth: '92%',
     paddingHorizontal: designTokens.spacing.space16,
-    paddingVertical: designTokens.spacing.space12,
+    paddingTop: designTokens.spacing.space8,
+    paddingBottom: designTokens.spacing.space4,
     borderRadius: designTokens.radius.bubble,
     borderBottomLeftRadius: designTokens.radius.bubbleTail,
     backgroundColor: designTokens.color.surfaceStrong,
     borderWidth: designTokens.borderWidth,
     borderColor: designTokens.color.border,
   },
-  assistantMuted: {
+  statusText: {
     color: designTokens.color.textSecondary,
-    fontSize: designTokens.type.body.fontSize,
-    lineHeight: designTokens.type.body.lineHeight,
+    fontSize: designTokens.type.supporting.fontSize,
+    lineHeight: designTokens.type.supporting.lineHeight,
+    marginTop: designTokens.spacing.space8,
   },
   failedBubble: {
     borderColor: designTokens.color.error,
@@ -350,70 +352,35 @@ const styles = StyleSheet.create({
     fontWeight: designTokens.type.bodyStrong.fontWeight,
     marginLeft: designTokens.spacing.space8,
   },
-  failedText: {
-    color: designTokens.color.textSecondary,
-    fontSize: designTokens.type.supporting.fontSize,
-    lineHeight: designTokens.type.supporting.lineHeight,
-  },
-  retryButton: {
-    alignSelf: 'flex-start',
-    marginTop: designTokens.spacing.space12,
-    paddingVertical: designTokens.spacing.space8,
-    paddingHorizontal: designTokens.spacing.space16,
-    borderRadius: designTokens.radius.pill,
-    backgroundColor: designTokens.color.primary,
-  },
-  retryButtonPressed: {
-    opacity: 0.85,
-  },
-  retryButtonLabel: {
-    color: designTokens.color.onPrimary,
-    fontSize: designTokens.type.button.fontSize,
-    fontWeight: designTokens.type.button.fontWeight,
-  },
-  reportButton: {
-    alignSelf: 'flex-start',
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: designTokens.spacing.space12,
-    minHeight: 44,
-  },
-  reportButtonLabel: {
-    color: designTokens.color.textSecondary,
-    fontSize: designTokens.type.supporting.fontSize,
-    marginLeft: designTokens.spacing.space4,
-  },
-  followUpActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
+    alignSelf: 'flex-end',
     flexWrap: 'wrap',
-    marginTop: designTokens.spacing.space8,
+    marginTop: designTokens.spacing.space4,
+    // columnGap: designTokens.spacing.space4,
   },
-  regenerateButton: {
-    minHeight: 44,
-    flexDirection: 'row',
+  actionRowRight: {
+    alignSelf: 'flex-end',
+  },
+  actionButton: {
+    width: designTokens.spacing.space24 + designTokens.spacing.space4,
+    height: designTokens.spacing.space24 + designTokens.spacing.space20,
     alignItems: 'center',
-    marginTop: designTokens.spacing.space12,
-    marginRight: designTokens.spacing.space16,
+    justifyContent: 'center',
+    borderRadius: designTokens.radius.pill,
   },
-  messageActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: designTokens.spacing.space8,
+  actionButtonPressed: {
+    backgroundColor: designTokens.color.divider,
+    transform: [{ scale: 0.96 }],
   },
-  messageAction: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: designTokens.spacing.space16,
+  actionButtonDisabled: {
+    opacity: 0.4,
+    borderWidth: designTokens.borderWidth,
+    borderColor: designTokens.color.border,
   },
-  messageActionLabel: {
-    color: designTokens.color.textSecondary,
+  actionError: {
+    color: designTokens.color.error,
     fontSize: designTokens.type.caption.fontSize,
-    marginLeft: designTokens.spacing.space4,
   },
-  actionDisabled: { opacity: 0.45 },
-  actionError: { color: designTokens.color.error, fontSize: designTokens.type.caption.fontSize },
 });

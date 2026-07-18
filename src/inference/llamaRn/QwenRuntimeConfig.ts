@@ -16,7 +16,6 @@ export interface QwenRuntimeConfig {
   readonly projectorUseGpu: boolean;
   readonly ctxShift: boolean;
   readonly useMlock: boolean;
-  readonly temperature: number;
   /** Empty unless a later verification record justifies explicit stop tokens. */
   readonly stopTokens: ReadonlyArray<string>;
 }
@@ -27,7 +26,6 @@ export const QWEN_RUNTIME_CONFIG: QwenRuntimeConfig = {
   projectorUseGpu: false,
   ctxShift: false,
   useMlock: false,
-  temperature: 0,
   stopTokens: [],
 };
 

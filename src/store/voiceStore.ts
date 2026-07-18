@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
-import type { VoiceSessionStatus } from '../voice/dictationDraft';
+import { MAX_RECORDING_MS, type VoiceSessionStatus } from '../voice/dictationDraft';
 import {
   VoiceModelLifecycle,
   type VoiceModelState,
@@ -19,8 +19,11 @@ export interface VoiceStoreState extends VoiceModelState {
   readonly disclosureVisible: boolean;
   /** Live session state machine, independent of the model-setup lifecycle. */
   readonly sessionStatus: VoiceSessionStatus;
-  /** Current best partial transcript for the active dictated segment. */
-  readonly partialTranscript: string;
+  /**
+   * The single final transcript, populated only when a session reaches 'ready'.
+   * (Whisper produces no live partials — there is no mid-recording text.)
+   */
+  readonly finalTranscript: string;
   readonly recordingElapsedMs: number;
   readonly sessionError: string | null;
   readonly storageBytes: number | null;
@@ -32,7 +35,12 @@ export interface VoiceStoreState extends VoiceModelState {
   startRecording(): Promise<void>;
   /** Stops, finalizes, and returns the transcript. NEVER submits a message. */
   stopAndFinalize(): Promise<string>;
-  cancel(): void;
+  /**
+   * Cancels an in-flight session and AWAITS native recorder/recognizer teardown +
+   * lease release before resolving. The composer stays locked ('cancelling') for
+   * the whole duration and only unlocks once this resolves ('cancelled').
+   */
+  cancel(): Promise<void>;
   /** Returns the session machine to idle once the composer has consumed the result. */
   acknowledgeResult(): void;
 }
@@ -45,7 +53,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   ...dependencies.lifecycle.getState(),
   disclosureVisible: false,
   sessionStatus: 'idle',
-  partialTranscript: '',
+  finalTranscript: '',
   recordingElapsedMs: 0,
   sessionError: null,
   storageBytes: dependencies.lifecycle.storageBytes,
@@ -53,8 +61,21 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   hideDisclosure: (): void => set({ disclosureVisible: false }),
   clearError: (): void => set({ error: null, sessionError: null }),
   confirmEnable: async (): Promise<void> => {
-    set({ disclosureVisible: false, error: null });
+    set({ disclosureVisible: false, error: null, sessionError: null });
     try {
+      // Ask for microphone access up front — as part of the single "Download &
+      // enable" tap — so the user is never surprised by a separate permission
+      // prompt the first time they later press the mic.
+      const permissionGranted = await dependencies.lifecycle.requestMicPermission();
+      if (!permissionGranted) {
+        set({
+          ...dependencies.lifecycle.getState(),
+          sessionStatus: 'failed',
+          sessionError:
+            'Microphone permission is needed for voice input. Turn it on in Android settings, then try again.',
+        });
+        return;
+      }
       await dependencies.lifecycle.enable();
     } finally {
       set({ ...dependencies.lifecycle.getState() });
@@ -62,10 +83,16 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
   removeModel: async (): Promise<void> => {
     await dependencies.lifecycle.remove();
-    set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', partialTranscript: '' });
+    set({ ...dependencies.lifecycle.getState(), sessionStatus: 'idle', finalTranscript: '' });
   },
   startRecording: async (): Promise<void> => {
-    if (get().status !== 'ready') {
+    const modelStatus = get().status;
+    // Enable/download already running from a previous tap — don't stack another
+    // disclosure or download (this is what caused "tap download twice").
+    if (modelStatus === 'downloading' || modelStatus === 'verifying') {
+      return;
+    }
+    if (modelStatus !== 'ready') {
       get().showDisclosure();
       return;
     }
@@ -81,22 +108,20 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     }
     set({
       sessionStatus: 'preparing',
-      partialTranscript: '',
+      finalTranscript: '',
       recordingElapsedMs: 0,
       sessionError: null,
       permissionGranted: true,
     });
     try {
-      await dependencies.session.start((partialText) => {
-        // Each partial fully replaces the active segment; the composer keeps the
-        // user's typed prefix and only swaps the dictated part.
-        set({ partialTranscript: partialText });
-      });
+      // Whisper transcribes only the completed utterance, so no live-partial
+      // callback is wired — the draft is never touched mid-recording.
+      await dependencies.session.start(() => undefined);
       startElapsedTimer(set);
       set({ sessionStatus: 'recording' });
     } catch (error) {
       stopElapsedTimer();
-      set({ sessionStatus: 'failed', sessionError: toMessage(error), partialTranscript: '' });
+      set({ sessionStatus: 'failed', sessionError: toMessage(error), finalTranscript: '' });
     }
   },
   stopAndFinalize: async (): Promise<string> => {
@@ -106,22 +131,42 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     stopElapsedTimer();
     set({ sessionStatus: 'transcribing' });
     try {
-      const transcript = await dependencies.session.stop();
-      // 'ready' — the finalized text is now in the draft; stopping never sends.
-      set({ sessionStatus: 'ready', partialTranscript: transcript });
+      const transcript = (await dependencies.session.stop()).trim();
+      if (transcript === '') {
+        // Recorded fine but whisper found no speech (silence / too short / too
+        // quiet). Give clear feedback instead of silently doing nothing.
+        set({
+          sessionStatus: 'failed',
+          sessionError: 'No speech detected. Tap the mic and speak clearly, then stop.',
+        });
+        return '';
+      }
+      // 'ready' — the composer applies this final transcript; stopping never sends.
+      set({ sessionStatus: 'ready', finalTranscript: transcript });
       return transcript;
     } catch (error) {
       set({ sessionStatus: 'failed', sessionError: toMessage(error) });
       return '';
     }
   },
-  cancel: (): void => {
+  cancel: async (): Promise<void> => {
+    const status = get().sessionStatus;
+    // Only a live session can be cancelled; ignore a repeat cancel already in flight.
+    if (status !== 'preparing' && status !== 'recording' && status !== 'transcribing') {
+      return;
+    }
     stopElapsedTimer();
-    void dependencies.session.cancel();
-    set({ sessionStatus: 'cancelled', partialTranscript: '', recordingElapsedMs: 0 });
+    // Enter the locked 'cancelling' state immediately; the composer stays read-only
+    // until the awaited native teardown + lease release below completes.
+    set({ sessionStatus: 'cancelling', finalTranscript: '', recordingElapsedMs: 0 });
+    try {
+      await dependencies.session.cancel();
+    } finally {
+      set({ sessionStatus: 'cancelled' });
+    }
   },
   acknowledgeResult: (): void => {
-    set({ sessionStatus: 'idle', partialTranscript: '', sessionError: null });
+    set({ sessionStatus: 'idle', finalTranscript: '', sessionError: null });
   },
 }));
 
@@ -135,7 +180,7 @@ export function configureVoiceDependencies(next: VoiceDependencies): void {
     ...next.lifecycle.getState(),
     storageBytes: next.lifecycle.storageBytes,
     sessionStatus: 'idle',
-    partialTranscript: '',
+    finalTranscript: '',
     recordingElapsedMs: 0,
     sessionError: null,
     error: null,
@@ -153,7 +198,13 @@ function startElapsedTimer(set: (patch: Partial<VoiceStoreState>) => void): void
   stopElapsedTimer();
   recordingStartedAt = Date.now();
   elapsedTimer = setInterval(() => {
-    set({ recordingElapsedMs: Date.now() - recordingStartedAt });
+    const elapsed = Date.now() - recordingStartedAt;
+    set({ recordingElapsedMs: elapsed });
+    // Hard 30 s cap: auto-stop and begin transcription. stopAndFinalize() stops
+    // this timer and no-ops unless still 'recording', so this fires exactly once.
+    if (elapsed >= MAX_RECORDING_MS) {
+      void useVoiceStore.getState().stopAndFinalize();
+    }
   }, 250);
 }
 

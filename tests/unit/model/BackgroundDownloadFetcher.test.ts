@@ -284,4 +284,114 @@ describe('BackgroundDownloadFetcher', () => {
 
     await expect(fetcher.reattachExistingDownloads(() => {}, MODEL_URL)).resolves.toBeNull();
   });
+
+  // Regression: the "opens at 99% then immediately fails" bug. A prior attempt
+  // left a FAILED native task reporting ~99% bytes. Reattaching it seeded the
+  // screen at 99% and then rejected at once. It must instead be treated as stale.
+  it('does NOT reattach a stale ~99% FAILED task; it cleans it and reports nothing to resume', async () => {
+    const staleTask = fakeTask('example.test_vl_1_6b_model.gguf', 'FAILED', 99, 100, MODEL_DEST);
+    const getExistingDownloadTasks = jest.fn(async () => [staleTask]);
+    const deleteFileIfExists = jest.fn(async () => {});
+    const { fetcher } = makeHarness({ getExistingDownloadTasks, deleteFileIfExists });
+    const progress: number[] = [];
+
+    const reattached = await fetcher.reattachExistingDownloads((p) => progress.push(p), MODEL_URL);
+
+    expect(reattached).toBeNull();
+    expect(staleTask.stop).toHaveBeenCalled();
+    expect(deleteFileIfExists).toHaveBeenCalledWith(MODEL_DEST);
+    expect(progress).not.toContain(0.99);
+  });
+
+  // Regression: a bundle with one valid live task AND one missing/stale companion
+  // must NOT reattach a mixed bundle (live task + immediately-rejected promise).
+  // The whole incomplete bundle is cleaned and reattach returns null so a single
+  // clean fresh download starts.
+  it('does NOT reattach a mixed bundle: cleans the live task too and returns null', async () => {
+    const liveTask = fakeTask('example.test_vl_1_6b_model.gguf', 'DOWNLOADING', 40, 100, MODEL_DEST);
+    // TOKENIZER has no task at all (missing companion).
+    const getExistingDownloadTasks = jest.fn(async () => [liveTask]);
+    const deleteFileIfExists = jest.fn(async () => {});
+    const { fetcher } = makeHarness({ getExistingDownloadTasks, deleteFileIfExists });
+    const progress: number[] = [];
+
+    const reattached = await fetcher.reattachExistingDownloads(
+      (p) => progress.push(p),
+      MODEL_URL,
+      TOKENIZER_URL,
+    );
+
+    expect(reattached).toBeNull();
+    // The live task is cancelled and both partials are removed so the fresh
+    // download is clean.
+    expect(liveTask.stop).toHaveBeenCalled();
+    expect(deleteFileIfExists).toHaveBeenCalledWith(MODEL_DEST);
+    expect(deleteFileIfExists).toHaveBeenCalledWith(TOKENIZER_DEST);
+    expect(progress).toEqual([]);
+  });
+
+  it('reattaches a bundle when every missing artifact has a valid live task', async () => {
+    const modelTask = fakeTask('example.test_vl_1_6b_model.gguf', 'DOWNLOADING', 40, 100, MODEL_DEST);
+    const tokTask = fakeTask('example.test_tokenizer.json', 'DOWNLOADING', 20, 100, TOKENIZER_DEST);
+    const getExistingDownloadTasks = jest.fn(async () => [modelTask, tokTask]);
+    const { fetcher } = makeHarness({ getExistingDownloadTasks });
+
+    const reattached = await fetcher.reattachExistingDownloads(() => {}, MODEL_URL, TOKENIZER_URL);
+
+    expect(reattached).not.toBeNull();
+    expect(reattached?.status).toBe('downloading');
+    expect(modelTask.stop).not.toHaveBeenCalled();
+    expect(tokTask.stop).not.toHaveBeenCalled();
+
+    modelTask.emitDone();
+    tokTask.emitDone();
+    await expect(reattached?.promise).resolves.toEqual({
+      paths: [MODEL_DEST, TOKENIZER_DEST],
+      wasDownloaded: [true, true],
+    });
+  });
+
+  it('does NOT reattach a STOPPED task or a DONE task whose file is missing', async () => {
+    const stopped = fakeTask('example.test_vl_1_6b_model.gguf', 'STOPPED', 40, 100, MODEL_DEST);
+    const { fetcher: f1 } = makeHarness({ getExistingDownloadTasks: jest.fn(async () => [stopped]) });
+    await expect(f1.reattachExistingDownloads(() => {}, MODEL_URL)).resolves.toBeNull();
+
+    // DONE but the file was never persisted (deleted/interrupted) → still stale.
+    const doneNoFile = fakeTask('example.test_vl_1_6b_model.gguf', 'DONE', 100, 100, MODEL_DEST);
+    const { fetcher: f2 } = makeHarness({ getExistingDownloadTasks: jest.fn(async () => [doneNoFile]) });
+    await expect(f2.reattachExistingDownloads(() => {}, MODEL_URL)).resolves.toBeNull();
+  });
+
+  // Regression: a clean, successful FIRST-attempt download even when a stale task
+  // from a prior failure is still registered natively.
+  it('cleans a leftover stale task, then downloads fresh on the first attempt with a unique task id', async () => {
+    const staleTask = fakeTask('example.test_vl_1_6b_model.gguf', 'FAILED', 99, 100, MODEL_DEST);
+    const getExistingDownloadTasks = jest.fn(async () => [staleTask]);
+    const deleteFileIfExists = jest.fn(async () => {});
+    const { fetcher, tasks, createDownloadTask } = makeHarness({
+      getExistingDownloadTasks,
+      deleteFileIfExists,
+    });
+
+    const pending = fetcher.fetch(() => {}, MODEL_URL);
+    await flush();
+
+    // Stale task stopped and its partial deleted before the fresh transfer starts.
+    expect(staleTask.stop).toHaveBeenCalled();
+    expect(deleteFileIfExists).toHaveBeenCalledWith(MODEL_DEST);
+
+    // The fresh task uses a UNIQUE id (not the bare filename) so it can never
+    // collide with the leftover native task.
+    const createdId = createDownloadTask.mock.calls[0][0].id as string;
+    expect(createdId).not.toBe('example.test_vl_1_6b_model.gguf');
+    expect(createdId).toContain('example.test_vl_1_6b_model.gguf');
+
+    const task = tasks.get(MODEL_URL);
+    if (!task) throw new Error('task not created');
+    expect(task.start).toHaveBeenCalledTimes(1);
+    task.emitProgress(100, 100);
+    task.emitDone();
+
+    await expect(pending).resolves.toEqual({ paths: [MODEL_DEST], wasDownloaded: [true] });
+  });
 });

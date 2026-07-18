@@ -34,7 +34,6 @@ describe('Qwen runtime config', () => {
     expect(QWEN_RUNTIME_CONFIG.nCtx).toBe(4096);
     expect(QWEN_RUNTIME_CONFIG.ctxShift).toBe(false);
     expect(QWEN_RUNTIME_CONFIG.useMlock).toBe(false);
-    expect(QWEN_RUNTIME_CONFIG.temperature).toBe(0);
     expect(QWEN_RUNTIME_CONFIG.stopTokens).toEqual([]);
   });
 

@@ -22,7 +22,7 @@ This is a development-stage cutover: existing MMKV chat history may be discarded
 - **Target scale**: 200+ conversations; hundreds of messages per conversation.
 - **Page policy**: maximum 50 records per repository page; keyset cursors use timestamp + stable ID.
 - **UI cache policy**: at most 3 message pages per open conversation and 2 conversation-list pages; eviction preserves visible anchors and re-fetches evicted pages on demand.
-- **Performance**: first conversation page <1.5s, first message page <1s, subsequent page <500ms, active-chat retrieval <1.5s, selected-chat retrieval <2s.
+- **Performance**: first conversation page <1.5s, first message page <1s, subsequent page <500ms, active-chat retrieval <1.5s.
 - **Offline**: no network use after required model artifacts are installed.
 - **Memory**: Qwen, embedding runtime and Whisper are never concurrently active/resident for protected work.
 
@@ -78,7 +78,6 @@ src/
 │   ├── EmbeddingService.ts
 │   ├── HybridRetriever.ts
 │   ├── LexicalFallbackRetriever.ts
-│   └── ConversationTargetResolver.ts
 ├── inference/
 │   ├── ContextOrchestrator.ts
 │   ├── ContextBuilder.ts
@@ -99,7 +98,6 @@ src/
 ├── components/
 │   ├── chat/ResponseModeSelector.tsx
 │   ├── chat/VoiceControl.tsx
-│   └── chat/ConversationTargetPicker.tsx
 └── evaluation/
 ```
 
@@ -114,7 +112,7 @@ These values are fixed here and in `data-model.md` / `research.md`, pinned by te
 
 ## Implementation Phases
 
-Phase order matches `tasks.md` exactly: setup → foundation → SQL history → immutable retries → per-conversation modes → image evidence → hybrid context → summaries/facts → past-chat targeting → voice → validation.
+Phase order matches `tasks.md` exactly: setup → foundation → SQL history → immutable retries → per-conversation modes → image evidence → hybrid context → summaries/facts → voice → validation.
 
 ### Phase 0 — Setup & dependency/gate verification
 
@@ -174,22 +172,16 @@ Phase order matches `tasks.md` exactly: setup → foundation → SQL history →
 - Isolated internal Qwen request with native context reset; structured summary + source-linked facts; validate every referenced message ID before persistence.
 - Deduplicate facts by normalized key; contradictions supersede. Stale only when covered visible sources/versions change. Never insert compaction prompts/results into visible history. Answering never blocks on pending compaction.
 
-### Phase 8 — Explicit one-chat targeting (US7)
-
-- Chat picker from the composer; deterministic named-chat intent detection.
-- Bounded candidate lookup (≤10) over normalized title tokens + dates; no content/vector search before target resolution.
-- Resolve to exactly one stable conversation ID or require the picker; request-scoped, source-attributed; never merge selected-chat content into active-chat facts/summary/image state. No unrestricted all-chat search.
-
-### Phase 9 — Offline voice (US8)
+### Phase 8 — Offline voice (US8)
 
 - Explicit enablement + model-storage disclosure; download/verify the approved voice model.
 - One protected lifecycle (recording → transcription → editable draft) under `DeviceResourcePolicy`; mutual exclusion with Qwen/embedding/compaction; unload heavy context before transcription if the spike requires it.
 - Never auto-submit; submit transcript through the existing typed-message path.
 
-### Phase 10 — Integration & device validation
+### Phase 9 — Integration & device validation
 
 - Run type-check, lint and the focused test suites; run the automated offline architecture guard and the consolidated deletion/cascade test.
-- Validate exact context selection, immutable retry behavior, SQL page/cache bounds, retrieval latency, model memory, no cross-chat leakage, no protected-operation overlap, image/file cascade cleanup, and development reset.
+- Validate exact current-chat context selection, immutable retry behavior, SQL page/cache bounds, retrieval latency, model memory, conversation isolation, no protected-operation overlap, image/file cascade cleanup, and development reset.
 - Final airplane-mode offline validation; compare answer quality to the recorded baseline.
 
 ## Complexity Tracking

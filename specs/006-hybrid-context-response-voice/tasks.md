@@ -156,7 +156,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for User Story 3 ⚠️ (write first, must fail)
 
-- [X] T043 [P] [US3] Failing determinism suite in `tests/unit/inference/ContextOrchestrator.test.ts`: fixed priority order (current request → recent exact turns → referenced image evidence → same-chat retrieved → selected past-chat retrieved → durable facts → older summary); recent-turn floor never replaced; identical inputs → identical order (score DESC, time DESC, id ASC); character-based budget drop lowest-priority-first. (FR-015/017, SC-007)
+- [X] T043 [P] [US3] Failing determinism suite in `tests/unit/inference/ContextOrchestrator.test.ts`: fixed priority order (current request → recent exact turns → referenced image evidence → same-chat retrieved → durable facts → older summary); recent-turn floor never replaced; identical inputs → identical order (score DESC, time DESC, id ASC); character-based budget drop lowest-priority-first. (FR-015/017, SC-007)
 - [X] T044 [P] [US3] Failing `tests/unit/retrieval/HybridRetriever.test.ts`: scope filter applied before scoring; **pinned 0.62 cosine threshold** excludes low matches; source-message dedup; mode-specific limit; empty result adds no filler. (FR-016/017; item: threshold assertion folded here)
 - [X] T045 [P] [US3] Failing `tests/unit/retrieval/LexicalFallbackRetriever.test.ts`: deterministic lexical results when compatible vectors are missing/stale/failed. (FR-020)
 - [X] T046 [P] [US3] Failing `tests/unit/retrieval/ChunkingService.test.ts`: **pinned max 800 chars / 120 overlap**, short message → one unit, stores unchanged original, ordinal + char offsets + `chunk_version` recorded. (FR-023; item: chunk constants folded here)
@@ -204,27 +204,6 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ---
 
-## Phase 9: User Story 7 - Explicit retrieval from one past conversation (Priority: P3)
-
-**Goal**: Cross-chat retrieval is off by default; a user selects/names exactly one past chat, resolved via bounded (≤10) metadata candidates; retrieval is request-scoped and source-attributed with no merging into active-chat derived data.
-
-**Independent Test**: Name a chat → only that resolved ID searched; ambiguous description → bounded picker, no retrieval until selection; deleted target → clear notice, request continues without cross-chat context; zero unrelated-chat leakage (SC-010).
-
-### Tests for User Story 7 ⚠️ (write first, must fail)
-
-- [X] T067 [P] [US7] Failing `tests/unit/retrieval/ConversationTargetResolver.test.ts`: default active-only; named/selected → single stable ID; candidate search bounded to ≤10 via normalized title tokens + dates; ambiguity → require selection; no content retrieval before resolution; deleted target → not-found. (FR-037/038/039/041)
-
-### Implementation for User Story 7
-
-- [X] T068 [US7] Implement `src/retrieval/ConversationTargetResolver.ts`: deterministic named-chat intent detection + `normalized_title` candidate query (≤10), resolve-to-one or ambiguous/not-found (make T067 pass). (FR-037/038/039)
-- [X] T069 [US7] Extend `HybridRetriever`/`ContextOrchestrator` to accept a request-scoped single `conversation_target`, apply the selected-chat retrieval limit, preserve source attribution, and NEVER merge selected-chat content into active-chat summary/facts/active-image state. (FR-040/041, US7 AS8)
-- [X] T070 [US7] Implement `src/components/chat/ConversationTargetPicker.tsx` (bounded candidate list) reachable from `ChatComposer.tsx`, existing design components; handle ambiguous + deleted-target notices. (US7 AS5, Edge Cases)
-- [X] T071 [US7] Wire target selection through `src/store/conversationStore.ts` submit path as transient request scope (not persisted). (FR-040)
-
-**Checkpoint**: One-chat targeting works with zero leakage.
-
----
-
 ## Phase 10: User Story 8 - Fully offline voice input (Priority: P3)
 
 **Goal**: Explicit opt-in on-device transcription writes editable draft text (never auto-submit) through the same pipeline as typed input, with recording/transcription mutually exclusive with Qwen/embedding work.
@@ -253,7 +232,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 - [X] T078 [P] Add one lightweight automated **offline architecture guard** in `tests/unit/architecture/OfflineGuard.test.ts` that fails if any module under `src/persistence/`, `src/retrieval/`, `src/inference/` (embedding/compaction paths), or `src/voice/` imports or calls a networking module (`fetch`, `expo-network` request APIs, `XMLHttpRequest`, sockets, or the background downloader outside model-artifact paths). (Constitution I; SC-015; research R13)
 - [X] T079 [P] Add one consolidated **deletion/cascade** test in `tests/integration/Deletion.test.ts` (after all tables exist): deleting a conversation leaves zero orphaned attempts, chunks, embeddings, evidence, summaries, facts, and image links, and zero unreferenced image files. (SC-014)
-- [X] T080 Implement the evaluation harness + repeatable cases in `src/evaluation/cases/` covering short chat, long chat, image follow-ups, retries, selected past-chat retrieval, all modes, voice, memory, storage, latency, and comparison against the T004 baseline rubric. (FR-048/049)
+- [X] T080 Implement the evaluation harness + repeatable cases in `src/evaluation/cases/` covering short chat, long chat, image follow-ups, retries, all modes, voice, memory, storage, latency, and comparison against the T004 baseline rubric. (FR-048/049)
 - [ ] T081 Run physical-device validation from `quickstart.md`: page/cache bounds, retrieval latency, answer-quality rubric, image/file cleanup after deletion, model memory, no protected-operation overlap, development DB reset, and a **final airplane-mode** offline audit. (SC-001/002/003/004/006/010/012/013/014/015)
 - [X] T082 Full `npm run type-check`, `npm run lint`, and `npm test` green; confirm no `any`/unexplained `@ts-ignore` added (Principle V).
 
@@ -265,9 +244,9 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 - **Setup**: T002 (SQLite build) blocks Foundational. T005/T006 are independent spike gates that block ONLY the embedding runtime (T056/T057) and voice runtime (T073/T074); all other work proceeds without them.
 - **Foundational** (schema/DB/resource policy): blocks every user story.
-- **Order** (matches plan.md): SQL history (US1) → immutable retries (US2) → per-conversation modes (US6) → image evidence (US5) → hybrid context (US3) → summaries/facts (US4) → past-chat targeting (US7) → voice (US8) → polish.
+- **Order** (matches plan.md): SQL history (US1) → immutable retries (US2) → per-conversation modes (US6) → image evidence (US5) → hybrid context (US3) → summaries/facts (US4) → voice (US8) → polish.
 - **Modes & images before hybrid, wiring in hybrid**: US6 delivers mode config/persistence/conversion/UI and US5 delivers image repositories/evidence; **their `ContextOrchestrator` wiring lands in US3 (T054)** after the orchestrator refactor exists.
-- **Hybrid → compaction & targeting**: US4 fills the summary/fact slots ordered in T053; US7 extends the same finalized retriever/orchestrator (T069).
+- **Hybrid → compaction**: US4 fills the summary/fact slots ordered in T053.
 - **Voice**: depends only on the resource policy + approved voice gate; implemented after the core context path.
 - **Polish**: offline guard (T078) and consolidated deletion (T079) run after all modules/tables exist; device validation + airplane-mode last.
 
@@ -349,7 +328,7 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 
 - [X] T086 [US5] Copy gallery and camera images into durable conversation-scoped application storage before SQL persistence; keep preprocessing files temporary; clean temp files; reconcile missing source files; preserve reusable evidence; add preview/remove/retake and reopen-original behavior using existing design components. (FR-A04, SC-A05)
 
-- [X] T087 [US3/US7] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, use Unicode-safe conversation-title normalization, and ensure the real bounded past-chat picker and transient target state are wired end to end. (FR-A05, SC-A06)
+- [X] T087 [US3] Correct context assembly: include image evidence only when relevant or explicitly referenced, keep all evidence inside the configured character budget, cap oversized input safely, treat retrieved content as untrusted source material, and use Unicode-safe conversation-title normalization. (FR-A05, SC-A06)
 
 - [X] T088 Restore diagnostics for internal production APKs under `Settings → Beta Tools`: export complete selected conversations and attempts directly from repositories, include app/model/download/storage/resource state, disclose included content, sanitize local paths, exclude images by default, delete temporary ZIPs, and add a response-level Report Issue action. (FR-A06, SC-A07)
 
@@ -368,5 +347,16 @@ First meaningful checkpoint: SQL history + immutable retries. First complete arc
 - [ ] T095 Extend existing suites only where needed for T083–T093: bidirectional paging/search, attempt recovery, artifact verification, durable images, migration rollback and live voice-session coordination. Do not add UI snapshots, duplicate tests or exact model/speech wording assertions.
 
 - [ ] T096 Run a physical production-APK checklist covering History beyond cache limits, SQL search outside cache, stop/failure/relaunch recovery, model download→verify→ready without restart, corrupted download recovery, durable images after cache cleanup, context relevance, diagnostics completeness, schema upgrade, background/runtime recovery, one-tap live voice and final airplane-mode operation.
+
+---
+
+## Phase 13: Chat Presentation and Current-Conversation Scope
+
+- [X] T097 Make user/assistant cards content-height, integrate compact model attribution, use one icon-only accessible action row, attach user actions to the bubble, and show durable image thumbnails with preview.
+- [X] T098 Replace timer/frame-based opening and submit scroll positioning with layout/content callbacks; preserve near-bottom streaming follow and older-message reading.
+- [X] T099 Compact the composer while retaining multiline growth, image, response mode, voice, send/stop, safe-area and keyboard behavior.
+- [X] T100 Remove alternate-conversation selection from UI, requests, stores, repositories, retrieval budgets, evaluation cases and contracts while preserving current-chat history, facts, summaries, retrieval and image evidence.
+- [X] T101 Add focused component, contract, store, retrieval and persistence regressions for layout, actions, thumbnails, scrolling, request scope and same-chat intelligence.
+- [ ] T102 Run type-check, lint and the complete test suite; complete the remaining physical-device checks without rebuilding the APK.
 
 **Execution order**: T083 → T084 → T085 → T086 → T087 → T088 → T089 → T090/T091 → T092/T093 → T094/T095 → T096.
