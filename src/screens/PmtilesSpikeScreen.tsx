@@ -10,6 +10,14 @@ import { useEffect, useState } from 'react';
 import { Button, StyleSheet, Text, View } from "react-native";
 
 import { extractPmtilesArea, type ExtractPmtilesProgress } from '../spikes/pmtiles/extractPmtilesArea';
+import {
+  getIndexedPoiCount,
+  indexPoisFromPmtiles,
+  POI_CATEGORIES,
+  POI_ORIGIN,
+  searchPois,
+  type PoiSearchResult,
+} from '../spikes/pmtiles/offlinePoiSearch';
 
 const OUTPUT_PATH = 'files/maps/android-test-area.pmtiles';
 
@@ -40,6 +48,12 @@ export function PmtilesSpikeScreen() {
   const [progress, setProgress] = useState<ExtractPmtilesProgress>({ bytesTransferred: 0, requestCount: 0, outputBytes: 0 });
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [poiStatus, setPoiStatus] = useState('Not indexed');
+  const [indexedPoiCount, setIndexedPoiCount] = useState(0);
+  const [poiIndexing, setPoiIndexing] = useState(false);
+  const [poiCategory, setPoiCategory] = useState('food');
+  const [poiRadiusMeters, setPoiRadiusMeters] = useState(1000);
+  const [poiResults, setPoiResults] = useState<Array<PoiSearchResult>>([]);
 
   useEffect(() => {
     const outputFile = getOutputFileState();
@@ -49,6 +63,12 @@ export function PmtilesSpikeScreen() {
       setProgress((current) => ({ ...current, outputBytes: outputFile.size }));
       setStatus('Complete');
     }
+  }, []);
+
+  useEffect(() => {
+    const count = getIndexedPoiCount();
+    setIndexedPoiCount(count);
+    if (count > 0) setPoiStatus('Ready');
   }, []);
 
   useEffect(() => {
@@ -69,6 +89,32 @@ export function PmtilesSpikeScreen() {
     finally { setElapsed(Date.now() - start); setStartedAt(null); }
   }
 
+  async function indexOfflinePois(): Promise<void> {
+    setPoiIndexing(true);
+    setPoiStatus('Indexing offline POIs…');
+    try {
+      const result = await indexPoisFromPmtiles(`${FileSystem.documentDirectory}${OUTPUT_PATH}`);
+      setIndexedPoiCount(result.count);
+      setPoiStatus(`Indexed ${result.count} POIs in ${(result.elapsedMs / 1000).toFixed(1)}s`);
+      setPoiResults(searchPois({ query: poiCategory, ...POI_ORIGIN, radiusMeters: poiRadiusMeters, limit: 50 }));
+    } catch (error) {
+      setPoiStatus(`Indexing error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPoiIndexing(false);
+    }
+  }
+
+  function searchOfflinePois(query: string = poiCategory, radiusMeters: number = poiRadiusMeters): void {
+    setPoiCategory(query);
+    setPoiRadiusMeters(radiusMeters);
+    try {
+      setPoiResults(searchPois({ query, ...POI_ORIGIN, radiusMeters, limit: 50 }));
+    } catch (error) {
+      setPoiStatus(`Search error: ${error instanceof Error ? error.message : String(error)}`);
+      setPoiResults([]);
+    }
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.controls}>
@@ -76,6 +122,22 @@ export function PmtilesSpikeScreen() {
         <Text>{status}</Text>
         <Text>Elapsed: {(elapsed / 1000).toFixed(1)}s</Text>
         <Text>Transferred: {(progress.bytesTransferred / 1024 / 1024).toFixed(2)} MB · Output: {(progress.outputBytes / 1024 / 1024).toFixed(2)} MB · Requests: {progress.requestCount}</Text>
+        <Button title="Index Offline POIs" onPress={() => { void indexOfflinePois(); }} disabled={poiIndexing} />
+        <Text>{poiStatus}</Text>
+        <Text>Indexed POIs: {indexedPoiCount}</Text>
+        <View style={styles.buttonRow}>
+          {POI_CATEGORIES.map((category) => (
+            <Button key={category.key} title={category.label} onPress={() => searchOfflinePois(category.key)} disabled={poiIndexing} />
+          ))}
+        </View>
+        <View style={styles.buttonRow}>
+          {[1000, 3000, 5000].map((radiusMeters) => (
+            <Button key={radiusMeters} title={`${radiusMeters / 1000} km`} onPress={() => searchOfflinePois(poiCategory, radiusMeters)} disabled={poiIndexing} />
+          ))}
+        </View>
+        {poiResults.map((poi) => (
+          <Text key={poi.id}>{poi.name} · {poi.category} · {(poi.distanceMeters / 1000).toFixed(2)} km</Text>
+        ))}
       </View>
       <Map style={styles.map} mapStyle={mapStyle}>
         <Camera
@@ -156,5 +218,10 @@ const styles = StyleSheet.create({
     gap: 6,
     padding: 12,
     backgroundColor: '#F1EFE8',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
   },
 });
