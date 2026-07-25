@@ -69,7 +69,7 @@ After the model files are downloaded, Locra's inference path does not require an
       <br />
       <strong>Background model setup</strong>
       <br />
-      Resumable download progress through Android notifications.
+      Background model-download progress through Android notifications.
     </td>
     <td align="center" valign="top" width="50%">
       <img
@@ -80,7 +80,7 @@ After the model files are downloaded, Locra's inference path does not require an
       <br />
       <strong>Verified local model</strong>
       <br />
-      Independent model repair, deletion, and storage controls.
+      Model verification, redownload, deletion, and storage controls.
     </td>
   </tr>
 </table>
@@ -428,4 +428,4 @@ Built by [Vineet Agarwal](https://github.com/vineetagarwal54).
 
 ## License
 
-A repository license has not yet been added. Add an OSI-approved license before accepting external contributions or distributing modified versions.
+Licensed under the [Apache License 2.0](LICENSE).
