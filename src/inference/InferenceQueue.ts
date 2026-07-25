@@ -585,7 +585,7 @@ export class InferenceQueue implements IInferenceQueue {
       lastGeneratedTokenCount = generatedTokenCount ?? lastGeneratedTokenCount;
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
-      if (cumulative.length >= 200 && /[.!?â€¦]\s*$/.test(cumulative)) {
+      if (cumulative.length >= 200 && /[.!?…]\s*$/.test(cumulative)) {
         const streamedQuality = postProcessAnswer(cumulative);
         if (streamedQuality.verdict === 'looping') {
           active.loopingStopped = true;
