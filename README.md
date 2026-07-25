@@ -17,7 +17,73 @@ Locra is an Android-first, privacy-focused AI assistant for text, images, and vo
 
 After the model files are downloaded, Locra's inference path does not require an internet connection.
 
-<!-- Add a short demo GIF or 2–3 product screenshots here before a public launch. -->
+## Demo
+
+<p align="center">
+  <img
+    src="docs/assets/locra-demo.gif"
+    width="300"
+    alt="Locra performing offline image understanding on a physical Android phone"
+  />
+</p>
+
+<p align="center">
+  <strong>Offline image understanding on a physical Android device.</strong><br />
+  After initial model setup, image preprocessing and Qwen3-VL inference run entirely on-device.
+</p>
+
+### Product experience
+
+<table width="100%">
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <img
+        src="docs/assets/locra-onboarding.jpeg"
+        width="220"
+        alt="Locra offline-first onboarding screen"
+      />
+      <br />
+      <strong>Private by design</strong>
+      <br />
+      Offline-first onboarding and privacy messaging.
+    </td>
+    <td align="center" valign="top" width="50%">
+      <img
+        src="docs/assets/locra-image-chat.jpeg"
+        width="220"
+        alt="Locra generating an on-device answer about an image"
+      />
+      <br />
+      <strong>On-device multimodal chat</strong>
+      <br />
+      Local image understanding with streamed responses.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <img
+        src="docs/assets/locra-background-notification.jpeg"
+        width="220"
+        alt="Android notification showing Locra model download progress"
+      />
+      <br />
+      <strong>Background model setup</strong>
+      <br />
+      Resumable download progress through Android notifications.
+    </td>
+    <td align="center" valign="top" width="50%">
+      <img
+        src="docs/assets/locra-settings.jpeg"
+        width="220"
+        alt="Locra settings showing a ready and verified local model"
+      />
+      <br />
+      <strong>Verified local model</strong>
+      <br />
+      Independent model repair, deletion, and storage controls.
+    </td>
+  </tr>
+</table>
 
 ## Why Locra?
 

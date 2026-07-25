@@ -33,8 +33,8 @@ export function postProcessAnswer(raw: string): ProcessedAnswer {
   // word-level tail check catches partial-phrase loops the segment pass can't.
   const deduped = collapseRepeatedSegments(trimmed);
   const tailCollapsed = collapseLoopingTail(deduped.text);
-  const text = tailCollapsed ?? deduped.text;
-  if (deduped.changed || tailCollapsed !== null) {
+  const text = tailCollapsed.text;
+  if (deduped.changed || tailCollapsed.changed) {
     return { text, verdict: 'looping' };
   }
 
@@ -69,122 +69,158 @@ function collapseRepeatedSegments(text: string): DedupResult {
       return part;
     }
     const collapsed = collapseProseRepeats(part);
-    if (collapsed !== part) {
-      changed = true;
-    }
-    return collapsed;
+    changed = changed || collapsed.changed;
+    return collapsed.text;
   });
   return { text: rebuilt.join(''), changed };
 }
 
 /** De-duplicates consecutive identical paragraphs, then consecutive identical sentences. */
-function collapseProseRepeats(prose: string): string {
+function collapseProseRepeats(prose: string): DedupResult {
   if (prose.trim() === '') {
-    return prose;
+    return { text: prose, changed: false };
   }
   const cycleCollapsed = collapseRepeatedSentenceCycle(prose);
-  if (cycleCollapsed !== null) {
-    return cycleCollapsed;
-  }
-  // Alternating [paragraph, separator, paragraph, separator, …]; dropping a
-  // duplicate paragraph also drops the blank-line separator that precedes it so
-  // no double gap is left behind.
-  const tokens = prose.split(/(\n\s*\n)/);
-  const kept: string[] = [];
-  let previousKey: string | null = null;
-  for (const token of tokens) {
-    if (isSeparator(token)) {
-      kept.push(token);
-      continue;
-    }
-    const key = normalize(token);
-    if (key === previousKey) {
-      while (kept.length > 0 && isSeparator(kept[kept.length - 1])) {
-        kept.pop();
-      }
-      continue;
-    }
-    kept.push(collapseSentenceRepeats(token));
-    previousKey = key;
-  }
-  return kept.join('');
+  const paragraphCollapsed = collapseConsecutiveUnits(
+    cycleCollapsed.text,
+    findParagraphUnits(cycleCollapsed.text),
+  );
+  const sentenceCollapsed = collapseSentenceRepeats(paragraphCollapsed.text);
+  return {
+    text: sentenceCollapsed.text,
+    changed: cycleCollapsed.changed || paragraphCollapsed.changed || sentenceCollapsed.changed,
+  };
 }
 
 /**
  * Finds a normalized 2-4 sentence block repeated three consecutive times anywhere
- * in prose. Once a model has entered that cycle, text after its first occurrence
- * is not useful continuation, so the answer is trimmed at the end of that block.
+ * in prose and removes only the surplus repeated source spans.
  */
-function collapseRepeatedSentenceCycle(prose: string): string | null {
-  const leading = prose.match(/^\s*/)?.[0] ?? '';
-  const trailing = prose.match(/\s*$/)?.[0] ?? '';
-  const body = prose.slice(leading.length, prose.length - trailing.length);
-  const sentences = body.match(/[^.!?â€¦]*[.!?â€¦]+(?=\s|$)|[^.!?â€¦]+$/g)
-    ?.map((sentence) => sentence.trim())
-    .filter((sentence) => sentence !== '') ?? [];
-
+function collapseRepeatedSentenceCycle(prose: string): DedupResult {
+  const sentences = findSentenceUnits(prose);
   for (let start = 0; start < sentences.length; start += 1) {
     for (let blockLength = 2; blockLength <= 4; blockLength += 1) {
       if (start + blockLength * MIN_LOOP_REPEATS > sentences.length) {
         continue;
       }
-      const block = sentences.slice(start, start + blockLength).map(normalizeForCycle);
-      let matches = true;
-      for (let repeat = 1; repeat < MIN_LOOP_REPEATS && matches; repeat += 1) {
-        for (let offset = 0; offset < blockLength; offset += 1) {
-          if (normalizeForCycle(sentences[start + repeat * blockLength + offset]) !== block[offset]) {
-            matches = false;
-            break;
-          }
-        }
+      const block = sentences.slice(start, start + blockLength).map((unit) => unit.cycleKey);
+      let repeatCount = 1;
+      while (
+        start + blockLength * (repeatCount + 1) <= sentences.length &&
+        sentenceBlockMatches(sentences, start + blockLength * repeatCount, block)
+      ) {
+        repeatCount += 1;
       }
-      if (matches) {
-        return `${leading}${sentences.slice(0, start + blockLength).join(' ')}${trailing}`;
+      if (repeatCount >= MIN_LOOP_REPEATS) {
+        const firstSurplus = sentences[start + blockLength];
+        const lastRepeated = sentences[start + blockLength * repeatCount - 1];
+        return removeSpans(prose, [{
+          start: firstSurplus.start,
+          end: lastRepeated.end,
+        }]);
       }
     }
   }
-  return null;
+  return { text: prose, changed: false };
 }
 
-function normalizeForCycle(sentence: string): string {
-  return normalize(sentence).toLocaleLowerCase();
+interface SourceUnit {
+  readonly start: number;
+  readonly end: number;
+  readonly key: string;
+  readonly cycleKey: string;
+}
+
+interface SourceSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+function sentenceBlockMatches(
+  sentences: readonly SourceUnit[],
+  start: number,
+  expected: readonly string[],
+): boolean {
+  return expected.every((key, offset) => sentences[start + offset]?.cycleKey === key);
 }
 
 /** Collapses consecutive identical sentences within a single paragraph to one. */
-function collapseSentenceRepeats(paragraph: string): string {
-  const leading = paragraph.match(/^\s*/)?.[0] ?? '';
-  const trailing = paragraph.match(/\s*$/)?.[0] ?? '';
-  const body = paragraph.slice(leading.length, paragraph.length - trailing.length);
-  const sentences = body.match(/[^.!?…]*[.!?…]+(?=\s|$)|[^.!?…]+$/g);
-  if (sentences === null || sentences.length < 2) {
-    return paragraph;
-  }
-  const kept = dropConsecutiveDuplicates(
-    sentences.map((sentence) => sentence.trim()).filter((sentence) => sentence !== ''),
-    (sentence) => normalize(sentence),
-  );
-  return `${leading}${kept.join(' ')}${trailing}`;
+function collapseSentenceRepeats(prose: string): DedupResult {
+  return collapseConsecutiveUnits(prose, findSentenceUnits(prose));
 }
 
-/** Keeps the first of each run of items whose key (when non-null) equals the previous. */
-function dropConsecutiveDuplicates<T>(items: T[], keyOf: (item: T) => string | null): T[] {
-  const result: T[] = [];
-  let previousKey: string | null = null;
-  for (const item of items) {
-    const key = keyOf(item);
-    if (key !== null && key === previousKey) {
-      continue;
-    }
-    result.push(item);
-    if (key !== null) {
-      previousKey = key;
+function findSentenceUnits(prose: string): SourceUnit[] {
+  const units: SourceUnit[] = [];
+  const pattern = /[^.!?…]*[.!?…]+(?=\s|$)|[^.!?…]+$/g;
+  for (const match of prose.matchAll(pattern)) {
+    const value = match[0];
+    const key = normalize(value);
+    if (key !== '') {
+      const start = match.index;
+      units.push({
+        start,
+        end: start + value.length,
+        key,
+        cycleKey: key.toLocaleLowerCase(),
+      });
     }
   }
-  return result;
+  return units;
 }
 
-function isSeparator(segment: string): boolean {
-  return segment.trim() === '';
+function findParagraphUnits(prose: string): SourceUnit[] {
+  const units: SourceUnit[] = [];
+  const separator = /\n\s*\n/g;
+  let start = 0;
+  for (const match of prose.matchAll(separator)) {
+    appendSourceUnit(units, prose, start, match.index);
+    start = match.index + match[0].length;
+  }
+  appendSourceUnit(units, prose, start, prose.length);
+  return units;
+}
+
+function appendSourceUnit(
+  units: SourceUnit[],
+  source: string,
+  start: number,
+  end: number,
+): void {
+  const key = normalize(source.slice(start, end));
+  if (key !== '') {
+    units.push({ start, end, key, cycleKey: key.toLocaleLowerCase() });
+  }
+}
+
+function collapseConsecutiveUnits(text: string, units: readonly SourceUnit[]): DedupResult {
+  const removals: SourceSpan[] = [];
+  let runStart = 0;
+  while (runStart < units.length) {
+    let runEnd = runStart + 1;
+    while (runEnd < units.length && units[runEnd].key === units[runStart].key) {
+      runEnd += 1;
+    }
+    if (runEnd - runStart >= MIN_LOOP_REPEATS) {
+      removals.push({
+        start: units[runStart].end,
+        end: units[runEnd - 1].end,
+      });
+    }
+    runStart = runEnd;
+  }
+  return removeSpans(text, removals);
+}
+
+function removeSpans(text: string, spans: readonly SourceSpan[]): DedupResult {
+  if (spans.length === 0) {
+    return { text, changed: false };
+  }
+  let result = text;
+  for (let index = spans.length - 1; index >= 0; index -= 1) {
+    const span = spans[index];
+    result = result.slice(0, span.start) + result.slice(span.end);
+  }
+  return { text: result, changed: true };
 }
 
 function normalize(segment: string): string {
@@ -202,30 +238,53 @@ function endsMidSentence(text: string): boolean {
 /**
  * Detects a phrase of 1–{@link MAX_LOOP_PHRASE_WORDS} words repeated at least
  * {@link MIN_LOOP_REPEATS} times consecutively at the very end of the text,
- * and returns the text with the surplus repeats dropped — or null when no
- * such loop exists.
+ * and returns the original text with only surplus source spans dropped.
  */
-function collapseLoopingTail(text: string): string | null {
-  const words = text.split(/\s+/);
+function collapseLoopingTail(text: string): DedupResult {
+  const parts = text.split(CODE_FENCE);
+  const tailIndex = parts.length - 1;
+  if (parts[tailIndex].startsWith('```')) {
+    return { text, changed: false };
+  }
+  const collapsed = collapseProseLoopingTail(parts[tailIndex]);
+  if (!collapsed.changed) {
+    return { text, changed: false };
+  }
+  parts[tailIndex] = collapsed.text;
+  return { text: parts.join(''), changed: true };
+}
+
+function collapseProseLoopingTail(text: string): DedupResult {
+  const words = [...text.matchAll(/\S+/g)].map((match) => ({
+    value: match[0],
+    start: match.index,
+  }));
 
   for (let phraseLength = MAX_LOOP_PHRASE_WORDS; phraseLength >= 1; phraseLength -= 1) {
     if (words.length < phraseLength * MIN_LOOP_REPEATS) {
       continue;
     }
 
-    const phrase = words.slice(-phraseLength).join(' ');
+    const phrase = words.slice(-phraseLength).map((word) => word.value).join(' ');
     let repeats = 1;
     while (
       words.length >= phraseLength * (repeats + 1) &&
-      words.slice(-phraseLength * (repeats + 1), -phraseLength * repeats).join(' ') === phrase
+      words
+        .slice(-phraseLength * (repeats + 1), -phraseLength * repeats)
+        .map((word) => word.value)
+        .join(' ') === phrase
     ) {
       repeats += 1;
     }
 
     if (repeats >= MIN_LOOP_REPEATS) {
-      return words.slice(0, words.length - phraseLength * (repeats - 1)).join(' ');
+      const firstSurplus = words.length - phraseLength * (repeats - 1);
+      return {
+        text: text.slice(0, words[firstSurplus].start).trimEnd(),
+        changed: true,
+      };
     }
   }
 
-  return null;
+  return { text, changed: false };
 }

@@ -833,6 +833,46 @@ describe('runtime-owned output length', () => {
 });
 
 describe('InferenceQueue post-processing (FR-054)', () => {
+  it('streams punctuated markdown beyond the quality-check threshold without aborting', async () => {
+    const markdown = [
+      'Here is a careful setup guide with enough detail to remain useful on a small screen.',
+      '',
+      '## Before you begin',
+      '- Confirm the device has sufficient battery power.',
+      '- Keep the application open while the local preparation finishes.',
+      '- Save any unrelated work before continuing.',
+      '',
+      '## Steps',
+      '1. Open Settings.',
+      '2. Select Downloads.',
+      '3. Restart the app.',
+    ].join('\n');
+    let completeResponseReceived = false;
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken, signal) => {
+        if (generateRequest.kind === 'extraction') {
+          return Promise.resolve({ response: validExtractionJson, tokenCount: 10 });
+        }
+        onToken(markdown.slice(0, 230) + '.', 40);
+        onToken(markdown, 60);
+        expect(signal.aborted).toBe(false);
+        completeResponseReceived = true;
+        return Promise.resolve({ response: markdown, tokenCount: 60 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    const state = queue.getState();
+    expect(completeResponseReceived).toBe(true);
+    expect(state.status).toBe('completed');
+    expect(state.finishReason).not.toBe('looping');
+    expect(state.limitWarning).toBeNull();
+    expect(state.response).toBe(markdown);
+  });
+
   it('trims the completed response and flags a truncated tail via the limit notice', async () => {
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),

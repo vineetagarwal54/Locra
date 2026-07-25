@@ -18,6 +18,17 @@ describe('AnswerPostProcessor (FR-054)', () => {
     expect(postProcessAnswer('Three items: a pen, a cup, a plant.').verdict).toBe('complete');
   });
 
+  it.each([
+    'Here is the answer.\n- First item.\n- Second item.',
+    'Steps:\n1. Open settings.\n2. Select Downloads.\n3. Restart the app.',
+    'First sentence.  Second sentence.\nThird sentence.',
+  ])('preserves normal internal formatting exactly', (formatted) => {
+    expect(postProcessAnswer(formatted)).toEqual({
+      text: formatted,
+      verdict: 'complete',
+    });
+  });
+
   it('flags an answer that stops mid-sentence as truncated', () => {
     expect(postProcessAnswer('The mug is blue and the handle').verdict).toBe('truncated');
     expect(postProcessAnswer('It contains a list of').verdict).toBe('truncated');
@@ -56,24 +67,45 @@ describe('AnswerPostProcessor (FR-054)', () => {
     expect(assessAnswerQuality('The mug is blue and the')).toBe('truncated');
   });
 
-  it('removes consecutive repeated sentences, keeping one', () => {
+  it('does not remove two consecutive repeated sentences', () => {
     const repeated =
       'Water boils at 100 degrees Celsius. Water boils at 100 degrees Celsius. It does so at sea level.';
 
-    const result = postProcessAnswer(repeated);
-
-    expect(result.text).toBe(
-      'Water boils at 100 degrees Celsius. It does so at sea level.'
-    );
-    expect(result.verdict).toBe('looping');
+    expect(postProcessAnswer(repeated)).toEqual({
+      text: repeated,
+      verdict: 'complete',
+    });
   });
 
-  it('removes consecutive repeated paragraphs, keeping one', () => {
+  it('does not remove two consecutive repeated paragraphs', () => {
     const repeated = 'Here is the summary.\n\nHere is the summary.\n\nThat is all.';
 
-    const result = postProcessAnswer(repeated);
+    expect(postProcessAnswer(repeated)).toEqual({
+      text: repeated,
+      verdict: 'complete',
+    });
+  });
 
-    expect(result.text).toBe('Here is the summary.\n\nThat is all.');
+  it('collapses three consecutive repeated sentences and preserves the first exactly', () => {
+    const repeated =
+      'Keep  this formatting. Keep this formatting. Keep this formatting. Then continue.';
+
+    expect(postProcessAnswer(repeated)).toEqual({
+      text: 'Keep  this formatting. Then continue.',
+      verdict: 'looping',
+    });
+  });
+
+  it('collapses three consecutive repeated paragraphs and preserves the first exactly', () => {
+    const repeated =
+      '  Keep  this paragraph.\n\n' +
+      'Keep this paragraph.\n\n' +
+      'Keep this paragraph.\n\nThat is all.';
+
+    expect(postProcessAnswer(repeated)).toEqual({
+      text: 'Keep  this paragraph.\n\nThat is all.',
+      verdict: 'looping',
+    });
   });
 
   it('does not remove non-consecutive repeated sentences', () => {
@@ -86,11 +118,12 @@ describe('AnswerPostProcessor (FR-054)', () => {
   });
 
   it('preserves repeated lines inside a fenced code block', () => {
-    const code = 'Run this:\n\n```\nretry()\nretry()\nretry()\n```';
+    const code =
+      '# Example\n\n> Keep the quoted text.\n\n```\nretry()\nretry()\nretry()\n```\n\nDone.';
 
     const result = postProcessAnswer(code);
 
-    expect(result.text).toContain('retry()\nretry()\nretry()');
+    expect(result).toEqual({ text: code, verdict: 'complete' });
   });
 
   it('trims a three-sentence cycle repeated three times to its first occurrence', () => {
