@@ -1,6 +1,6 @@
 import React from 'react';
-import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import { StyleSheet, Text } from 'react-native';
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 
 import { MessageBubble } from '../../../src/components/chat/MessageBubble';
 import type { ConversationMessage } from '../../../src/types/models';
