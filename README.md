@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/vineetagarwal54/Locra/actions/workflows/ci.yml"><img alt="JavaScript checks" src="https://github.com/vineetagarwal54/Locra/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Android-3DDC84">
   <img alt="Expo" src="https://img.shields.io/badge/Expo-56-000020">
   <img alt="React Native" src="https://img.shields.io/badge/React%20Native-0.85.3-61DAFB">
