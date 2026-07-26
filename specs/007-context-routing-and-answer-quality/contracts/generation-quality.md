@@ -12,7 +12,7 @@ export function resolveGenerationTarget(
 ```
 
 - **MUST** return the existing `getResponseTokenBudget(mode)`/`getResponseGenerationLimit(mode)` values unchanged for any classification other than a short independent-question/follow-up case (spec Non-Goal: not changing response-mode generation limits wholesale).
-- **MUST** return a reduced `targetTokens` (exact ratio pinned by test) when `classification.isIndependentTextQuestion || classification.isTextFollowUp` is true and no other classification (image/long-context) is also active, so a short, self-contained question is not encouraged to reach the mode's full soft target (spec FR-032/FR-034).
+- **MUST** return a reduced `targetTokens` (exact ratio selected through recorded manual evaluation) when `classification.isIndependentTextQuestion || classification.isTextFollowUp` is true and no other classification (image/long-context) is also active, so a short, self-contained question is not encouraged to reach the mode's full soft target (spec FR-032/FR-034).
 - **MUST NOT** reduce `targetTokens` or `generationLimit` for a request that genuinely needs a longer answer (e.g., `isLongContextRetrievalRequest`, or any request where the mode itself calls for detail) — length follows task need in both directions (spec FR-032).
 - **MUST NOT** reduce `generationLimit` (the hard `n_predict` cap) below what's needed to finish a normal short answer cleanly — only the soft target shifts; the hard cap keeps its existing safety margin.
 

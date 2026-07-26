@@ -59,24 +59,24 @@ describe('response modes', () => {
     expect(getResponseModeInstruction('High')).toMatch(/comprehensive|edge cases/i);
   });
 
-  it('pins monotonic character-budget profiles', () => {
+  it('records the manually selected monotonic token-budget profiles', () => {
     expect(getResponseModeConfig('Low')).toEqual({
       recentExactTurns: 6,
-      contextBudgetUnits: 4_000,
+      contextBudgetUnits: 1_334,
       sameChatRetrievalLimit: 2,
       answerTargetTokens: 192,
       generationLimit: 320,
     });
     expect(getResponseModeConfig('Medium')).toEqual({
       recentExactTurns: 10,
-      contextBudgetUnits: 7_000,
+      contextBudgetUnits: 2_334,
       sameChatRetrievalLimit: 4,
       answerTargetTokens: 384,
       generationLimit: 640,
     });
     expect(getResponseModeConfig('High')).toEqual({
       recentExactTurns: 16,
-      contextBudgetUnits: 11_000,
+      contextBudgetUnits: 3_667,
       sameChatRetrievalLimit: 6,
       answerTargetTokens: 768,
       generationLimit: 1_024,

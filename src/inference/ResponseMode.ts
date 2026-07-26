@@ -5,7 +5,7 @@ export type StoredResponseMode = 'low' | 'medium' | 'high';
 
 export interface ResponseModeConfig {
   readonly recentExactTurns: number;
-  /** Character units measured by CharacterContextBudgetPolicy. */
+  /** Tier-1 estimated tokens available to the selected-context pool. */
   readonly contextBudgetUnits: number;
   readonly sameChatRetrievalLimit: number;
   readonly answerTargetTokens: number;
@@ -18,21 +18,21 @@ export const QWEN_CONTEXT_TOKEN_LIMIT = 4096;
 const RESPONSE_MODE_CONFIGS: Readonly<Record<ResponseMode, ResponseModeConfig>> = {
   Low: {
     recentExactTurns: 6,
-    contextBudgetUnits: 4_000,
+    contextBudgetUnits: 1_334,
     sameChatRetrievalLimit: 2,
     answerTargetTokens: 192,
     generationLimit: 320,
   },
   Medium: {
     recentExactTurns: 10,
-    contextBudgetUnits: 7_000,
+    contextBudgetUnits: 2_334,
     sameChatRetrievalLimit: 4,
     answerTargetTokens: 384,
     generationLimit: 640,
   },
   High: {
     recentExactTurns: 16,
-    contextBudgetUnits: 11_000,
+    contextBudgetUnits: 3_667,
     sameChatRetrievalLimit: 6,
     answerTargetTokens: 768,
     generationLimit: 1_024,

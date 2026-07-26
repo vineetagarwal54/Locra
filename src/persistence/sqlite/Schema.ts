@@ -4,8 +4,8 @@
 //
 // The schema is built and upgraded through ordered, transactional migrations
 // (see Migrations.ts): v1 = core tables, v2 = benchmark_run, v3 = message
-// finish_reason. This file owns the DDL; the migration runner owns the ordering,
-// transactions, and version stamping.
+// finish_reason, v4 = conversation cross-chat exclusion. This file owns the DDL;
+// the migration runner owns the ordering, transactions, and version stamping.
 
 import type { SqliteDriver } from '../types';
 
@@ -14,12 +14,12 @@ import type { SqliteDriver } from '../types';
  * last entry of MIGRATIONS (Migrations.ts asserts they match). Bump alongside a
  * new migration.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Idempotently adds a column to an existing table. `ALTER TABLE ADD COLUMN` is not
  * `IF NOT EXISTS`-aware, so the column is only added when absent — letting a legacy
- * store gain the column without a destructive rebuild. Exported for the v3 migration.
+ * store gain the column without a destructive rebuild. Exported for later migrations.
  */
 export function addColumnIfMissing(
   driver: SqliteDriver,

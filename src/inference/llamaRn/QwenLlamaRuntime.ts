@@ -13,8 +13,12 @@
 // generation is a fresh stateless completion over the supplied messages.
 
 import type { GenerationFinishReason } from '../../types/models';
+import { postProcessAnswer } from '../AnswerPostProcessor';
 import type { ModelRequestMessage } from '../ContextBuilder';
-import { trimMessagesToContextWithReport } from '../ContextWindow';
+import {
+  reconcileMessagesToNativeTokenCount,
+  trimMessagesToContextWithReport,
+} from '../ContextWindow';
 import {
   samplingProfileForRequestKind,
   type SamplingProfile,
@@ -42,6 +46,9 @@ export type QwenRuntimeStatus =
   | 'cancelling'
   | 'releasing'
   | 'errored';
+
+const LOOP_CHECK_TOKEN_INTERVAL = 16;
+const LOOP_CHECK_MINIMUM_CHARS = 200;
 
 // ── Minimal llama.rn 0.12.5 surface this adapter depends on ──────────────────
 
@@ -104,6 +111,14 @@ export interface LlamaContextLike {
   initMultimodal(params: { path: string; use_gpu: boolean }): Promise<boolean | void>;
   isMultimodalEnabled(): Promise<boolean>;
   getMultimodalSupport(): Promise<{ vision: boolean; audio: boolean }>;
+  getFormattedChat(messages: QwenChatMessage[]): Promise<{
+    readonly prompt: string;
+    readonly media_paths?: string[];
+  }>;
+  tokenize(
+    text: string,
+    options?: { readonly media_paths?: string[] },
+  ): Promise<{ readonly tokens: number[]; readonly has_media: boolean }>;
   completion(
     params: QwenCompletionParams,
     onToken?: (data: QwenNativeTokenData) => void
@@ -315,31 +330,45 @@ export class QwenLlamaRuntime {
     // Convert BEFORE flipping to 'generating' so an unreadable image leaves the
     // runtime cleanly 'loaded'. Only the supplied messages are used.
     const bounded = trimMessagesToContextWithReport(request.messages, request.responseMode);
-    const messages = convertToQwenMessages(bounded.messages, {
+    const initialMessages = convertToQwenMessages(bounded.messages, {
       isReadableFile: this.deps.isReadableFile,
     });
-    const inputShortenedWarning = bounded.inputShortenedWarning;
-
-    if (request.signal.aborted) {
-      throw new QwenGenerationCancelledError();
-    }
-
     this.status = 'generating';
     this.cancelRequested = false;
     this.error = null;
-    const startedAt = this.now();
-    let firstTokenAt: number | null = null;
-    let cumulativeRaw = '';
-    let streamedTokenCount = 0;
-    // Hard output cap handed to the native runtime. Reaching it means the answer
-    // is length-truncated (finishReason === 'length'), never a natural stop.
-    const generationLimit = getResponseGenerationLimit(request.responseMode);
-    const samplingProfile = samplingProfileForRequestKind(request.kind);
-
     const onAbort = (): void => {
       this.cancel();
     };
     request.signal.addEventListener('abort', onAbort);
+    const formatted = await context.getFormattedChat(initialMessages);
+    const tokenized = await context.tokenize(formatted.prompt, {
+      media_paths: formatted.media_paths,
+    });
+    const reconciled = reconcileMessagesToNativeTokenCount(
+      bounded.messages,
+      request.responseMode,
+      tokenized.tokens.length,
+    );
+    const messages = reconciled.length === bounded.messages.length
+      ? initialMessages
+      : convertToQwenMessages(reconciled, { isReadableFile: this.deps.isReadableFile });
+    const inputShortenedWarning = bounded.inputShortenedWarning;
+
+    if (request.signal.aborted) {
+      this.status = 'loaded';
+      request.signal.removeEventListener('abort', onAbort);
+      throw new QwenGenerationCancelledError();
+    }
+
+    const startedAt = this.now();
+    let firstTokenAt: number | null = null;
+    let cumulativeRaw = '';
+    let streamedTokenCount = 0;
+    let loopStoppedText: string | null = null;
+    // Hard output cap handed to the native runtime. Reaching it means the answer
+    // is length-truncated (finishReason === 'length'), never a natural stop.
+    const generationLimit = getResponseGenerationLimit(request.responseMode);
+    const samplingProfile = samplingProfileForRequestKind(request.kind);
 
     try {
       const result = await context.completion(
@@ -356,7 +385,23 @@ export class QwenLlamaRuntime {
           }
           cumulativeRaw += data.token ?? '';
           streamedTokenCount += 1;
-          request.onToken(stripControlTags(cumulativeRaw), streamedTokenCount);
+          const visible = stripControlTags(cumulativeRaw);
+          if (
+            loopStoppedText === null
+            && streamedTokenCount % LOOP_CHECK_TOKEN_INTERVAL === 0
+            && visible.length >= LOOP_CHECK_MINIMUM_CHARS
+          ) {
+            const processed = postProcessAnswer(visible);
+            if (processed.verdict === 'looping') {
+              loopStoppedText = processed.text;
+              request.onToken(processed.text, streamedTokenCount);
+              void safe(() => Promise.resolve(context.stopCompletion()));
+              return;
+            }
+          }
+          if (loopStoppedText === null) {
+            request.onToken(visible, streamedTokenCount);
+          }
         }
       );
 
@@ -365,7 +410,8 @@ export class QwenLlamaRuntime {
         throw new QwenGenerationCancelledError();
       }
 
-      const text = stripControlTags(result.content ?? result.text ?? cumulativeRaw).trim();
+      const text = loopStoppedText
+        ?? stripControlTags(result.content ?? result.text ?? cumulativeRaw).trim();
       this.status = 'loaded';
       return this.buildResult(
         text,
@@ -376,6 +422,7 @@ export class QwenLlamaRuntime {
         generationLimit,
         inputShortenedWarning,
         samplingProfile,
+        loopStoppedText === null ? undefined : 'looping',
       );
     } catch (error) {
       if (error instanceof QwenGenerationCancelledError) {
@@ -434,6 +481,7 @@ export class QwenLlamaRuntime {
     generationLimit: number,
     inputShortenedWarning: string | null,
     samplingProfile: SamplingProfile,
+    forcedFinishReason?: GenerationFinishReason,
   ): QwenGenerateResult {
     const totalWallTimeMs = this.now() - startedAt;
     const timings = result.timings ?? {};
@@ -457,7 +505,8 @@ export class QwenLlamaRuntime {
       tokensPerSecond,
       firstTokenLatencyMs,
       totalWallTimeMs,
-      finishReason: resolveFinishReason(result, generatedTokens, generationLimit),
+      finishReason: forcedFinishReason
+        ?? resolveFinishReason(result, generatedTokens, generationLimit),
       inputShortenedWarning,
       samplingProfile,
     };

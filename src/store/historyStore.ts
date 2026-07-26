@@ -101,6 +101,7 @@ export interface HistoryStoreState {
   search: (query: string) => Conversation[];
   delete: (id: string) => void;
   rename: (id: string, title: string) => void;
+  setCrossChatExcluded: (id: string, excluded: boolean) => void;
   clear: () => void;
   setFlag: (id: string, flagged: boolean, note?: string) => void;
   getMetricsSummary: () => MetricsSummary;
@@ -147,6 +148,11 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
     const trimmed = title.trim();
     if (trimmed === '') return;
     conversationRepository.updateConversation(id, { title: trimmed, touch: true });
+    conversationCache = createConversationListCache(conversationRepository);
+    set(listSnapshot());
+  },
+  setCrossChatExcluded: (id: string, excluded: boolean): void => {
+    conversationRepository.setCrossChatExcluded(id, excluded);
     conversationCache = createConversationListCache(conversationRepository);
     set(listSnapshot());
   },
@@ -211,6 +217,7 @@ function rowsToConversationHeaders(rows: ConversationRow[]): Conversation[] {
     responseMode: fromStoredMode(row.response_mode),
     latestMessagePreview: row.latest_message_preview,
     hasImage: row.has_image === 1,
+    excludedFromCrossChat: row.excluded_from_cross_chat === 1,
   }));
 }
 

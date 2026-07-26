@@ -122,8 +122,8 @@ describe('SQL schema contract', () => {
 
     initializeSchema(driver);
 
-    // v3 backfills `finish_reason` with ALTER TABLE after the v1/v2 DDL.
-    expect(executed.length).toBe(SCHEMA_STATEMENTS.length + 1);
+    // v3 and v4 backfill `finish_reason` and cross-chat exclusion after v1/v2 DDL.
+    expect(executed.length).toBe(SCHEMA_STATEMENTS.length + 2);
     expect(stampedVersion).toBe(SCHEMA_VERSION);
     expect(inTransaction).toBe(false);
   });

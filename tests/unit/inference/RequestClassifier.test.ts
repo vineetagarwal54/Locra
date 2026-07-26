@@ -86,6 +86,33 @@ describe('classifyRequest', () => {
     expect(result.isIndependentTextQuestion).toBe(false);
   });
 
+  it.each([
+    'Define entropy',
+    'Explain gravity',
+    'Java vs Kotlin?',
+    'Capital of France?',
+    'Summarize photosynthesis',
+    'Convert 5 miles',
+  ])('classifies standalone short request "%s" as independent', (text) => {
+    const result = classifyRequest(snapshot(text), 'Medium', CROSS_CHAT_OFF);
+
+    expect(result.isIndependentTextQuestion).toBe(true);
+    expect(result.isTextFollowUp).toBe(false);
+  });
+
+  it.each([
+    'And then?',
+    'What about that?',
+    'Why is that?',
+    'The second one?',
+    'Explain it again',
+  ])('classifies genuinely dependent short request "%s" as a follow-up', (text) => {
+    const result = classifyRequest(snapshot(text), 'Medium', CROSS_CHAT_OFF);
+
+    expect(result.isTextFollowUp).toBe(true);
+    expect(result.isIndependentTextQuestion).toBe(false);
+  });
+
   it('combines a new-image question with independent and pixel-dependent flags', () => {
     const result = classifyRequest(
       snapshot('Read the exact serial number.', [], { id: 'asset-new', path: '/new.jpg' }),
@@ -144,6 +171,26 @@ describe('classifyRequest', () => {
       assistant('answer-2', 'Two.', 4),
       message('image-3', 'Three.', { imageAssetId: 'asset-3', imagePath: '/three.jpg', createdAt: 5 }),
       assistant('answer-3', 'Three.', 6),
+    ];
+
+    const result = classifyRequest(
+      snapshot('What is visible in the image?', prior),
+      'Medium',
+      CROSS_CHAT_OFF,
+    );
+
+    expect(result.imageReferenceAmbiguous).toBe(true);
+    expect(result.isSameImageFollowUp).toBe(true);
+    expect(result.isOlderImageReference).toBe(false);
+    expect(result.referencedImageId).toBeNull();
+  });
+
+  it('marks a generic reference ambiguous when exactly two images are plausible', () => {
+    const prior = [
+      message('image-1', 'One.', { imageAssetId: 'asset-1', imagePath: '/one.jpg', createdAt: 1 }),
+      assistant('answer-1', 'One.', 2),
+      message('image-2', 'Two.', { imageAssetId: 'asset-2', imagePath: '/two.jpg', createdAt: 3 }),
+      assistant('answer-2', 'Two.', 4),
     ];
 
     const result = classifyRequest(

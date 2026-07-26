@@ -1,7 +1,7 @@
 // T089 — production-safe SQLite migrations.
 //
 // The store is built and upgraded by an ORDERED list of numbered migrations
-// (v1 -> v2 -> v3). Each migration runs inside a transaction; the stored schema
+// (v1 -> v2 -> v3 -> v4). Each migration runs inside a transaction; the stored schema
 // version (`PRAGMA user_version`) is stamped last inside the migration transaction.
 // If a migration throws, its transaction rolls back and the version is
 // left unchanged, so the previous usable database is preserved — production data is
@@ -55,6 +55,16 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
     version: 3,
     description: 'message.finish_reason column',
     up: (driver) => addColumnIfMissing(driver, 'message', 'finish_reason', 'TEXT'),
+  },
+  {
+    version: 4,
+    description: 'conversation cross-chat exclusion flag',
+    up: (driver) => addColumnIfMissing(
+      driver,
+      'conversation',
+      'excluded_from_cross_chat',
+      'INTEGER NOT NULL DEFAULT 0',
+    ),
   },
 ];
 

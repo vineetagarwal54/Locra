@@ -131,11 +131,15 @@ Most multimodal AI applications send prompts, images, audio, and conversation hi
 ### Local conversation intelligence
 
 - SQLite is the canonical source of truth for conversations and model-derived context.
-- Recent exact turns are combined with relevant same-chat memory.
+- Request classification keeps independent questions context-free while
+  follow-ups use only the local context they require.
 - Durable visual evidence, extracted facts, and rolling summaries support longer conversations.
-- Hybrid retrieval architecture includes lexical fallback and versioned embedding persistence.
-- Context is selected under explicit response-mode budgets before it reaches the model.
-- Cross-chat context injection is intentionally excluded from the active product flow.
+- Hybrid retrieval combines lexical and compatible semantic rankings while
+  preserving exact identifiers, prices, numbers, and dates.
+- Context is selected under explicit token-based response-mode budgets and
+  reconciled once with the model tokenizer before generation.
+- Optional cross-chat memory is off by default and can exclude individual
+  conversations in both directions; all retrieval remains local and on-device.
 
 ### History and controls
 

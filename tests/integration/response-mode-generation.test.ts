@@ -29,7 +29,7 @@ describe('response mode generation assembly', () => {
     });
 
     expect(new Set(assembled.map((item) => item.system)).size).toBe(3);
-    expect(assembled.map((item) => item.contextBudget)).toEqual([4000, 7000, 11000]);
+    expect(assembled.map((item) => item.contextBudget)).toEqual([1334, 2334, 3667]);
     expect(assembled.map((item) => item.target)).toEqual([192, 384, 768]);
     expect(assembled.map((item) => item.limit)).toEqual([320, 640, 1024]);
   });

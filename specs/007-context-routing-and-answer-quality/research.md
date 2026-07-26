@@ -52,7 +52,7 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 
 ## 5. Task-sensitive output-length targeting (Phase 5)
 
-**Decision**: Add a small classification-aware resolver, `resolveGenerationTarget(mode, classification)`, layered on top of the existing `getResponseModeConfig`/`getResponseTokenBudget`/`getResponseGenerationLimit` functions: for a request classified as an independent text question or a short text follow-up, apply a reduced soft-target multiplier (exact ratio pinned by test, e.g. targeting the low end of the mode's range) rather than the mode's full soft target; other classifications use the existing mode config unchanged.
+**Decision**: Add a small classification-aware resolver, `resolveGenerationTarget(mode, classification)`, layered on top of the existing `getResponseModeConfig`/`getResponseTokenBudget`/`getResponseGenerationLimit` functions: for a request classified as an independent text question or a short text follow-up, apply a reduced soft-target multiplier selected through recorded manual evaluation rather than the mode's full soft target; other classifications use the existing mode config unchanged.
 
 **Rationale**: Response modes (Low/Medium/High) already express *user-chosen* verbosity; classification expresses *task-shape*. A mode-only target means a Low-mode user still gets padded toward ~192 tokens for a two-word factual answer. Layering classification on top keeps the existing, tested mode system intact (spec Non-Goal: not changing response-mode generation limits) while adding the finer-grained signal the spec requires (FR-032/FR-034).
 
@@ -71,6 +71,12 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 - *Lower `n_predict` globally to reduce loop cost*: rejected — this is a blunt instrument that would also truncate legitimately long High-mode answers; it doesn't address the actual defect (a loop, not a long answer).
 
 **Runtime-verification requirement (spec FR-036a)**: `stopCompletion()`'s availability and behavior were confirmed by reading the currently linked `llama.rn` 0.12.5 source directly (`node_modules/llama.rn/src/index.ts:869`), not assumed from memory or from a different version's documentation. Before Phase 5 implementation, re-confirm this call shape against whatever `llama.rn` version is actually linked at that time, and manually validate on a physical device that a mid-stream `stopCompletion()` call behaves as expected (stops generation, preserves already-streamed text) before pinning any specific detection threshold or stop-trigger constant. If a future `llama.rn` upgrade exposes a more direct repetition-penalty or stop-sequence API, that should be evaluated against this same manual-validation bar before being adopted in place of the buffer-scan approach above — no exact sampling/stopping value in this feature is chosen without that check.
+
+**Phase 5 re-verification (2026-07-26)**: The linked source still exposes
+`stopCompletion(): Promise<void>` at `src/index.ts:869`. Physical-device
+verification of loop-triggered stopping and partial-text preservation was
+explicitly deferred by the user, so T034 remains incomplete while T035–T041
+implementation proceeds.
 
 ## 7. Deterministic grounding/hallucination heuristic (Phase 8, non-blocking)
 

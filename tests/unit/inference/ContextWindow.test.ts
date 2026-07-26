@@ -1,17 +1,57 @@
 import type { ModelRequestMessage } from '../../../src/inference/ContextBuilder';
 import {
+  CONTEXT_SAFETY_TOKENS,
   estimateMessageTokens,
+  getContextCapacityBuckets,
   INPUT_SHORTENED_MARKER,
+  reconcileMessagesToNativeTokenCount,
   trimMessagesToContext,
   trimMessagesToContextWithReport,
 } from '../../../src/inference/ContextWindow';
 import {
   getResponseGenerationLimit,
+  getResponseModeConfig,
   getResponseTokenBudget,
   QWEN_CONTEXT_TOKEN_LIMIT,
 } from '../../../src/inference/ResponseMode';
 
 describe('Qwen context window trimming', () => {
+  it.each(['Low', 'Medium', 'High'] as const)(
+    'keeps all five capacity buckets within the model window in %s mode',
+    (mode) => {
+      const buckets = getContextCapacityBuckets(
+        mode,
+        'current input',
+        true,
+        getResponseModeConfig(mode).contextBudgetUnits,
+      );
+      const reserved =
+        buckets.systemInstructions +
+        buckets.currentInput +
+        buckets.imageInput +
+        buckets.selectedContext +
+        buckets.generatedOutput;
+
+      expect(reserved).toBeLessThanOrEqual(QWEN_CONTEXT_TOKEN_LIMIT - CONTEXT_SAFETY_TOKENS);
+    },
+  );
+
+  it('reconciles an over-limit native count without evicting system or current input', () => {
+    const messages: ModelRequestMessage[] = [
+      { role: 'system', content: 'system instructions' },
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'newer question' },
+      { role: 'assistant', content: 'newer answer' },
+      { role: 'user', content: 'current request' },
+    ];
+
+    const reconciled = reconcileMessagesToNativeTokenCount(messages, 'Low', 5_000);
+
+    expect(reconciled[0]).toEqual(messages[0]);
+    expect(reconciled.at(-1)).toEqual(messages.at(-1));
+    expect(reconciled.length).toBeLessThan(messages.length);
+  });
   it('drops oldest turns while preserving recent turns and the current question', () => {
     const messages: ModelRequestMessage[] = [
       { role: 'system', content: 'system' },

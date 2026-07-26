@@ -99,11 +99,16 @@ Extends the existing `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` s
 |---|---|---|
 | `classification` | `RequestClassification` | New — recorded once per turn (not per candidate) alongside the existing `budget` field. |
 | `retrievalMode` | `'fused' \| 'lexical-fallback' \| 'none'` | New — which retrieval state (spec FR-013) was actually used for this turn, plus a `retrievalModeReason` string (e.g. `'embeddings-stale'`, `'below-threshold'`, `'no-candidate'`). |
+| `retrievalQueried` / returned / selected counts | boolean / number / number | Actual Phase 1 runtime behavior, independent of proposed Phase 3 routing. |
+| `actualSources` | object | Per-source queried/considered and selected counts for the current implementation. |
+| `proposedRouting` | object | Observation-only prediction such as `wouldSkipRetrieval`; never alters Phase 1 behavior. |
 | `imageDecision` | `ImageEvidenceDecision \| 'not-applicable'` | New — the resolved decision for this turn. |
 | `imageReferenceAmbiguous` | boolean | New — mirrors `RequestClassification.imageReferenceAmbiguous`; `true` when an ambiguous reference was defaulted to the active image (spec FR-012a, FR-037). |
-| `crossChatActive` | boolean | New — `false` until Phase 7 ships; thereafter reflects whether cross-chat scope was used for this turn. |
-| `groundingVerdict` | `'supported' \| 'unsupported' \| null` | New, Phase 8 only — `null`/omitted until Phase 8 ships (spec FR-040). |
+| `imageReferenceResolution` | string union | Records explicit ordinal, unique description, active-image selection, or disclosed ambiguous active fallback. |
+| `crossChatActive` | boolean | Reflects whether an enabled, non-excluded cross-chat scope was actually queried for this turn; otherwise `false`. |
+| `groundingVerdict` | `'supported' \| 'unsupported' \| null` | Phase 8 diagnostics-only result; `null` when the turn did not include image evidence or retrieved text that can be assessed (spec FR-040). |
 
 **Validation rules**:
 - `retrievalMode` and `imageDecision` MUST be present on every turn's diagnostics once Phase 1 ships, even when the value is `'none'`/`'not-applicable'` (spec FR-037 requires recording consideration, not just selection).
-- `groundingVerdict` MUST be omittable (not merely `null`) before Phase 8 ships without diagnostics being considered incomplete (spec FR-040).
+- Older pre-Phase-8 diagnostic records MAY omit `groundingVerdict`; current records use
+  `null` when grounding assessment is not applicable (spec FR-040).

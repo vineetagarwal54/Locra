@@ -7,6 +7,7 @@ import type {
 } from './types';
 
 export const COSINE_SIMILARITY_THRESHOLD = 0.62;
+export const RRF_K = 60;
 
 export interface CompatibleEmbeddingSource {
   getCompatibleByScope(
@@ -26,6 +27,11 @@ export interface HybridSearchInput {
   readonly lexicalCandidates: readonly RetrievalCandidate[];
 }
 
+export interface HybridSearchResult {
+  readonly items: RetrievedItem[];
+  readonly mode: 'fused' | 'lexical-fallback';
+}
+
 export class HybridRetriever {
   constructor(
     private readonly embeddings: CompatibleEmbeddingSource,
@@ -33,35 +39,120 @@ export class HybridRetriever {
   ) {}
 
   search(input: HybridSearchInput): RetrievedItem[] {
+    return this.searchWithDiagnostics(input).items;
+  }
+
+  searchWithDiagnostics(input: HybridSearchInput): HybridSearchResult {
     const candidates = this.embeddings.getCompatibleByScope(
       input.conversationIds,
       input.embeddingVersion,
       input.artifactHash,
     );
     if (candidates.length === 0 || input.queryVector === undefined) {
-      return this.lexicalFallback.search({
-        query: input.query,
-        candidates: input.lexicalCandidates,
-        limit: input.limit,
-      });
+      return {
+        items: this.lexicalFallback.search({
+          query: input.query,
+          candidates: input.lexicalCandidates,
+          limit: input.limit,
+        }),
+        mode: 'lexical-fallback',
+      };
     }
 
-    const bestByMessage = new Map<string, RetrievedItem>();
+    const semantic: RetrievedItem[] = [];
     for (const candidate of candidates) {
       const score = cosineSimilarity(input.queryVector, candidate.vector);
       if (score < COSINE_SIMILARITY_THRESHOLD) {
         continue;
       }
-      const result: RetrievedItem = { ...candidate, score };
-      const current = bestByMessage.get(candidate.sourceMessageId);
-      if (current === undefined || compareRetrievedItems(result, current) < 0) {
-        bestByMessage.set(candidate.sourceMessageId, result);
-      }
+      semantic.push({ ...candidate, score });
     }
-    return [...bestByMessage.values()]
-      .sort(compareRetrievedItems)
-      .slice(0, Math.max(0, input.limit));
+    semantic.sort(compareRetrievedItems);
+
+    const lexical = this.lexicalFallback.search({
+      query: input.query,
+      candidates: input.lexicalCandidates,
+      limit: input.lexicalCandidates.length,
+    });
+    const fused = reciprocalRankFusion(lexical, semantic);
+    const exact = lexical.filter((item) => isExactMatchGuaranteed(input.query, item.text));
+    return {
+      items: retainExactMatches(exact, fused, Math.max(0, input.limit)),
+      mode: 'fused',
+    };
   }
+}
+
+function reciprocalRankFusion(
+  lexical: readonly RetrievedItem[],
+  semantic: readonly RetrievedItem[],
+): RetrievedItem[] {
+  const byMessage = new Map<string, RetrievedItem>();
+  const scores = new Map<string, number>();
+  addRanking(lexical, byMessage, scores);
+  addRanking(semantic, byMessage, scores);
+  return [...byMessage.entries()]
+    .map(([messageId, item]) => ({ ...item, score: scores.get(messageId) ?? 0 }))
+    .sort(compareRetrievedItems);
+}
+
+function addRanking(
+  ranking: readonly RetrievedItem[],
+  byMessage: Map<string, RetrievedItem>,
+  scores: Map<string, number>,
+): void {
+  ranking.forEach((item, index) => {
+    const current = byMessage.get(item.sourceMessageId);
+    if (current === undefined || compareRetrievedItems(item, current) < 0) {
+      byMessage.set(item.sourceMessageId, item);
+    }
+    scores.set(
+      item.sourceMessageId,
+      (scores.get(item.sourceMessageId) ?? 0) + 1 / (RRF_K + index + 1),
+    );
+  });
+}
+
+function retainExactMatches(
+  exact: readonly RetrievedItem[],
+  fused: readonly RetrievedItem[],
+  limit: number,
+): RetrievedItem[] {
+  if (limit === 0) return [];
+  const guaranteed = dedupeByMessage(exact).sort(compareRetrievedItems);
+  const guaranteedIds = new Set(guaranteed.map((item) => item.sourceMessageId));
+  return [
+    ...guaranteed,
+    ...fused.filter((item) => !guaranteedIds.has(item.sourceMessageId)),
+  ].slice(0, limit);
+}
+
+function dedupeByMessage(items: readonly RetrievedItem[]): RetrievedItem[] {
+  const best = new Map<string, RetrievedItem>();
+  for (const item of items) {
+    const current = best.get(item.sourceMessageId);
+    if (current === undefined || compareRetrievedItems(item, current) < 0) {
+      best.set(item.sourceMessageId, item);
+    }
+  }
+  return [...best.values()];
+}
+
+function isExactMatchGuaranteed(query: string, candidateText: string): boolean {
+  const text = candidateText.toLowerCase();
+  return exactMatchTokens(query).some((token) => text.includes(token.toLowerCase()));
+}
+
+function exactMatchTokens(query: string): string[] {
+  const numeric = query.match(
+    /(?:[$€£]\s?\d+(?:[.,]\d+)*|\b\d{1,4}(?:[-/.]\d{1,2}){1,2}\b|\b\d+(?:[.,]\d+)*\b)/g,
+  ) ?? [];
+  const identifiers = query.match(/\b(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)+\b/g)
+    ?? [];
+  const properNouns = query.match(/\b[A-Z][a-z]{2,}\b/g)?.filter(
+    (_token, index) => index > 0,
+  ) ?? [];
+  return [...new Set([...numeric, ...identifiers, ...properNouns])];
 }
 
 export function cosineSimilarity(left: Float32Array, right: Float32Array): number {

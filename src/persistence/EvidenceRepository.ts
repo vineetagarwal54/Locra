@@ -1,3 +1,4 @@
+import type { ImageReferenceCandidate } from '../inference/ImageReferenceResolver';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 import type { VisualEvidenceRow } from '../types/models';
 
@@ -110,7 +111,7 @@ export class EvidenceRepository {
              ORDER BY source.created_at DESC, link.ordinal DESC, link.image_asset_id ASC
              LIMIT 1
           )
-        ORDER BY evidence.created_at DESC, evidence.id ASC
+        ORDER BY evidence.created_at DESC, evidence.rowid DESC
         LIMIT 1`,
       [conversationId, conversationId],
     );
@@ -132,36 +133,105 @@ export class EvidenceRepository {
     }
     return this.driver.getFirstSync<VisualEvidenceRow>(
       `SELECT * FROM visual_evidence WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at DESC, id ASC LIMIT 1`,
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       params,
     );
   }
 
-  listRetrievalSourceUnits(conversationId: string): EvidenceRetrievalSourceUnit[] {
-    const rows = this.driver.getAllSync<VisualEvidenceRow>(
-      `SELECT * FROM visual_evidence WHERE conversation_id = ?
-        ORDER BY created_at DESC, id ASC LIMIT 100`,
+  listImageReferenceCandidates(conversationId: string): ImageReferenceCandidate[] {
+    const imageRows = this.driver.getAllSync<{
+      image_asset_id: string;
+      source_message_id: string;
+      local_path: string;
+      available: number;
+      created_at: number;
+    }>(
+      `SELECT asset.id AS image_asset_id, source.id AS source_message_id,
+              asset.local_path, asset.available, source.created_at
+         FROM image_asset asset
+         JOIN message_image link ON link.image_asset_id = asset.id
+         JOIN message source ON source.id = link.message_id
+        WHERE source.conversation_id = ?
+        ORDER BY source.created_at ASC, link.ordinal ASC, asset.id ASC`,
       [conversationId],
     );
-    return rows.map(toRetrievalSourceUnit);
+    const messages = this.driver.getAllSync<{ id: string; text: string; created_at: number }>(
+      `SELECT id, text, created_at FROM message
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC, id ASC`,
+      [conversationId],
+    );
+    const evidenceByAsset = new Map<string, VisualEvidenceRow[]>();
+    for (const row of this.latestEvidencePerImageVersion(conversationId)) {
+      const rows = evidenceByAsset.get(row.image_asset_id) ?? [];
+      rows.push(row);
+      evidenceByAsset.set(row.image_asset_id, rows);
+    }
+
+    return imageRows.map((image, index) => {
+      const nextImageCreatedAt = imageRows[index + 1]?.created_at ?? Number.POSITIVE_INFINITY;
+      const associatedText = messages
+        .filter(
+          (message) =>
+            message.created_at >= image.created_at &&
+            message.created_at < nextImageCreatedAt,
+        )
+        .map((message) => message.text);
+      const evidenceText = (evidenceByAsset.get(image.image_asset_id) ?? [])
+        .flatMap(evidenceSearchPieces);
+      return {
+        imageAssetId: image.image_asset_id,
+        sourceMessageId: image.source_message_id,
+        localPath: image.local_path,
+        available: image.available === 1,
+        createdAt: image.created_at,
+        searchText: [...associatedText, ...evidenceText].join('\n'),
+      };
+    });
+  }
+
+  listRetrievalSourceUnits(conversationId: string): EvidenceRetrievalSourceUnit[] {
+    return this.latestEvidencePerImageVersion(conversationId)
+      .slice(0, 100)
+      .map(toRetrievalSourceUnit);
+  }
+
+  private latestEvidencePerImageVersion(conversationId: string): VisualEvidenceRow[] {
+    const rows = this.driver.getAllSync<VisualEvidenceRow>(
+      `SELECT * FROM visual_evidence WHERE conversation_id = ?
+        ORDER BY created_at DESC, rowid DESC`,
+      [conversationId],
+    );
+    const seen = new Set<string>();
+    return rows.filter((row) => {
+      const key = `${row.image_asset_id}\u0000${row.evidence_version}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
   }
 }
 
-function toRetrievalSourceUnit(row: VisualEvidenceRow): EvidenceRetrievalSourceUnit {
-  const pieces = [
+function evidenceSearchPieces(row: VisualEvidenceRow): string[] {
+  return [
     row.subject_object,
     ...parseStringArray(row.visible_features_json),
     ...parseStringArray(row.visible_text_json),
     row.visible_condition,
     ...parseStringArray(row.uncertainty_json),
   ].filter((piece) => piece.trim() !== '');
+}
+
+function toRetrievalSourceUnit(row: VisualEvidenceRow): EvidenceRetrievalSourceUnit {
   return {
     id: row.id,
     conversationId: row.conversation_id,
     sourceMessageId: row.source_message_id,
     imageAssetId: row.image_asset_id,
     timestamp: row.created_at,
-    text: pieces.join('\n'),
+    text: evidenceSearchPieces(row).join('\n'),
     sourceRevision: row.source_revision,
     evidenceVersion: row.evidence_version,
   };

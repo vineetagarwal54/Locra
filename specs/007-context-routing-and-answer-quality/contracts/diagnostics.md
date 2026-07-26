@@ -10,18 +10,38 @@ export interface ContextSelectionDiagnostics {
   // mediaEvidenceCandidates, factCandidates, summaryCandidates, budget
   readonly classification: RequestClassification;             // NEW
   readonly retrievalMode: 'fused' | 'lexical-fallback' | 'none'; // NEW
-  readonly retrievalModeReason: string;                         // NEW, e.g. 'embeddings-stale', 'below-threshold', 'independent-question-skip'
+  readonly retrievalModeReason: string;                         // NEW, actual reason, e.g. 'semantic-inactive-no-candidate'
+  readonly retrievalQueried: boolean;                           // NEW — actual runtime call state
+  readonly retrievalCandidatesReturned: number;                // NEW — actual retriever output count
+  readonly retrievalItemsSelected: number;                     // NEW — actual selected retrieval count
+  readonly actualSources: {                                    // NEW — actual current implementation
+    readonly recentTurns: { readonly queried: boolean; readonly selected: number };
+    readonly imageEvidence: { readonly queried: boolean; readonly selected: number };
+    readonly retrieval: { readonly queried: boolean; readonly selected: number };
+    readonly durableFacts: { readonly queried: boolean; readonly selected: number };
+    readonly summary: { readonly queried: boolean; readonly selected: number };
+  };
+  readonly proposedRouting: {                                  // NEW — recorded Phase 3 prediction
+    readonly wouldSkipRetrieval: boolean;
+    readonly reason: string;
+  };
   readonly imageDecision: ImageEvidenceDecision | 'not-applicable'; // NEW
   readonly imageReferenceAmbiguous: boolean;                    // NEW, spec FR-012a
-  readonly crossChatActive: boolean;                            // NEW, always false before Phase 7
-  readonly groundingVerdict: 'supported' | 'unsupported' | null; // NEW, Phase 8 only; omit/null until shipped
+  readonly imageReferenceResolution: 'not-applicable' | 'new-image' | 'active-image' | 'explicit-ordinal' | 'unique-description' | 'ambiguous-active-fallback';
+  readonly crossChatActive: boolean;                            // NEW, actual per-turn scope use
+  readonly groundingVerdict: 'supported' | 'unsupported' | null; // NEW, diagnostics-only; null when not applicable
 }
 ```
 
 - **MUST** ship in Phase 1, before any routing *behavior* change lands, so classification and would-be source selection are observable against today's fixed-assembly behavior for comparison (spec Section 10 intro, Section 14 Phase 1).
-- **MUST** record `retrievalMode`/`imageDecision` even when the answer is `'none'`/`'not-applicable'` — diagnostics reflect what was *considered*, not only what was *selected* (spec FR-037).
+- **MUST** keep Phase 1 observation-only: `retrievalMode`, `retrievalModeReason`, `retrievalQueried`, and the returned/selected counts describe what the current runtime actually queried and selected. They MUST NOT claim `independent-question-skip` while retrieval still ran.
+- **MUST** retain `proposedRouting` as a distinct prediction field; actual runtime
+  query and selection behavior is always reported by the retrieval/source fields.
+- **MUST** record `imageDecision` even when the answer is `'not-applicable'`.
 - **MUST** record `imageReferenceAmbiguous: true` whenever an image reference was defaulted to the active image per FR-012a, so the ambiguous-reference default is always disclosed, never silent.
-- **MUST** leave `groundingVerdict` omittable/`null` until Phase 8 ships without diagnostics being considered incomplete (spec FR-040).
+- **MUST** set `groundingVerdict` only from the deterministic Phase 8 assessment;
+  use `null` when no selected image/retrieved evidence makes assessment applicable.
+  Older pre-Phase-8 records may omit it without being considered incomplete.
 
 ## DiagnosticsBundleBuilder / DiagnosticsExportService (extended)
 
@@ -30,5 +50,8 @@ export interface ContextSelectionDiagnostics {
 
 ## Invariants
 
-- Every turn processed by `ContextOrchestrator` after Phase 1 ships produces one `ContextSelectionDiagnostics` record with all NEW fields populated (except `groundingVerdict` pre-Phase-8) — no silent omission for "uninteresting" turns (e.g., independent questions still get a record showing zero sources considered).
+- Every turn processed by `ContextOrchestrator` produces one
+  `ContextSelectionDiagnostics` record with all fields populated. Historical
+  observation-only Phase 1 records may show sources queried/selected for an
+  independent question; `proposedRouting` remains distinct from those actuals.
 - Diagnostics are additive: no existing field is removed or repurposed; existing consumers of `ContextSelectionDiagnostics` (e.g., `ContextBuilder.ts`'s use of `formatMediaEvidence`/`formatMemoryFact`) continue to compile against the extended type.

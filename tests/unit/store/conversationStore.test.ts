@@ -19,6 +19,10 @@ jest.mock('../../../src/store/historyStore', () => ({
   },
 }));
 
+import {
+  ContextOrchestrator,
+  TokenContextBudgetPolicy,
+} from '../../../src/inference/ContextOrchestrator';
 import { storage } from '../../../src/storage/mmkv';
 import { createConversationStore } from '../../../src/store/conversationStore';
 import type { IHistoryStore, IInferenceQueue } from '../../../src/types/interfaces';
@@ -163,6 +167,77 @@ function makeStore() {
 }
 
 describe('conversationStore', () => {
+  it('passes an active query embedding to retrieval and degrades embedding errors', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const search = jest.fn(() => []);
+    const orchestrator = new ContextOrchestrator(new TokenContextBudgetPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+    });
+    const priorMessages = Array.from({ length: 7 }, (_, index) => [
+      {
+        id: `user-prior-${index}`,
+        role: 'user' as const,
+        text: `Question ${index}`,
+        attachments: [],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: index * 2,
+      },
+      {
+        id: `assistant-prior-${index}`,
+        role: 'assistant' as const,
+        text: `Answer ${index}`,
+        attachments: [],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: index * 2 + 1,
+      },
+    ]).flat();
+    history.save({
+      id: 'conversation-a',
+      createdAt: 0,
+      updatedAt: 20,
+      messages: priorMessages,
+      status: 'completed',
+      errorMessage: null,
+      metrics: null,
+      flagged: false,
+      flagNote: null,
+      contextMemory: null,
+      responseMode: 'Low',
+    });
+    const embed = jest.fn(async () => [new Float32Array([1, 0])]);
+    const ids = ['request', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      contextOrchestrator: orchestrator,
+      embeddingService: { embed },
+      isEmbeddingRuntimeActive: () => true,
+      now: () => 30,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+
+    await store.submit('conversation-a', {
+      question: 'What did we mention earlier?',
+      imagePath: null,
+    });
+
+    expect(embed).toHaveBeenCalledWith(['What did we mention earlier?']);
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({
+      queryVector: new Float32Array([1, 0]),
+    }));
+
+    queue.emit(makeInferenceState('completed', 'First answer.'));
+    embed.mockRejectedValueOnce(new Error('embedding unavailable'));
+    await expect(store.submit('conversation-a', {
+      question: 'What did we discuss previously?',
+      imagePath: null,
+    })).resolves.toBeDefined();
+  });
+
   it('round-trips drafts independently and startNewConversation only resets the new draft', () => {
     const { store } = makeStore();
 
@@ -305,9 +380,9 @@ describe('conversationStore', () => {
       importantFacts: [],
       olderSummary: null,
       budget: {
-        policyId: 'character-budget-v1',
-        maximumUnits: 7_000,
-        usedUnits: 130,
+        policyId: 'token-estimate-budget-v1',
+        maximumUnits: 2_334,
+        usedUnits: 35,
       },
     });
   });
@@ -621,9 +696,9 @@ describe('conversationStore', () => {
   });
 
   it.each([
-    ['Low', 192, 320, 4000],
-    ['Medium', 384, 640, 7000],
-    ['High', 768, 1024, 11000],
+    ['Low', 96, 320, 1334],
+    ['Medium', 128, 640, 2334],
+    ['High', 160, 1024, 2674],
   ] as const)('records %s mode configuration in diagnostics', async (
     mode, targetTokenCount, generationLimit, budgetMaximumUnits,
   ) => {
@@ -726,5 +801,83 @@ describe('conversationStore', () => {
       expect.objectContaining({ visibleText: ['EXACT-42'] }),
       { imageAssetId: 'asset-original', reinferred: true },
     );
+  });
+
+  it('re-runs the correct older original for a pixel-dependent ordinal reference', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    history.save({
+      id: 'conversation-a',
+      createdAt: 1,
+      updatedAt: 6,
+      messages: [
+        {
+          id: 'user-receipt',
+          role: 'user',
+          text: 'Describe this.',
+          attachments: [{
+            kind: 'image',
+            path: '/durable/receipt.jpg',
+            imageAssetId: 'asset-receipt',
+            available: true,
+          }],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1,
+        },
+        {
+          id: 'assistant-receipt',
+          role: 'assistant',
+          text: 'A receipt.',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 2,
+        },
+        {
+          id: 'user-chair',
+          role: 'user',
+          text: 'Describe this.',
+          attachments: [{
+            kind: 'image',
+            path: '/durable/chair.jpg',
+            imageAssetId: 'asset-chair',
+            available: true,
+          }],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 3,
+        },
+        {
+          id: 'assistant-chair',
+          role: 'assistant',
+          text: 'A chair.',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 4,
+        },
+      ],
+      status: 'completed',
+      errorMessage: null,
+      metrics: null,
+      flagged: false,
+      flagNote: null,
+      contextMemory: null,
+    });
+    const ids = ['request-follow-up', 'user-follow-up', 'assistant-follow-up'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 10,
+      createId: () => ids.shift() ?? 'fallback-id',
+    });
+
+    await store.submit('conversation-a', {
+      question: 'Read the exact total from the first image.',
+      imagePath: null,
+    });
+
+    expect(queue.submitted[0]?.imagePath).toBe('/durable/receipt.jpg');
   });
 });

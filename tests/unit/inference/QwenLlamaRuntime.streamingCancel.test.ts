@@ -34,6 +34,8 @@ function makeRuntime(completion: LlamaContextLike['completion']) {
     initMultimodal: jest.fn(async () => true),
     isMultimodalEnabled: jest.fn(async () => true),
     getMultimodalSupport: jest.fn(async () => ({ vision: true, audio: false })),
+    getFormattedChat: jest.fn(async () => ({ prompt: 'formatted prompt' })),
+    tokenize: jest.fn(async () => ({ tokens: [1, 2, 3], has_media: false })),
     completion,
     stopCompletion: jest.fn(async () => {}),
     releaseMultimodal: jest.fn(async () => {}),
@@ -221,6 +223,35 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     expect(runtime.getStatus()).toBe('loaded');
   });
 
+  it('stops a confirmed streaming loop natively and returns the cleaned partial answer', async () => {
+    const repeated = 'This repeated sentence is deliberately long enough for detection. ';
+    const completion = jest.fn(
+      async (
+        _params: QwenCompletionParams,
+        onToken?: (data: QwenNativeTokenData) => void,
+      ): Promise<QwenNativeCompletionResult> => {
+        for (let index = 0; index < 16; index += 1) {
+          onToken?.({ token: index < 13 ? repeated : '' });
+        }
+        return { content: repeated.repeat(13), tokens_predicted: 16 };
+      },
+    );
+    const { runtime, context } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'Medium',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(context.stopCompletion).toHaveBeenCalledTimes(1);
+    expect(result.finishReason).toBe('looping');
+    expect(result.text.length).toBeLessThan(repeated.repeat(13).length);
+    expect(runtime.getStatus()).toBe('loaded');
+  });
+
   it('strips accidental <think> control tags without hiding the content', async () => {
     const completion = jest.fn(
       async (): Promise<QwenNativeCompletionResult> => ({ content: '<think>hmm</think>Answer' })
@@ -252,13 +283,16 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
       signal: controller.signal,
       onToken: () => {},
     });
+    const rejection = expect(generatePromise).rejects.toBeInstanceOf(
+      QwenGenerationCancelledError,
+    );
     await Promise.resolve();
 
     controller.abort();
     expect(context.stopCompletion).toHaveBeenCalled();
     deferred.resolve({ content: 'partial' });
 
-    await expect(generatePromise).rejects.toBeInstanceOf(QwenGenerationCancelledError);
+    await rejection;
     expect(runtime.getStatus()).toBe('loaded');
   });
 

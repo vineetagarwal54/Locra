@@ -49,8 +49,14 @@ export interface ProductionDiagnosticTurnSummary {
     readonly classification: ContextSelectionDiagnostics['classification'] | null;
     readonly retrievalMode: ContextSelectionDiagnostics['retrievalMode'];
     readonly retrievalModeReason: string;
+    readonly retrievalQueried: boolean;
+    readonly retrievalCandidatesReturned: number;
+    readonly retrievalItemsSelected: number;
+    readonly actualSources: ContextSelectionDiagnostics['actualSources'] | null;
+    readonly proposedRouting: ContextSelectionDiagnostics['proposedRouting'] | null;
     readonly imageDecision: ContextSelectionDiagnostics['imageDecision'];
     readonly imageReferenceAmbiguous: boolean;
+    readonly imageReferenceResolution: ContextSelectionDiagnostics['imageReferenceResolution'];
     readonly crossChatActive: boolean;
     readonly groundingVerdict: ContextSelectionDiagnostics['groundingVerdict'];
   };

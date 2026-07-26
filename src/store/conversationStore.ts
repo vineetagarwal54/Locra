@@ -12,8 +12,8 @@ import {
   type CanonicalConversationContext,
 } from '../inference/ContextBuilder';
 import {
-  CharacterContextBudgetPolicy,
   ContextOrchestrator,
+  TokenContextBudgetPolicy,
   createCanonicalConversationSnapshot,
   mergeVisualEvidenceIntoMemory,
   type ContextSelectionDiagnostics,
@@ -22,8 +22,10 @@ import {
 import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
+  resolveGenerationTarget,
   samplingProfileForRequestKind,
 } from '../inference/GenerationTuning';
+import { assessGrounding } from '../inference/GroundingAssessment';
 import {
   applyImageSelectionToInferenceRequest,
   inferenceQueue,
@@ -38,6 +40,7 @@ import {
 } from '../inference/ResponseMode';
 import { durableImageStorage } from '../media/DurableImageStorage';
 import { ChunkingService } from '../retrieval/ChunkingService';
+import type { EmbeddingService } from '../retrieval/EmbeddingService';
 import { HybridRetriever } from '../retrieval/HybridRetriever';
 import { LexicalFallbackRetriever } from '../retrieval/LexicalFallbackRetriever';
 import type { RetrievalCandidate } from '../retrieval/types';
@@ -74,6 +77,13 @@ export interface ConversationStoreDependencies {
   inferenceQueue: IInferenceQueue;
   historyStore: IHistoryStore;
   contextOrchestrator?: ContextOrchestrator;
+  embeddingService?: Pick<EmbeddingService, 'embed'>;
+  isEmbeddingRuntimeActive?: () => boolean;
+  getCrossChatOptions?: (conversationId: string) => {
+    readonly enabled: boolean;
+    readonly currentConversationExcluded: boolean;
+    readonly eligibleConversationIds: readonly string[];
+  };
   now?: () => number;
   createId?: (prefix: string) => string;
   getDefaultResponseMode?: () => ResponseMode;
@@ -102,7 +112,9 @@ interface ActiveGeneration {
   originatingUserMessageId: string;
   assistantMessageId: string;
   contextDiagnostics?: ContextSelectionDiagnostics;
+  selectedContext?: CanonicalConversationContext;
   responseMode: ResponseMode;
+  generationTargetTokens?: number;
   requestKind: DiagnosticRequestKind;
   imageSupplied: boolean;
   reinferenceImageAssetId?: string;
@@ -223,16 +235,30 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointAt: 0,
       seedText: '',
     };
+    const queryVector = await this.resolveQueryVector(durableRequest.question);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
-      { responseMode: effectiveResponseMode, diagnosticsEnabled: true },
+      {
+        responseMode: effectiveResponseMode,
+        diagnosticsEnabled: true,
+        queryVector,
+        crossChat: this.dependencies.getCrossChatOptions(resolvedConversationId),
+      },
     );
     const inferenceRequest = this.applyImageSelection(
       activeGeneration,
       this.createInferenceRequest(activeGeneration, durableRequest, requestId),
       orchestration.imageSelection,
     );
+    activeGeneration.generationTargetTokens = orchestration.diagnostics === undefined
+      ? getResponseModeConfig(effectiveResponseMode).answerTargetTokens
+      : resolveGenerationTarget(
+          effectiveResponseMode,
+          orchestration.diagnostics.classification,
+        );
+    inferenceRequest.generationTargetTokens = activeGeneration.generationTargetTokens;
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
+    activeGeneration.selectedContext = orchestration.context;
     const conversationWithMemory: Conversation = {
       ...updatedConversation,
       contextMemory: orchestration.memory,
@@ -418,9 +444,20 @@ export class ConversationStore implements IConversationStore {
     };
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversationWithoutMemory, input.userMessageId),
-      { responseMode: activeGeneration.responseMode, diagnosticsEnabled: true },
+      {
+        responseMode: activeGeneration.responseMode,
+        diagnosticsEnabled: true,
+        crossChat: this.dependencies.getCrossChatOptions(input.conversationId),
+      },
     );
+    activeGeneration.generationTargetTokens = orchestration.diagnostics === undefined
+      ? getResponseModeConfig(activeGeneration.responseMode).answerTargetTokens
+      : resolveGenerationTarget(
+          activeGeneration.responseMode,
+          orchestration.diagnostics.classification,
+        );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
+    activeGeneration.selectedContext = orchestration.context;
     const updatedConversation: Conversation = {
       ...updatedConversationWithoutMemory,
       contextMemory: orchestration.memory,
@@ -651,6 +688,12 @@ export class ConversationStore implements IConversationStore {
     const objective = state.objectiveResult ?? null;
     const modeConfig = getResponseModeConfig(activeGeneration.responseMode);
     const context = activeGeneration.contextDiagnostics;
+    const groundingVerdict = activeGeneration.selectedContext === undefined
+      ? null
+      : assessGrounding(state.response, activeGeneration.selectedContext);
+    const effectiveContext = context === undefined
+      ? undefined
+      : { ...context, groundingVerdict };
     const finishReason = resolveMessageFinishReason(
       state,
       state.status === 'completed'
@@ -670,24 +713,30 @@ export class ConversationStore implements IConversationStore {
       looping: finishReason === 'looping' || objective?.looping === true,
       truncated: finishReason === 'length' || objective?.truncated === true,
       contextSelection: {
-        recentTurnsConsidered: context?.recentTurnsConsidered ?? 0,
-        recentTurnsSelected: context?.recentTurnsSelected.length ?? 0,
+        recentTurnsConsidered: effectiveContext?.recentTurnsConsidered ?? 0,
+        recentTurnsSelected: effectiveContext?.recentTurnsSelected.length ?? 0,
         mediaEvidenceSelected:
-          context?.mediaEvidenceCandidates.filter((candidate) => candidate.selected).length ?? 0,
-        factsSelected: context?.factCandidates.filter((candidate) => candidate.selected).length ?? 0,
+          effectiveContext?.mediaEvidenceCandidates.filter((candidate) => candidate.selected).length ?? 0,
+        factsSelected: effectiveContext?.factCandidates.filter((candidate) => candidate.selected).length ?? 0,
         summariesSelected:
-          context?.summaryCandidates.filter((candidate) => candidate.selected).length ?? 0,
-        budgetMaximumUnits: context?.budget.maximumUnits ?? modeConfig.contextBudgetUnits,
-        budgetUsedUnits: context?.budget.usedUnits ?? 0,
-        classification: context?.classification ?? null,
-        retrievalMode: context?.retrievalMode ?? 'none',
-        retrievalModeReason: context?.retrievalModeReason ?? 'diagnostics-unavailable',
-        imageDecision: context?.imageDecision ?? 'not-applicable',
-        imageReferenceAmbiguous: context?.imageReferenceAmbiguous ?? false,
-        crossChatActive: context?.crossChatActive ?? false,
-        groundingVerdict: context?.groundingVerdict ?? null,
+          effectiveContext?.summaryCandidates.filter((candidate) => candidate.selected).length ?? 0,
+        budgetMaximumUnits: effectiveContext?.budget.maximumUnits ?? modeConfig.contextBudgetUnits,
+        budgetUsedUnits: effectiveContext?.budget.usedUnits ?? 0,
+        classification: effectiveContext?.classification ?? null,
+        retrievalMode: effectiveContext?.retrievalMode ?? 'none',
+        retrievalModeReason: effectiveContext?.retrievalModeReason ?? 'diagnostics-unavailable',
+        retrievalQueried: effectiveContext?.retrievalQueried ?? false,
+        retrievalCandidatesReturned: effectiveContext?.retrievalCandidatesReturned ?? 0,
+        retrievalItemsSelected: effectiveContext?.retrievalItemsSelected ?? 0,
+        actualSources: effectiveContext?.actualSources ?? null,
+        proposedRouting: effectiveContext?.proposedRouting ?? null,
+        imageDecision: effectiveContext?.imageDecision ?? 'not-applicable',
+        imageReferenceAmbiguous: effectiveContext?.imageReferenceAmbiguous ?? false,
+        imageReferenceResolution: effectiveContext?.imageReferenceResolution ?? 'not-applicable',
+        crossChatActive: effectiveContext?.crossChatActive ?? false,
+        groundingVerdict,
       },
-      targetTokenCount: modeConfig.answerTargetTokens,
+      targetTokenCount: activeGeneration.generationTargetTokens ?? modeConfig.answerTargetTokens,
       generationLimit: modeConfig.generationLimit,
       samplingProfile:
         objective?.samplingProfile ?? samplingProfileForRequestKind(
@@ -708,7 +757,7 @@ export class ConversationStore implements IConversationStore {
       capturedAt: this.dependencies.now(),
       trace: development ? trace ?? null : null,
       objectiveResult: development ? objective : null,
-      contextDiagnostics: development ? activeGeneration.contextDiagnostics ?? null : null,
+      contextDiagnostics: development ? effectiveContext ?? null : null,
       summary,
     });
   }
@@ -751,7 +800,22 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId: activeGeneration.assistantMessageId,
       question: request.question,
       imagePath: request.imagePath,
+      generationTargetTokens: activeGeneration.generationTargetTokens,
     };
+  }
+
+  private async resolveQueryVector(text: string): Promise<Float32Array | undefined> {
+    if (
+      this.dependencies.embeddingService === undefined
+      || this.dependencies.isEmbeddingRuntimeActive?.() !== true
+    ) {
+      return undefined;
+    }
+    try {
+      return (await this.dependencies.embeddingService.embed([text]))[0];
+    } catch {
+      return undefined;
+    }
   }
 
   private applyImageSelection(
@@ -883,6 +947,13 @@ export function createConversationStore(
     now: Date.now,
     createId: createStableId,
     contextOrchestrator: new ContextOrchestrator(),
+    embeddingService: { embed: async () => [] },
+    isEmbeddingRuntimeActive: () => false,
+    getCrossChatOptions: () => ({
+      enabled: false,
+      currentConversationExcluded: false,
+      eligibleConversationIds: [],
+    }),
     getDefaultResponseMode: () => DEFAULT_RESPONSE_MODE,
     setPersistedResponseMode: () => undefined,
     persistEvidence: () => undefined,
@@ -897,7 +968,7 @@ export function createConversationStore(
 
 function createRuntimeContextOrchestrator(): ContextOrchestrator {
   const lexicalFallback = new LexicalFallbackRetriever();
-  return new ContextOrchestrator(new CharacterContextBudgetPolicy(), {
+  return new ContextOrchestrator(new TokenContextBudgetPolicy(), {
     retriever: new HybridRetriever(embeddingRepository, lexicalFallback),
     evidenceRepository,
     listLexicalCandidates: listLexicalCandidates,
@@ -939,6 +1010,25 @@ export const conversationStore: IConversationStore = createConversationStore({
   setPersistedResponseMode: (conversationId, mode) => {
     conversationRepository.setResponseMode(conversationId, toStoredMode(mode));
     useHistoryStore.getState().refresh();
+  },
+  getCrossChatOptions: (conversationId) => {
+    const enabled = useSettingsStore.getState().crossChatMemoryEnabled;
+    if (!enabled) {
+      return {
+        enabled: false,
+        currentConversationExcluded: false,
+        eligibleConversationIds: [],
+      };
+    }
+    const current = conversationRepository.getConversation(conversationId);
+    const currentConversationExcluded = current?.excluded_from_cross_chat === 1;
+    return {
+      enabled: true,
+      currentConversationExcluded,
+      eligibleConversationIds: currentConversationExcluded
+        ? []
+        : conversationRepository.listCrossChatEligibleConversationIds(),
+    };
   },
   persistEvidence: (conversationId, sourceMessageId, evidence, target) => {
     const asset = target === undefined

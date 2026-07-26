@@ -157,6 +157,7 @@ export class ConversationRepository {
       deleted_at: null,
       latest_message_preview: null,
       has_image: 0,
+      excluded_from_cross_chat: 0,
     };
     this.driver.runSync(
       `INSERT INTO conversation
@@ -197,6 +198,23 @@ export class ConversationRepository {
   /** Per-conversation mode (US6). Stored lowercase; does not re-sort the list. */
   setResponseMode(id: string, mode: StoredResponseMode): void {
     this.driver.runSync('UPDATE conversation SET response_mode = ? WHERE id = ?', [mode, id]);
+  }
+
+  setCrossChatExcluded(id: string, excluded: boolean): void {
+    this.driver.runSync(
+      'UPDATE conversation SET excluded_from_cross_chat = ? WHERE id = ?',
+      [excluded ? 1 : 0, id],
+    );
+  }
+
+  listCrossChatEligibleConversationIds(): string[] {
+    return this.driver
+      .getAllSync<{ id: string }>(
+        `SELECT id FROM conversation
+         WHERE deleted_at IS NULL AND excluded_from_cross_chat = 0
+         ORDER BY updated_at DESC, id DESC`,
+      )
+      .map((row) => row.id);
   }
 
   /**

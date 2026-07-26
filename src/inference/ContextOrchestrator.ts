@@ -17,10 +17,15 @@ import type {
 } from '../types/models';
 
 import { assessAnswerQuality } from './AnswerPostProcessor';
+import { getContextCapacityBuckets } from './ContextWindow';
 import {
   evaluateImageEvidenceAvailability,
   type ImageEvidenceAvailability,
 } from './ImageEvidencePolicy';
+import {
+  resolveDescriptiveImageReference,
+  type ImageReferenceCandidate,
+} from './ImageReferenceResolver';
 import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
 import {
@@ -36,6 +41,7 @@ const DEFAULT_MAX_MEDIA_EVIDENCE_ITEMS = 3;
 const DEFAULT_MAX_FACT_ITEMS = 6;
 const DEFAULT_MAX_SUMMARY_ENTRIES = 6;
 const TURN_ROLE_OVERHEAD_UNITS = 32;
+const TURN_ROLE_OVERHEAD_TOKENS = 12;
 const CANDIDATE_PREVIEW_MAX_CHARS = 240;
 // Explicit visual language only. Generic pronouns ("it", "that") were removed:
 // almost every follow-up contains one, so they pulled stale image evidence into
@@ -86,6 +92,26 @@ export interface RankedCandidateDiagnostic {
 
 export type RetrievalMode = 'fused' | 'lexical-fallback' | 'none';
 export type ImageEvidenceDecision = ImageEvidenceAvailability['kind'];
+export type ImageReferenceResolution =
+  | 'not-applicable'
+  | 'new-image'
+  | 'active-image'
+  | 'explicit-ordinal'
+  | 'unique-description'
+  | 'ambiguous-active-fallback';
+
+export interface ProposedRoutingDiagnostic {
+  readonly wouldSkipRetrieval: boolean;
+  readonly reason: 'phase-3-independent-question' | 'classification-requires-context';
+}
+
+export interface ActualSourceUsageDiagnostic {
+  readonly recentTurns: { readonly queried: boolean; readonly selected: number };
+  readonly imageEvidence: { readonly queried: boolean; readonly selected: number };
+  readonly retrieval: { readonly queried: boolean; readonly selected: number };
+  readonly durableFacts: { readonly queried: boolean; readonly selected: number };
+  readonly summary: { readonly queried: boolean; readonly selected: number };
+}
 
 export interface RecentTurnDiagnostic {
   readonly sourceUserMessageId: string;
@@ -104,8 +130,14 @@ export interface ContextSelectionDiagnostics {
   readonly classification: RequestClassification;
   readonly retrievalMode: RetrievalMode;
   readonly retrievalModeReason: string;
+  readonly retrievalQueried: boolean;
+  readonly retrievalCandidatesReturned: number;
+  readonly retrievalItemsSelected: number;
+  readonly actualSources: ActualSourceUsageDiagnostic;
+  readonly proposedRouting: ProposedRoutingDiagnostic;
   readonly imageDecision: ImageEvidenceDecision | 'not-applicable';
   readonly imageReferenceAmbiguous: boolean;
+  readonly imageReferenceResolution: ImageReferenceResolution;
   readonly crossChatActive: boolean;
   readonly groundingVerdict: 'supported' | 'unsupported' | null;
 }
@@ -141,6 +173,38 @@ export interface CharacterContextBudgetPolicyOptions {
   maxMediaEvidenceItems?: number;
   maxFactItems?: number;
   maxSummaryEntries?: number;
+}
+
+export type TokenContextBudgetPolicyOptions = CharacterContextBudgetPolicyOptions;
+
+export class TokenContextBudgetPolicy implements ContextBudgetPolicy {
+  readonly policyId = 'token-estimate-budget-v1';
+  readonly maximumUnits: number;
+  readonly recentExactTurnLimit: number;
+  readonly maxMediaEvidenceItems: number;
+  readonly maxFactItems: number;
+  readonly maxSummaryEntries: number;
+
+  constructor(options: TokenContextBudgetPolicyOptions = {}) {
+    this.maximumUnits = positiveInteger(options.maximumUnits, 2_334);
+    this.recentExactTurnLimit = nonNegativeInteger(
+      options.recentExactTurnLimit,
+      DEFAULT_RECENT_EXACT_TURN_LIMIT,
+    );
+    this.maxMediaEvidenceItems = nonNegativeInteger(
+      options.maxMediaEvidenceItems,
+      DEFAULT_MAX_MEDIA_EVIDENCE_ITEMS,
+    );
+    this.maxFactItems = nonNegativeInteger(options.maxFactItems, DEFAULT_MAX_FACT_ITEMS);
+    this.maxSummaryEntries = nonNegativeInteger(
+      options.maxSummaryEntries,
+      DEFAULT_MAX_SUMMARY_ENTRIES,
+    );
+  }
+
+  measure(content: string): number {
+    return Math.ceil(content.length / 3);
+  }
 }
 
 export class CharacterContextBudgetPolicy implements ContextBudgetPolicy {
@@ -192,13 +256,19 @@ export interface ContextOrchestrationOptions {
   readonly responseMode?: ResponseMode;
   readonly referencedImage?: Omit<EvidenceReference, 'conversationId'>;
   readonly queryVector?: Float32Array;
+  readonly crossChat?: {
+    readonly enabled: boolean;
+    readonly currentConversationExcluded: boolean;
+    readonly eligibleConversationIds: readonly string[];
+  };
 }
 
 export interface HybridContextSources {
-  readonly retriever?: Pick<HybridRetriever, 'search'>;
+  readonly retriever?: Pick<HybridRetriever, 'search'> & Partial<Pick<HybridRetriever, 'searchWithDiagnostics'>>;
   readonly evidenceRepository?: {
     getActiveImageEvidence(conversationId: string): VisualEvidenceRow | null;
     resolveReferencedImageEvidence(reference: EvidenceReference): VisualEvidenceRow | null;
+    listImageReferenceCandidates?(conversationId: string): ImageReferenceCandidate[];
   };
   readonly listLexicalCandidates?: (
     conversationIds: readonly string[],
@@ -213,7 +283,7 @@ export interface HybridContextSources {
 
 export class ContextOrchestrator {
   constructor(
-    private readonly budgetPolicy: ContextBudgetPolicy = new CharacterContextBudgetPolicy(),
+    private readonly budgetPolicy: ContextBudgetPolicy = new TokenContextBudgetPolicy(),
     private readonly sources: HybridContextSources = {},
   ) {}
 
@@ -223,18 +293,47 @@ export class ContextOrchestrator {
   ): ContextOrchestrationResult {
     const diagnosticsEnabled = options.diagnosticsEnabled ?? isDevelopmentInferenceTraceEnabled();
     const responseMode = options.responseMode ?? 'Medium';
-    const classification = classifyRequest(
+    const crossChat = options.crossChat ?? {
+      enabled: false,
+      currentConversationExcluded: false,
+      eligibleConversationIds: [],
+    };
+    const initialClassification = classifyRequest(
       snapshot,
       responseMode,
-      { enabled: false, conversationExcluded: false },
+      {
+        enabled: crossChat.enabled,
+        conversationExcluded: crossChat.currentConversationExcluded,
+      },
     );
+    const referenceResolution = this.resolveImageReference(
+      snapshot,
+      initialClassification,
+    );
+    const classification = referenceResolution.classification;
+    const hasImageContext = classification.isNewImageQuestion
+      || classification.isSameImageFollowUp
+      || classification.isOlderImageReference
+      || classification.isPixelDependent;
     const policy = options.responseMode === undefined
       ? this.budgetPolicy
-      : responseModeBudgetPolicy(this.budgetPolicy, options.responseMode);
+      : responseModeBudgetPolicy(
+          this.budgetPolicy,
+          options.responseMode,
+          snapshot.currentMessage.text,
+          hasImageContext,
+        );
     const conversationTurns = conversationTurnsFromMessages(snapshot.priorMessages);
+    const pureIndependent = classification.isIndependentTextQuestion
+      && !hasImageContext
+      && !classification.isLongContextRetrievalRequest;
+    const includeRecentTurns = !pureIndependent && (
+      classification.isTextFollowUp
+      || hasImageContext
+      || classification.isLongContextRetrievalRequest
+    );
     const selection = selectRecentTurns(
-      conversationTurns,
-      snapshot.currentMessage.text,
+      includeRecentTurns ? conversationTurns : [],
       policy,
       diagnosticsEnabled,
     );
@@ -246,10 +345,12 @@ export class ContextOrchestrator {
     let usedUnits = selection.usedUnits;
 
     const isActiveImageTurn = messageHasImage(snapshot.currentMessage);
-    const imageResolution = this.resolveImageSelection(snapshot, classification, options);
+    const imageResolution = hasImageContext
+      ? this.resolveImageSelection(snapshot, classification, options)
+      : null;
     const imageSelection = imageResolution === null ? null : imageResolution.selection;
     const persistedEvidence = imageResolution?.evidence ??
-      (imageResolution === null
+      (imageResolution === null && hasImageContext
         ? this.resolvePersistedEvidence(
             snapshot.conversationId,
             snapshot.currentMessage.text,
@@ -281,32 +382,36 @@ export class ContextOrchestrator {
               );
     usedUnits = mediaEvidence.usedUnits;
 
-    const retrieved = this.retrieve(
-      snapshot,
-      [snapshot.conversationId],
-      responseModeLimit(options.responseMode),
-      options,
+    const includeLongContext = !pureIndependent
+      && classification.isLongContextRetrievalRequest;
+    const retrievalConversationIds = resolveCrossChatConversationIds(
+      snapshot.conversationId,
+      classification.isCrossChatEligible,
+      crossChat.currentConversationExcluded,
+      crossChat.eligibleConversationIds,
     );
-    const sameChatRetrieved = selectRetrievedWithinBudget(
-      retrieved,
-      usedUnits,
-      policy,
-    );
-    usedUnits = sameChatRetrieved.usedUnits;
+    const crossChatActive = includeLongContext && retrievalConversationIds.length > 1;
+    const retrieval = includeLongContext
+      ? this.retrieve(
+          snapshot,
+          retrievalConversationIds,
+          responseModeLimit(options.responseMode),
+          options,
+        )
+      : skippedRetrieval(
+          pureIndependent ? 'independent-question-hard-skip' : 'classification-not-long-context',
+        );
+    const durableFacts = includeLongContext
+      ? this.sources.listDurableFacts?.(snapshot.conversationId) ?? memory.importantFacts
+      : [];
+    const persistedSummary = includeLongContext
+      ? this.sources.getNewestReadySummary?.(snapshot.conversationId)
+      : null;
 
-    const durableFacts = this.sources.listDurableFacts?.(snapshot.conversationId)
-      ?? memory.importantFacts;
-    const importantFacts = selectWithinBudget(
-      rankFacts(durableFacts, snapshot.currentMessage.text),
-      policy.maxFactItems,
-      usedUnits,
-      policy,
-      formatMemoryFact,
-      diagnosticsEnabled,
-    );
-    usedUnits = importantFacts.usedUnits;
-
-    const persistedSummary = this.sources.getNewestReadySummary?.(snapshot.conversationId);
+    // Allocate from most protected to least protected. This produces the
+    // required pressure behavior without a destructive second pass:
+    // retrieved items lose room first, then facts, then summary; recent turns
+    // and referenced image evidence were already protected above.
     const summaryEntries = persistedSummary === undefined
       ? {
           ...selectWithinBudget(
@@ -322,8 +427,25 @@ export class ContextOrchestrator {
       : selectSummaryWithinBudget(persistedSummary, usedUnits, policy);
     usedUnits = summaryEntries.usedUnits;
 
+    const importantFacts = selectWithinBudget(
+      rankFacts(durableFacts, snapshot.currentMessage.text),
+      policy.maxFactItems,
+      usedUnits,
+      policy,
+      formatMemoryFact,
+      diagnosticsEnabled,
+    );
+    usedUnits = importantFacts.usedUnits;
+
+    const sameChatRetrieved = selectRetrievedWithinBudget(
+      retrieval.items,
+      usedUnits,
+      policy,
+    );
+    usedUnits = sameChatRetrieved.usedUnits;
+
     const budget: ContextBudgetMetadata = {
-      policyId: this.budgetPolicy.policyId,
+      policyId: policy.policyId,
       maximumUnits: policy.maximumUnits,
       usedUnits,
     };
@@ -360,13 +482,92 @@ export class ContextOrchestrator {
         summaryCandidates: summaryEntries.candidates,
         budget,
         classification,
-        retrievalMode: observedRetrievalMode(classification, retrieved),
-        retrievalModeReason: observedRetrievalModeReason(classification, retrieved),
+        retrievalMode: retrieval.mode,
+        retrievalModeReason: retrieval.reason,
+        retrievalQueried: retrieval.queried,
+        retrievalCandidatesReturned: retrieval.items.length,
+        retrievalItemsSelected: sameChatRetrieved.items.length,
+        actualSources: {
+          recentTurns: { queried: includeRecentTurns, selected: selection.turns.length },
+          imageEvidence: {
+            queried: imageEvidenceRepositoryWasQueried(
+              classification,
+              imageResolution,
+              this.sources.evidenceRepository !== undefined,
+            ),
+            selected: mediaEvidence.items.length,
+          },
+          retrieval: {
+            queried: retrieval.queried,
+            selected: sameChatRetrieved.items.length,
+          },
+          durableFacts: {
+            queried: includeLongContext && this.sources.listDurableFacts !== undefined,
+            selected: importantFacts.items.length,
+          },
+          summary: {
+            queried: includeLongContext && this.sources.getNewestReadySummary !== undefined,
+            selected: summaryEntries.summary === undefined
+              ? summaryEntries.items.length
+              : summaryEntries.summary === null ? 0 : 1,
+          },
+        },
+        proposedRouting: proposedRoutingDiagnostic(classification),
         imageDecision: imageSelection?.decision ?? 'not-applicable',
         imageReferenceAmbiguous: classification.imageReferenceAmbiguous,
-        crossChatActive: false,
+        imageReferenceResolution: referenceResolution.resolution,
+        crossChatActive,
         groundingVerdict: null,
       },
+    };
+  }
+
+  private resolveImageReference(
+    snapshot: CanonicalConversationSnapshot,
+    classification: RequestClassification,
+  ): {
+    classification: RequestClassification;
+    resolution: ImageReferenceResolution;
+  } {
+    if (classification.isNewImageQuestion) {
+      return { classification, resolution: 'new-image' };
+    }
+    if (classification.isOlderImageReference) {
+      return { classification, resolution: 'explicit-ordinal' };
+    }
+    if (!classification.imageReferenceAmbiguous) {
+      return {
+        classification,
+        resolution: classification.isSameImageFollowUp
+          ? 'active-image'
+          : 'not-applicable',
+      };
+    }
+
+    const candidates = mergeImageReferenceCandidates(
+      snapshotImageReferenceCandidates(snapshot),
+      this.sources.evidenceRepository?.listImageReferenceCandidates?.(
+        snapshot.conversationId,
+      ) ?? [],
+    );
+    const match = resolveDescriptiveImageReference(
+      snapshot.currentMessage.text,
+      candidates,
+    );
+    if (match.kind !== 'unique') {
+      return { classification, resolution: 'ambiguous-active-fallback' };
+    }
+    const activeImageId = candidates[candidates.length - 1]?.imageAssetId ?? null;
+    const isOlder = match.candidate.imageAssetId !== activeImageId;
+    return {
+      classification: {
+        ...classification,
+        isSameImageFollowUp: !isOlder,
+        isOlderImageReference: isOlder,
+        referencedImageId: isOlder ? match.candidate.imageAssetId : null,
+        imageReferenceAmbiguous: false,
+      },
+      resolution: 'unique-description',
     };
   }
 
@@ -448,13 +649,18 @@ export class ContextOrchestrator {
     conversationIds: readonly string[],
     limit: number,
     options: ContextOrchestrationOptions,
-  ): RetrievedItem[] {
+  ): RetrievalExecution {
     const retriever = this.sources.retriever;
     const manifest = this.sources.retrievalManifest;
     if (retriever === undefined || limit <= 0) {
-      return [];
+      return {
+        items: [],
+        mode: 'none',
+        reason: retriever === undefined ? 'retriever-unavailable' : 'retrieval-limit-zero',
+        queried: false,
+      };
     }
-    return retriever.search({
+    const input = {
       query: snapshot.currentMessage.text,
       queryVector: options.queryVector,
       conversationIds,
@@ -462,8 +668,42 @@ export class ContextOrchestrator {
       artifactHash: manifest?.artifactHash ?? '',
       limit,
       lexicalCandidates: this.sources.listLexicalCandidates?.(conversationIds) ?? [],
-    });
+    };
+    const detailed = retriever.searchWithDiagnostics?.(input);
+    const items = detailed?.items ?? retriever.search(input);
+    const mode = detailed?.mode
+      ?? (options.queryVector === undefined ? 'lexical-fallback' : 'fused');
+    return {
+      items,
+      mode,
+      reason: mode === 'lexical-fallback'
+        ? items.length > 0
+          ? 'semantic-inactive-candidates-returned'
+          : 'semantic-inactive-no-candidate'
+        : items.length > 0
+          ? 'hybrid-candidates-returned'
+          : 'hybrid-no-candidate',
+      queried: true,
+    };
   }
+}
+
+export function resolveCrossChatConversationIds(
+  currentConversationId: string,
+  enabled: boolean,
+  currentConversationExcluded: boolean,
+  eligibleConversationIds: readonly string[],
+): string[] {
+  if (!enabled || currentConversationExcluded) {
+    return [currentConversationId];
+  }
+  return [
+    currentConversationId,
+    ...eligibleConversationIds.filter((id, index) =>
+      id !== currentConversationId
+      && eligibleConversationIds.indexOf(id) === index,
+    ),
+  ];
 }
 
 export type { RequestClassification } from './RequestClassifier';
@@ -473,6 +713,37 @@ interface ResolvedImageTarget {
   readonly sourceMessageId: string;
   readonly path: string;
   readonly available: boolean;
+}
+
+interface RetrievalExecution {
+  readonly items: RetrievedItem[];
+  readonly mode: RetrievalMode;
+  readonly reason: string;
+  readonly queried: boolean;
+}
+
+function skippedRetrieval(reason: string): RetrievalExecution {
+  return { items: [], mode: 'none', reason, queried: false };
+}
+
+function policyOverhead(policy: ContextBudgetPolicy): number {
+  return policy instanceof TokenContextBudgetPolicy
+    ? TURN_ROLE_OVERHEAD_TOKENS
+    : TURN_ROLE_OVERHEAD_UNITS;
+}
+
+function imageEvidenceRepositoryWasQueried(
+  classification: RequestClassification,
+  imageResolution: unknown,
+  repositoryAvailable: boolean,
+): boolean {
+  if (!repositoryAvailable) {
+    return false;
+  }
+  if (imageResolution === null) {
+    return false;
+  }
+  return !classification.isNewImageQuestion;
 }
 
 function resolveImageTarget(
@@ -528,24 +799,80 @@ function findMemoryEvidence(
   ) ?? null;
 }
 
-function observedRetrievalMode(
-  classification: RequestClassification,
-  retrieved: readonly RetrievedItem[],
-): RetrievalMode {
-  if (classification.isIndependentTextQuestion && !classification.isLongContextRetrievalRequest) {
-    return 'none';
-  }
-  return retrieved.length > 0 ? 'lexical-fallback' : 'none';
+function snapshotImageReferenceCandidates(
+  snapshot: CanonicalConversationSnapshot,
+): ImageReferenceCandidate[] {
+  const imageMessageIndexes = snapshot.priorMessages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => messageHasImage(message));
+  return imageMessageIndexes.flatMap(({ message, index }, imageIndex) => {
+    const attachment = message.attachments.find((candidate) => candidate.kind === 'image');
+    if (attachment === undefined) {
+      return [];
+    }
+    const nextImageMessageIndex =
+      imageMessageIndexes[imageIndex + 1]?.index ?? snapshot.priorMessages.length;
+    const associatedText = snapshot.priorMessages
+      .slice(index, nextImageMessageIndex)
+      .map((associatedMessage) => associatedMessage.text);
+    const memoryText = (snapshot.contextMemory?.mediaEvidence ?? [])
+      .filter(
+        (evidence) =>
+          evidence.sourceMessageId === message.id ||
+          evidence.sourcePath === attachment.imageAssetId ||
+          evidence.sourcePath === attachment.path,
+      )
+      .map(formatMediaEvidence);
+    return [{
+      imageAssetId: attachment.imageAssetId ?? attachment.path,
+      sourceMessageId: message.id,
+      localPath: attachment.path,
+      available: attachment.available !== false,
+      createdAt: message.createdAt,
+      searchText: [...associatedText, ...memoryText].join('\n'),
+    }];
+  });
 }
 
-function observedRetrievalModeReason(
-  classification: RequestClassification,
-  retrieved: readonly RetrievedItem[],
-): string {
-  if (classification.isIndependentTextQuestion && !classification.isLongContextRetrievalRequest) {
-    return 'independent-question-skip';
+function mergeImageReferenceCandidates(
+  snapshotCandidates: readonly ImageReferenceCandidate[],
+  repositoryCandidates: readonly ImageReferenceCandidate[],
+): ImageReferenceCandidate[] {
+  const merged = new Map<string, ImageReferenceCandidate>();
+  for (const candidate of [...snapshotCandidates, ...repositoryCandidates]) {
+    const existing = merged.get(candidate.imageAssetId);
+    merged.set(
+      candidate.imageAssetId,
+      existing === undefined
+        ? candidate
+        : {
+            ...candidate,
+            searchText: `${existing.searchText}\n${candidate.searchText}`,
+            available: existing.available && candidate.available,
+            createdAt: Math.min(existing.createdAt, candidate.createdAt),
+          },
+    );
   }
-  return retrieved.length > 0 ? 'semantic-inactive' : 'no-candidate';
+  return [...merged.values()].sort(
+    (left, right) =>
+      left.createdAt - right.createdAt ||
+      left.imageAssetId.localeCompare(right.imageAssetId),
+  );
+}
+
+function proposedRoutingDiagnostic(
+  classification: RequestClassification,
+): ProposedRoutingDiagnostic {
+  const wouldSkipRetrieval =
+    classification.isIndependentTextQuestion &&
+    !classification.isNewImageQuestion &&
+    !classification.isLongContextRetrievalRequest;
+  return {
+    wouldSkipRetrieval,
+    reason: wouldSkipRetrieval
+      ? 'phase-3-independent-question'
+      : 'classification-requires-context',
+  };
 }
 
 export function createCanonicalConversationSnapshot(
@@ -629,7 +956,6 @@ export function formatSummaryEntry(entry: ContextSummaryEntry): string {
 
 function selectRecentTurns(
   turns: ReadonlyArray<ConversationTurn>,
-  currentRequest: string,
   policy: ContextBudgetPolicy,
   collectDiagnostics: boolean,
 ): {
@@ -640,7 +966,7 @@ function selectRecentTurns(
 } {
   const selected: CanonicalContextTurn[] = [];
   const selectedDiagnostics: RecentTurnDiagnostic[] = [];
-  let usedUnits = Math.min(policy.measure(currentRequest), policy.maximumUnits);
+  let usedUnits = 0;
   const candidates = policy.recentExactTurnLimit === 0
     ? []
     : turns.slice(-policy.recentExactTurnLimit);
@@ -650,7 +976,7 @@ function selectRecentTurns(
     const cost =
       policy.measure(turn.question) +
       policy.measure(turn.answer ?? '') +
-      TURN_ROLE_OVERHEAD_UNITS;
+      policyOverhead(policy);
     if (usedUnits + cost > policy.maximumUnits) {
       continue;
     }
@@ -672,15 +998,30 @@ function selectRecentTurns(
 function responseModeBudgetPolicy(
   base: ContextBudgetPolicy,
   mode: ResponseMode,
+  currentRequest: string,
+  hasImage: boolean,
 ): ContextBudgetPolicy {
   const config = getResponseModeConfig(mode);
-  return new CharacterContextBudgetPolicy({
-    maximumUnits: config.contextBudgetUnits,
-    recentExactTurnLimit: config.recentExactTurns,
+  const buckets = getContextCapacityBuckets(
+    mode,
+    currentRequest,
+    hasImage,
+    config.contextBudgetUnits,
+  );
+  const options = {
+    maximumUnits: base instanceof TokenContextBudgetPolicy
+      ? buckets.selectedContext
+      : Math.min(base.maximumUnits, buckets.selectedContext),
+    recentExactTurnLimit: base instanceof TokenContextBudgetPolicy
+      ? config.recentExactTurns
+      : Math.min(base.recentExactTurnLimit, config.recentExactTurns),
     maxMediaEvidenceItems: base.maxMediaEvidenceItems,
     maxFactItems: base.maxFactItems,
     maxSummaryEntries: base.maxSummaryEntries,
-  });
+  };
+  return base instanceof TokenContextBudgetPolicy
+    ? new TokenContextBudgetPolicy(options)
+    : new CharacterContextBudgetPolicy(options);
 }
 
 function responseModeLimit(mode: ResponseMode | undefined): number {
@@ -699,23 +1040,7 @@ function selectProtectedEvidence(
   candidates: RankedCandidateDiagnostic[];
 } {
   const item = visualEvidenceRowToContext(row);
-  const cost = policy.measure(formatMediaEvidence(item)) + TURN_ROLE_OVERHEAD_UNITS;
-  if (initialUsedUnits + cost > policy.maximumUnits) {
-    return {
-      items: [],
-      usedUnits: initialUsedUnits,
-      candidates: collectDiagnostics
-        ? [{
-            stableId: item.id,
-            relevance: 1,
-            createdAt: item.createdAt,
-            selected: false,
-            exclusionReason: 'budget',
-            preview: truncatePreview(formatMediaEvidence(item)),
-          }]
-        : [],
-    };
-  }
+  const cost = policy.measure(formatMediaEvidence(item)) + policyOverhead(policy);
   const usedUnits = initialUsedUnits + cost;
   return {
     items: [item],
@@ -739,23 +1064,7 @@ function selectProtectedContextEvidence(
   usedUnits: number;
   candidates: RankedCandidateDiagnostic[];
 } {
-  const cost = policy.measure(formatMediaEvidence(item)) + TURN_ROLE_OVERHEAD_UNITS;
-  if (initialUsedUnits + cost > policy.maximumUnits) {
-    return {
-      items: [],
-      usedUnits: initialUsedUnits,
-      candidates: collectDiagnostics
-        ? [{
-            stableId: item.id,
-            relevance: 1,
-            createdAt: item.createdAt,
-            selected: false,
-            exclusionReason: 'budget',
-            preview: truncatePreview(formatMediaEvidence(item)),
-          }]
-        : [],
-    };
-  }
+  const cost = policy.measure(formatMediaEvidence(item)) + policyOverhead(policy);
   return {
     items: [item],
     usedUnits: initialUsedUnits + cost,
@@ -813,7 +1122,7 @@ function selectRetrievedWithinBudget(
     const text =
       `[${sourceKind}: conversation ${item.sourceConversationId}, message ${item.sourceMessageId}] ` +
       item.text;
-    const cost = policy.measure(text) + TURN_ROLE_OVERHEAD_UNITS;
+    const cost = policy.measure(text) + policyOverhead(policy);
     if (usedUnits + cost > policy.maximumUnits) {
       continue;
     }
@@ -842,7 +1151,7 @@ function selectSummaryWithinBudget(
   if (summary === null) {
     return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
   }
-  const cost = policy.measure(summary) + TURN_ROLE_OVERHEAD_UNITS;
+  const cost = policy.measure(summary) + policyOverhead(policy);
   if (initialUsedUnits + cost > policy.maximumUnits) {
     return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
   }
@@ -1110,7 +1419,7 @@ function selectWithinBudget<T>(
       break;
     }
     const rankedItem = ranked[index];
-    const cost = policy.measure(format(rankedItem.item)) + TURN_ROLE_OVERHEAD_UNITS;
+    const cost = policy.measure(format(rankedItem.item)) + policyOverhead(policy);
     if (usedUnits + cost > policy.maximumUnits) {
       if (collectDiagnostics) {
         candidates.push(toCandidateDiagnostic(rankedItem, format, false, 'budget'));

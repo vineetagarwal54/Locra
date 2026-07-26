@@ -12,6 +12,7 @@ function conversationRow(): ConversationRow {
     deleted_at: null,
     latest_message_preview: 'done',
     has_image: 1,
+    excluded_from_cross_chat: 0,
   };
 }
 

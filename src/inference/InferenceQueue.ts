@@ -74,6 +74,16 @@ export interface InferenceSubmitOptions {
   responseMode?: ResponseMode;
 }
 
+function generationConfigForRequest(
+  responseMode: ResponseMode,
+  request: InferenceRequest,
+): ReturnType<typeof getResponseModeConfig> {
+  const config = getResponseModeConfig(responseMode);
+  return request.generationTargetTokens === undefined
+    ? config
+    : { ...config, answerTargetTokens: request.generationTargetTokens };
+}
+
 export interface InferenceQueueDeps {
   preprocess: (imagePath: string) => Promise<PreprocessedImage>;
   cleanupProcessedImage?: (processedPath: string, sourcePath: string) => Promise<void>;
@@ -424,7 +434,12 @@ export class InferenceQueue implements IInferenceQueue {
       lifecycleGates.contextAssembly.resolve(undefined);
       return this.generateVisibleAnswer(
         buildDirectImageModelMessages(
-          { conversationContext, currentQuestion: request.question, responseMode },
+          {
+            conversationContext,
+            currentQuestion: request.question,
+            responseMode,
+            responseModeConfig: generationConfigForRequest(responseMode, request),
+          },
           processed.path,
         ),
         responseMode,
@@ -517,7 +532,7 @@ export class InferenceQueue implements IInferenceQueue {
         conversationContext,
         currentQuestion: answerPrompt,
         responseMode,
-        responseModeConfig: getResponseModeConfig(responseMode),
+        responseModeConfig: generationConfigForRequest(responseMode, request),
       }),
       responseMode,
       active,
@@ -553,7 +568,7 @@ export class InferenceQueue implements IInferenceQueue {
         conversationContext,
         currentQuestion: request.question,
         responseMode,
-        responseModeConfig: getResponseModeConfig(responseMode),
+        responseModeConfig: generationConfigForRequest(responseMode, request),
       }),
       responseMode,
       active,

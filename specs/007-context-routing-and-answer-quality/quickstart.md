@@ -21,7 +21,7 @@ This guide runs the manual validation criteria from `spec.md` Section 11 against
 2. Ask a non-pixel-dependent follow-up about the same image → confirm no re-inference occurs (`imageDecision: 'use-evidence'`).
 3. Ask a pixel-dependent follow-up (e.g., "how many are there", "what does it say", "what's the price") → confirm a new inference runs through the Qwen vision path (visible as a fresh evidence timestamp / new inference trace tied to a new inference call) and `imageDecision: 'use-original'`.
 4. Attach a second image, then reference the first one explicitly and unambiguously (e.g., "the first image") → confirm the correct (first) image's evidence/original is used, never the second.
-5. Attach a third image, then ask about "the image" with no disambiguating detail → confirm diagnostics show `imageReferenceAmbiguous: true` and the router resolves against the current (third) active image rather than guessing among the first two.
+5. With two images attached, ask about "the image" with no disambiguating detail; repeat after adding a third image. In both cases confirm diagnostics show `imageReferenceAmbiguous: true`, record `imageReferenceResolution: 'ambiguous-active-fallback'`, and resolve against the active image rather than guessing.
 6. Delete/remove the referenced image's file (or use a fixture with a missing asset) and repeat a pixel-dependent question about it → confirm the response reports the original as unavailable; repeat with a non-pixel-dependent question → confirm stored evidence still answers if sufficient.
 
 ## Phase 3 — Minimal-context request routing

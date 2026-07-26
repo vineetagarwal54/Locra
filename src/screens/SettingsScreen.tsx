@@ -6,6 +6,7 @@ import DeviceInfo from 'react-native-device-info';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { LocraSheet } from '../components/LocraSheet';
+import { CrossChatSettingRow } from '../components/settings/CrossChatSettingRow';
 import { useConfirmSheet } from '../components/useConfirmSheet';
 import { designTokens, haptics } from '../constants/theme';
 import { deleteAllDiagnosticsExports } from '../diagnostics/DiagnosticsExportRuntime';
@@ -43,6 +44,10 @@ const maintenance = new SettingsMaintenanceService({
 export function SettingsScreen({ navigation, route }: Props) {
   const responseMode = useSettingsStore((state) => state.responseMode);
   const setResponseMode = useSettingsStore((state) => state.setResponseMode);
+  const crossChatMemoryEnabled = useSettingsStore((state) => state.crossChatMemoryEnabled);
+  const setCrossChatMemoryEnabled = useSettingsStore(
+    (state) => state.setCrossChatMemoryEnabled,
+  );
   const modelPhase = useModelStore((state) => state.setupPhase);
   const modelIntegrityVerified = useModelStore((state) => state.integrityVerified);
   const historyRevision = useHistoryStore((state) => state.conversations);
@@ -175,6 +180,16 @@ export function SettingsScreen({ navigation, route }: Props) {
                 detail={conversation.title ?? 'Untitled conversation'}
                 onPress={openRename}
               />
+              <CrossChatSettingRow
+                label="Exclude from cross-chat memory"
+                detail="This conversation will neither contribute to nor receive context from other conversations."
+                value={conversation.excludedFromCrossChat === true}
+                onValueChange={(excluded) => {
+                  if (conversationId !== undefined) {
+                    useHistoryStore.getState().setCrossChatExcluded(conversationId, excluded);
+                  }
+                }}
+              />
             </View>
           </>
         ) : null}
@@ -196,6 +211,16 @@ export function SettingsScreen({ navigation, route }: Props) {
               </Pressable>
             );
           })}
+        </View>
+
+        <SectionLabel>CONVERSATION MEMORY</SectionLabel>
+        <View style={styles.card}>
+          <CrossChatSettingRow
+            label="Use relevant context across chats"
+            detail="Off by default. When enabled, Locra may use relevant content from other non-excluded conversations on this device."
+            value={crossChatMemoryEnabled}
+            onValueChange={setCrossChatMemoryEnabled}
+          />
         </View>
 
         <SectionLabel>STORAGE & PRIVACY</SectionLabel>

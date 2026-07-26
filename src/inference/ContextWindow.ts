@@ -5,9 +5,47 @@ import {
   type ResponseMode,
 } from './ResponseMode';
 
-const CONTEXT_SAFETY_TOKENS = 128;
-const MESSAGE_OVERHEAD_TOKENS = 6;
-const IMAGE_RESERVE_TOKENS = 768;
+export const CONTEXT_SAFETY_TOKENS = 128;
+export const MESSAGE_OVERHEAD_TOKENS = 6;
+export const IMAGE_RESERVE_TOKENS = 768;
+export const SYSTEM_INSTRUCTION_RESERVE_TOKENS = 256;
+
+export interface ContextCapacityBuckets {
+  readonly systemInstructions: number;
+  readonly currentInput: number;
+  readonly imageInput: number;
+  readonly selectedContext: number;
+  readonly generatedOutput: number;
+  readonly safety: number;
+}
+
+export function getContextCapacityBuckets(
+  responseMode: ResponseMode,
+  currentInput: string,
+  hasImage: boolean,
+  requestedSelectedContext: number,
+): ContextCapacityBuckets {
+  const currentInputTokens = MESSAGE_OVERHEAD_TOKENS + Math.ceil(currentInput.length / 3);
+  const imageInputTokens = hasImage ? IMAGE_RESERVE_TOKENS : 0;
+  const generatedOutput = getResponseGenerationLimit(responseMode);
+  const availableSelectedContext = Math.max(
+    0,
+    QWEN_CONTEXT_TOKEN_LIMIT
+      - CONTEXT_SAFETY_TOKENS
+      - SYSTEM_INSTRUCTION_RESERVE_TOKENS
+      - currentInputTokens
+      - imageInputTokens
+      - generatedOutput,
+  );
+  return {
+    systemInstructions: SYSTEM_INSTRUCTION_RESERVE_TOKENS,
+    currentInput: currentInputTokens,
+    imageInput: imageInputTokens,
+    selectedContext: Math.min(requestedSelectedContext, availableSelectedContext),
+    generatedOutput,
+    safety: CONTEXT_SAFETY_TOKENS,
+  };
+}
 
 /**
  * Inserted where an oversized input was shortened so the user (and the model)
@@ -21,6 +59,34 @@ export interface BoundedInput {
   readonly messages: ModelRequestMessage[];
   /** Set when the current question was shortened to fit the context window. */
   readonly inputShortenedWarning: string | null;
+}
+
+export function reconcileMessagesToNativeTokenCount(
+  messages: ReadonlyArray<ModelRequestMessage>,
+  responseMode: ResponseMode,
+  nativeTokenCount: number,
+): ModelRequestMessage[] {
+  const maximumInputTokens = QWEN_CONTEXT_TOKEN_LIMIT
+    - getResponseGenerationLimit(responseMode)
+    - CONTEXT_SAFETY_TOKENS;
+  if (nativeTokenCount <= maximumInputTokens || messages.length < 3) {
+    return messages.map(cloneMessage);
+  }
+
+  const selected = messages.map(cloneMessage);
+  let tokensToRemove = nativeTokenCount - maximumInputTokens;
+  while (selected.length > 2 && tokensToRemove > 0) {
+    const firstHistory = selected[1];
+    const secondHistory = selected[2];
+    if (firstHistory === undefined) break;
+    const removeCount = firstHistory.role === 'user' && secondHistory?.role === 'assistant' ? 2 : 1;
+    const removed = selected.splice(1, removeCount);
+    tokensToRemove -= removed.reduce(
+      (total, message) => total + estimateMessageTokens(message),
+      0,
+    );
+  }
+  return selected;
 }
 
 export function estimateMessageTokens(message: ModelRequestMessage): number {

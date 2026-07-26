@@ -8,10 +8,46 @@ import {
   PIPELINE_VARIANT_IDS,
   QWEN_EXTRACTION_SAMPLING_PROFILE,
   QWEN_VISIBLE_SAMPLING_PROFILE,
+  resolveGenerationTarget,
 } from '../../../src/inference/GenerationTuning';
+import type { RequestClassification } from '../../../src/inference/RequestClassifier';
 import { LOCRA_SYSTEM_PROMPT } from '../../../src/inference/SystemPrompt';
 
+function classification(overrides: Partial<RequestClassification>): RequestClassification {
+  return {
+    isIndependentTextQuestion: false,
+    isTextFollowUp: false,
+    isNewImageQuestion: false,
+    isSameImageFollowUp: false,
+    isOlderImageReference: false,
+    isPixelDependent: false,
+    isLongContextRetrievalRequest: false,
+    isCrossChatEligible: false,
+    referencedImageId: null,
+    imageReferenceAmbiguous: false,
+    ...overrides,
+  };
+}
+
 describe('generation tuning', () => {
+  it('reduces only independent and short-follow-up soft targets', () => {
+    expect(resolveGenerationTarget(
+      'High',
+      classification({ isIndependentTextQuestion: true }),
+    )).toBe(160);
+    expect(resolveGenerationTarget(
+      'High',
+      classification({ isTextFollowUp: true }),
+    )).toBe(256);
+    expect(resolveGenerationTarget(
+      'High',
+      classification({ isTextFollowUp: true, isLongContextRetrievalRequest: true }),
+    )).toBe(768);
+    expect(resolveGenerationTarget(
+      'Medium',
+      classification({ isTextFollowUp: true, isSameImageFollowUp: true }),
+    )).toBe(384);
+  });
   it('pins visible and structured sampling separately', () => {
     expect(QWEN_VISIBLE_SAMPLING_PROFILE).toEqual({
       id: 'qwen3-vl-visible-official-v1', temperature: 0.7, topP: 0.8, topK: 20,

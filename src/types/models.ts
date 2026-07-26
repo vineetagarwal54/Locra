@@ -81,6 +81,7 @@ export interface Conversation {
   responseMode?: import('../inference/ResponseMode').ResponseMode;
   latestMessagePreview?: string | null;
   hasImage?: boolean;
+  excludedFromCrossChat?: boolean;
 }
 
 export interface CanonicalContextTurn {
@@ -223,6 +224,7 @@ export interface InferenceRequest {
   assistantMessageId?: string;
   imagePath: string | null;
   question: string;
+  generationTargetTokens?: number;
 }
 
 export interface InferenceState {
@@ -284,6 +286,7 @@ export interface ConversationRow {
   deleted_at: number | null;
   latest_message_preview: string | null;
   has_image: number;
+  excluded_from_cross_chat: number;
 }
 
 /** Kind of a benchmarked turn: image turns include preparation time, text turns don't. */

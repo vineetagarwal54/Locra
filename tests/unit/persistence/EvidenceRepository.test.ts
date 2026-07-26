@@ -137,7 +137,8 @@ describe('EvidenceRepository.resolveReferencedImageEvidence', () => {
       now: () => 500,
       createId: jest.fn()
         .mockReturnValueOnce('evidence-original')
-        .mockReturnValueOnce('evidence-reinferred'),
+        .mockReturnValueOnce('evidence-reinferred')
+        .mockReturnValueOnce('evidence-reinferred-newest'),
     });
     messages.appendUserMessage({
       id: 'user-image',
@@ -148,6 +149,11 @@ describe('EvidenceRepository.resolveReferencedImageEvidence', () => {
       id: 'user-follow-up',
       conversationId: 'conversation-a',
       text: 'Read the exact text.',
+    });
+    messages.appendUserMessage({
+      id: 'user-follow-up-2',
+      conversationId: 'conversation-a',
+      text: 'Read the exact text again.',
     });
     const asset = images.createOrReuseAsset({
       id: 'asset-1',
@@ -170,6 +176,13 @@ describe('EvidenceRepository.resolveReferencedImageEvidence', () => {
       evidence: { ...hiddenEvidence, visibleText: ['EXACT-42'] },
       sourceRevision: 'revision-1',
     });
+    repository.saveReinferredEvidence({
+      conversationId: 'conversation-a',
+      sourceMessageId: 'user-follow-up-2',
+      imageAssetId: asset.id,
+      evidence: { ...hiddenEvidence, visibleText: ['NEWEST-84'] },
+      sourceRevision: 'revision-1',
+    });
 
     expect(repository.getEvidenceForMessage('user-follow-up')).toEqual([
       expect.objectContaining({
@@ -178,6 +191,12 @@ describe('EvidenceRepository.resolveReferencedImageEvidence', () => {
         visible_text_json: '["EXACT-42"]',
       }),
     ]);
-    expect(repository.listRetrievalSourceUnits('conversation-a')).toHaveLength(2);
+    expect(repository.listRetrievalSourceUnits('conversation-a')).toEqual([
+      expect.objectContaining({
+        id: 'evidence-reinferred-newest',
+        imageAssetId: 'asset-1',
+        text: expect.stringContaining('NEWEST-84'),
+      }),
+    ]);
   });
 });

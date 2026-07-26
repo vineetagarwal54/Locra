@@ -25,6 +25,8 @@ function makeContext(overrides: Partial<LlamaContextLike> = {}) {
     initMultimodal: jest.fn(async () => true),
     isMultimodalEnabled: jest.fn(async () => true),
     getMultimodalSupport: jest.fn(async () => ({ vision: true, audio: false })),
+    getFormattedChat: jest.fn(async () => ({ prompt: 'formatted prompt' })),
+    tokenize: jest.fn(async () => ({ tokens: [1, 2, 3], has_media: false })),
     completion,
     stopCompletion: jest.fn(async () => {}),
     releaseMultimodal: jest.fn(async () => {}),
@@ -148,5 +150,20 @@ describe('QwenLlamaRuntime lifecycle', () => {
       'Second question',
     ]);
     expect(runtime.getStatus()).toBe('loaded');
+  });
+
+  it('performs exactly one native tokenization check before completion', async () => {
+    const { runtime, context } = makeRuntime();
+    await runtime.loadModel(load);
+
+    await runtime.generate(generateRequest([{ role: 'user', content: 'Count this prompt.' }]));
+
+    expect(context.getFormattedChat).toHaveBeenCalledTimes(1);
+    expect(context.tokenize).toHaveBeenCalledTimes(1);
+    expect(context.completion).toHaveBeenCalledTimes(1);
+    const tokenizeMock = context.tokenize as jest.Mock;
+    const completionMock = context.completion as jest.Mock;
+    expect(tokenizeMock.mock.invocationCallOrder[0])
+      .toBeLessThan(completionMock.mock.invocationCallOrder[0] as number);
   });
 });

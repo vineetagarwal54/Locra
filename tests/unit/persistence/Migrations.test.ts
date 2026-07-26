@@ -25,9 +25,35 @@ describe('production SQLite migrations', () => {
         v1.up(database.driver);
         database.driver.execSync('PRAGMA user_version = 1');
       });
-      expect(runMigrations(database.driver).applied).toEqual([2, 3]);
-      expect(readSchemaVersion(database.driver)).toBe(3);
+      expect(runMigrations(database.driver).applied).toEqual([2, 3, 4]);
+      expect(readSchemaVersion(database.driver)).toBe(4);
     } finally { database.close(); }
+  });
+
+  it('adds cross-chat exclusion transactionally with existing rows defaulting to included', () => {
+    const database = createTestDatabase({ initialize: false });
+    try {
+      MIGRATIONS.slice(0, 3).forEach((migration) => {
+        database.driver.withTransactionSync(() => {
+          migration.up(database.driver);
+          database.driver.execSync(`PRAGMA user_version = ${migration.version}`);
+        });
+      });
+      database.driver.runSync(
+        `INSERT INTO conversation
+          (id, title, normalized_title, response_mode, created_at, updated_at, deleted_at)
+         VALUES (?, NULL, NULL, 'medium', 1, 1, NULL)`,
+        ['existing'],
+      );
+
+      expect(runMigrations(database.driver).applied).toEqual([4]);
+      expect(database.driver.getFirstSync<{ excluded_from_cross_chat: number }>(
+        'SELECT excluded_from_cross_chat FROM conversation WHERE id = ?',
+        ['existing'],
+      )?.excluded_from_cross_chat).toBe(0);
+    } finally {
+      database.close();
+    }
   });
 
   it('rolls back a failed migration and does not advance its version', () => {

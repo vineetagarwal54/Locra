@@ -1,3 +1,6 @@
+import type { RequestClassification } from './RequestClassifier';
+import { getResponseModeConfig, type ResponseMode } from './ResponseMode';
+
 export const GENERATION_CONFIG_IDS = [
   'qwen3-vl-2b-instruct-v1',
 ] as const;
@@ -21,6 +24,29 @@ export interface SamplingProfile {
   readonly temperature: number;
   readonly topP: number;
   readonly topK: number;
+}
+
+export function resolveGenerationTarget(
+  mode: ResponseMode,
+  classification: RequestClassification,
+): number {
+  const configuredTarget = getResponseModeConfig(mode).answerTargetTokens;
+  if (classification.isLongContextRetrievalRequest) {
+    return configuredTarget;
+  }
+  if (classification.isIndependentTextQuestion) {
+    return Math.min(configuredTarget, mode === 'High' ? 160 : mode === 'Medium' ? 128 : 96);
+  }
+  if (
+    classification.isTextFollowUp
+    && !classification.isPixelDependent
+    && !classification.isNewImageQuestion
+    && !classification.isSameImageFollowUp
+    && !classification.isOlderImageReference
+  ) {
+    return Math.min(configuredTarget, mode === 'High' ? 256 : mode === 'Medium' ? 192 : 128);
+  }
+  return configuredTarget;
 }
 
 /** Qwen's published visible VL sampling values, using llama.rn 0.12.5 names at the native boundary. */

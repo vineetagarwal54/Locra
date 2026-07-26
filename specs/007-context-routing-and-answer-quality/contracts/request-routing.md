@@ -27,6 +27,7 @@ export function classifyRequest(
 
 - **MUST** be synchronous, deterministic, and free of network/model calls (spec FR-002).
 - **MUST** default an ambiguous short reply (no explicit reference word, no independent clause) to `isTextFollowUp = true`, never `isIndependentTextQuestion = true` (spec edge case, conservative default).
+- **MUST NOT** treat length alone as dependency. Standalone imperatives and fragments such as `Define entropy`, `Java vs Kotlin?`, and `Convert 5 miles` are independent unless they contain a real conversational reference. Elliptical references such as `And then?`, `Why is that?`, and `The second one?` remain follow-ups.
 - **MUST** allow multiple flags to be true simultaneously (e.g. `isOlderImageReference && isPixelDependent`); flags are independent booleans, not one exclusive enum, except `isIndependentTextQuestion`/`isTextFollowUp` which are mutually exclusive with each other.
 
 ## ContextOrchestrator (extended)

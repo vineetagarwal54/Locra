@@ -146,4 +146,15 @@ describe('ConversationRepository', () => {
     repo.updateConversation('c1', { touch: true });
     expect(repo.getConversation('c1')?.updated_at).toBeGreaterThan(before.updated_at);
   });
+
+  it('persists cross-chat exclusion and lists only eligible conversations', () => {
+    const repo = new ConversationRepository(db.driver, { now: () => 1 });
+    repo.createConversation({ id: 'included' });
+    repo.createConversation({ id: 'excluded' });
+
+    repo.setCrossChatExcluded('excluded', true);
+
+    expect(repo.getConversation('excluded')?.excluded_from_cross_chat).toBe(1);
+    expect(repo.listCrossChatEligibleConversationIds()).toEqual(['included']);
+  });
 });
