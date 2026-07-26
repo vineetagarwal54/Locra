@@ -181,8 +181,32 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
       : sanitizeSensitive(trace.finalResponse),
     refusalRecoveryTriggered: trace?.stages.some((stage) => stage.refusalRetry === true) ?? false,
     objectiveResult: turn.objectiveResult,
-    contextDiagnostics: turn.contextDiagnostics,
+    contextDiagnostics: sanitizeContextDiagnostics(turn.contextDiagnostics),
     summary: turn.summary ?? null,
+  };
+}
+
+function sanitizeContextDiagnostics(
+  diagnostics: ContextSelectionDiagnostics | null,
+): ContextSelectionDiagnostics | null {
+  if (diagnostics === null) {
+    return null;
+  }
+  return {
+    ...diagnostics,
+    retrievalModeReason: sanitizeSensitive(diagnostics.retrievalModeReason),
+    mediaEvidenceCandidates: diagnostics.mediaEvidenceCandidates.map(sanitizeCandidate),
+    factCandidates: diagnostics.factCandidates.map(sanitizeCandidate),
+    summaryCandidates: diagnostics.summaryCandidates.map(sanitizeCandidate),
+  };
+}
+
+function sanitizeCandidate(
+  candidate: ContextSelectionDiagnostics['mediaEvidenceCandidates'][number],
+): ContextSelectionDiagnostics['mediaEvidenceCandidates'][number] {
+  return {
+    ...candidate,
+    preview: sanitizeSensitive(candidate.preview),
   };
 }
 

@@ -650,4 +650,81 @@ describe('conversationStore', () => {
     }));
     expect(persisted.summary.contextSelection.budgetMaximumUnits).toBe(budgetMaximumUnits);
   });
+
+  it('re-runs the active original image for a pixel-dependent text follow-up', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const persistEvidence = jest.fn();
+    history.save({
+      id: 'conversation-a',
+      createdAt: 1,
+      updatedAt: 4,
+      messages: [
+        {
+          id: 'user-image',
+          role: 'user',
+          text: 'What is this?',
+          attachments: [{
+            kind: 'image',
+            path: '/durable/original.jpg',
+            imageAssetId: 'asset-original',
+            available: true,
+          }],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1,
+        },
+        {
+          id: 'assistant-image',
+          role: 'assistant',
+          text: 'A product label.',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 2,
+        },
+      ],
+      status: 'completed',
+      errorMessage: null,
+      metrics: null,
+      flagged: false,
+      flagNote: null,
+      contextMemory: null,
+    });
+    const ids = ['request-follow-up', 'user-follow-up', 'assistant-follow-up'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 10,
+      createId: () => ids.shift() ?? 'fallback-id',
+      persistEvidence,
+    });
+
+    await store.submit('conversation-a', {
+      question: 'Read the exact serial number from the image.',
+      imagePath: null,
+    });
+
+    expect(queue.submitted[0]?.imagePath).toBe('/durable/original.jpg');
+    queue.emit({
+      ...makeInferenceState('completed', 'The serial number is EXACT-42.'),
+      hiddenEvidence: {
+        version: 'hidden-evidence-v1',
+        imagePath: '/durable/original.jpg',
+        sourceQuestion: 'Read the exact serial number from the image.',
+        subjectObject: 'product label',
+        visibleFeatures: [],
+        visibleText: ['EXACT-42'],
+        visibleCondition: 'readable',
+        uncertainty: [],
+        createdAt: '2026-07-26T00:00:00.000Z',
+      },
+    });
+    expect(persistEvidence).toHaveBeenCalledWith(
+      'conversation-a',
+      'user-follow-up',
+      expect.objectContaining({ visibleText: ['EXACT-42'] }),
+      { imageAssetId: 'asset-original', reinferred: true },
+    );
+  });
 });

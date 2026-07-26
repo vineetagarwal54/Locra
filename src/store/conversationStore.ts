@@ -17,13 +17,17 @@ import {
   createCanonicalConversationSnapshot,
   mergeVisualEvidenceIntoMemory,
   type ContextSelectionDiagnostics,
+  type ImageSelectionResult,
 } from '../inference/ContextOrchestrator';
 import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   samplingProfileForRequestKind,
 } from '../inference/GenerationTuning';
-import { inferenceQueue } from '../inference/InferenceService';
+import {
+  applyImageSelectionToInferenceRequest,
+  inferenceQueue,
+} from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 import {
@@ -74,7 +78,12 @@ export interface ConversationStoreDependencies {
   createId?: (prefix: string) => string;
   getDefaultResponseMode?: () => ResponseMode;
   setPersistedResponseMode?: (conversationId: string, mode: ResponseMode) => void;
-  persistEvidence?: (conversationId: string, sourceMessageId: string, evidence: HiddenVisualEvidence) => void;
+  persistEvidence?: (
+    conversationId: string,
+    sourceMessageId: string,
+    evidence: HiddenVisualEvidence,
+    target?: { readonly imageAssetId: string; readonly reinferred: true },
+  ) => void;
   persistRetrievalUnits?: (conversationId: string, messageIds: readonly string[]) => void;
   scheduleCompaction?: (conversationId: string) => void;
   /** Records the timing of a completed attempt for the user-facing Benchmarks screen. */
@@ -96,6 +105,7 @@ interface ActiveGeneration {
   responseMode: ResponseMode;
   requestKind: DiagnosticRequestKind;
   imageSupplied: boolean;
+  reinferenceImageAssetId?: string;
   lastObservedText: string;
   lastCheckpointText: string;
   lastCheckpointAt: number;
@@ -213,10 +223,14 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointAt: 0,
       seedText: '',
     };
-    const inferenceRequest = this.createInferenceRequest(activeGeneration, durableRequest, requestId);
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
       createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
       { responseMode: effectiveResponseMode, diagnosticsEnabled: true },
+    );
+    const inferenceRequest = this.applyImageSelection(
+      activeGeneration,
+      this.createInferenceRequest(activeGeneration, durableRequest, requestId),
+      orchestration.imageSelection,
     );
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     const conversationWithMemory: Conversation = {
@@ -426,10 +440,14 @@ export class ConversationStore implements IConversationStore {
 
     this.startQueueSubmission(
       activeGeneration,
-      this.createInferenceRequest(
+      this.applyImageSelection(
         activeGeneration,
-        { question: input.question, imagePath: input.imagePath },
-        requestId,
+        this.createInferenceRequest(
+          activeGeneration,
+          { question: input.question, imagePath: input.imagePath },
+          requestId,
+        ),
+        orchestration.imageSelection,
       ),
       orchestration.context,
     );
@@ -570,11 +588,20 @@ export class ConversationStore implements IConversationStore {
         ),
       });
       if (state.status === 'completed' && state.hiddenEvidence != null) {
-        this.dependencies.persistEvidence(
-          activeGeneration.conversationId,
-          activeGeneration.originatingUserMessageId,
-          state.hiddenEvidence,
-        );
+        if (activeGeneration.reinferenceImageAssetId === undefined) {
+          this.dependencies.persistEvidence(
+            activeGeneration.conversationId,
+            activeGeneration.originatingUserMessageId,
+            state.hiddenEvidence,
+          );
+        } else {
+          this.dependencies.persistEvidence(
+            activeGeneration.conversationId,
+            activeGeneration.originatingUserMessageId,
+            state.hiddenEvidence,
+            { imageAssetId: activeGeneration.reinferenceImageAssetId, reinferred: true },
+          );
+        }
       }
       if (state.status === 'completed') {
         this.dependencies.persistRetrievalUnits(activeGeneration.conversationId, [
@@ -652,6 +679,13 @@ export class ConversationStore implements IConversationStore {
           context?.summaryCandidates.filter((candidate) => candidate.selected).length ?? 0,
         budgetMaximumUnits: context?.budget.maximumUnits ?? modeConfig.contextBudgetUnits,
         budgetUsedUnits: context?.budget.usedUnits ?? 0,
+        classification: context?.classification ?? null,
+        retrievalMode: context?.retrievalMode ?? 'none',
+        retrievalModeReason: context?.retrievalModeReason ?? 'diagnostics-unavailable',
+        imageDecision: context?.imageDecision ?? 'not-applicable',
+        imageReferenceAmbiguous: context?.imageReferenceAmbiguous ?? false,
+        crossChatActive: context?.crossChatActive ?? false,
+        groundingVerdict: context?.groundingVerdict ?? null,
       },
       targetTokenCount: modeConfig.answerTargetTokens,
       generationLimit: modeConfig.generationLimit,
@@ -718,6 +752,26 @@ export class ConversationStore implements IConversationStore {
       question: request.question,
       imagePath: request.imagePath,
     };
+  }
+
+  private applyImageSelection(
+    activeGeneration: ActiveGeneration,
+    request: InferenceRequest,
+    selection: ImageSelectionResult | null,
+  ): InferenceRequest {
+    const selectedRequest = applyImageSelectionToInferenceRequest(request, selection);
+    if (selectedRequest.imagePath !== null) {
+      activeGeneration.requestKind = 'image';
+      activeGeneration.imageSupplied = true;
+    }
+    if (
+      selection?.decision === 'use-original' &&
+      selection.imageAssetId !== null &&
+      selection.sourceMessageId !== activeGeneration.originatingUserMessageId
+    ) {
+      activeGeneration.reinferenceImageAssetId = selection.imageAssetId;
+    }
+    return selectedRequest;
   }
 
   private startQueueSubmission(
@@ -886,18 +940,25 @@ export const conversationStore: IConversationStore = createConversationStore({
     conversationRepository.setResponseMode(conversationId, toStoredMode(mode));
     useHistoryStore.getState().refresh();
   },
-  persistEvidence: (conversationId, sourceMessageId, evidence) => {
-    const asset = imageRepository.getAssetsForMessage(sourceMessageId)[0];
+  persistEvidence: (conversationId, sourceMessageId, evidence, target) => {
+    const asset = target === undefined
+      ? imageRepository.getAssetsForMessage(sourceMessageId)[0]
+      : imageRepository.getAsset(target.imageAssetId) ?? undefined;
     if (asset === undefined) {
       return;
     }
-    evidenceRepository.saveEvidence({
+    const input = {
       conversationId,
       sourceMessageId,
       imageAssetId: asset.id,
       evidence,
       sourceRevision: `${evidence.version}:${asset.content_hash ?? asset.local_path}`,
-    });
+    };
+    if (target?.reinferred === true) {
+      evidenceRepository.saveReinferredEvidence(input);
+    } else {
+      evidenceRepository.saveEvidence(input);
+    }
   },
   persistRetrievalUnits: (_conversationId, messageIds) => {
     const chunker = new ChunkingService('chunk-v1');

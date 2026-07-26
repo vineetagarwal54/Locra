@@ -23,6 +23,8 @@ export interface Attachment {
   kind: AttachmentKind;
   path: string;
   available?: boolean;
+  /** Stable SQL image-asset identity when the attachment has been persisted. */
+  imageAssetId?: string;
 }
 
 export interface PerformanceMetrics {

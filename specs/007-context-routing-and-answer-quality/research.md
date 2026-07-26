@@ -4,14 +4,20 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 
 ## 1. Token-budget measurement mechanism
 
-**Decision**: Measure the router's context-selection budget with a calibrated character-to-token estimate — the same `Math.ceil(length / 3)`-style ratio already used by `ContextWindow.estimateMessageTokens` — rather than calling `llama.rn`'s native `tokenize()` for every candidate source during router selection. Use the real native `tokenize()` call (confirmed available at `node_modules/llama.rn/src/index.ts:874`, `context.tokenize(text): Promise<{ tokens: number[] }>`) offline, during Phase 4 implementation and in a one-time calibration test, to verify/tune the exact ratio against representative Locra transcripts for Qwen's actual tokenizer — not as a per-request runtime call.
+**Investigation**: `llama.rn` 0.12.5 (the currently linked version) exposes a real native tokenizer call on its context object: `context.tokenize(text, { media_paths? }): Promise<NativeTokenizeResult>` (`node_modules/llama.rn/src/index.ts:874`), plus `detokenize()`. This is the same context object already used for `embedding()` and `stopCompletion()`. No new dependency is required to use it — it is already linked and already exercised elsewhere in the codebase's design (embedding).
 
-**Rationale**: A native `tokenize()` call is async, requires an active/loadable native context, and — unlike a native `embedding()` call already resource-locked for a distinct purpose — would add a round-trip into native code for every candidate the router considers on every request. That conflicts with keeping routing/budgeting a fast, synchronous, dependency-free JS computation and risks contention with the single-flight `DeviceResourcePolicy` if the context isn't already resident. `ContextWindow` already made this exact tradeoff for the final hard trim and it has shipped successfully; reusing its ratio keeps the two budgeting layers (router selection, final trim) consistent by construction rather than by coincidence, which directly resolves the Section 1 "two measurements aren't calibrated against each other" gap.
+**Decision (two-tier, per spec FR-026b — prefer runtime-backed counting when safely available, else a calibrated estimator)**:
+1. **Iterative candidate selection/ranking** (the router evaluating many recent turns, facts, summary entries, and retrieved candidates while assembling context): use a conservative, deterministic, Qwen-calibrated character-to-token estimator with safety headroom — starting from the same `Math.ceil(length / 3)`-style ratio already used by `ContextWindow.estimateMessageTokens`, then recalibrated (see below). This is **not** "safely available" runtime counting: calling native `tokenize()` once per candidate, for every candidate, on every request, would add an async native round-trip to a loop that today is fast, synchronous, in-process JS, and would risk contention with the single-flight `DeviceResourcePolicy` if the native context isn't already resident for this request.
+2. **Final assembled-prompt verification**: once the router has selected its final source set for a request that is about to run inference anyway (i.e., the native context is being acquired for that same request's completion, not a separate resource lease taken solely for counting), call the real `tokenize()` on the fully assembled prompt as a safety-headroom check before generation starts. This is "safely available" runtime counting — one call, reusing a context acquisition the request needed regardless — and gives an exact reconciliation with `ContextWindow`'s hard trim (FR-027) instead of two independently-calibrated estimates that could drift apart.
+3. **Offline calibration**: use the real `tokenize()` call, run once during Phase 4 implementation (and revisited only through recorded evaluation) against a representative set of Locra transcripts, to tune the exact character-to-token ratio and per-mode token budgets used by tier 1's estimator — not as a per-request runtime call.
+
+**Rationale**: This directly satisfies FR-026b's ordering — real counting where it can be obtained essentially for free (tier 2), a calibrated deterministic estimate where a live native call would harm latency or single-flight safety (tier 1) — while resolving the Section 1 "two measurements aren't calibrated against each other" gap: tier 2's exact check is the reconciliation point between the router's own budget and `ContextWindow`'s hard trim, rather than hoping two separately-calibrated estimates happen to agree.
 
 **Alternatives considered**:
-- *Call `tokenize()` live per candidate*: most accurate, but adds native round-trips to the hot routing path and couples routing latency to native context availability; rejected for the reasons above.
-- *Keep raw character counts*: simplest, but is exactly the problem being fixed (spec Problem/Goals §1) — character budgets don't track the real 4096-token Qwen context window, especially as content mixes short/long words, code, and non-Latin text.
-- *Adopt a third-party JS tokenizer library (e.g., a BPE tokenizer package)*: would need to exactly match Qwen's tokenizer to be worth the dependency; adds a new native/JS dependency for marginal accuracy gain over a calibrated ratio, and isn't justified without a demonstrated accuracy gap in calibration testing.
+- *Call `tokenize()` live per candidate during selection*: most accurate, but adds native round-trips to the hot routing path and couples routing latency to native context availability; rejected for tier 1, adopted only for the single final-prompt check (tier 2).
+- *Keep raw character counts everywhere*: simplest, but is exactly the problem being fixed (spec Problem/Goals §1) — character budgets don't track the real 4096-token Qwen context window, especially as content mixes short/long words, code, and non-Latin text.
+- *Adopt a third-party JS tokenizer library (e.g., a BPE tokenizer package)*: would need to exactly match Qwen's tokenizer to be worth the dependency; adds a new native/JS dependency for marginal accuracy gain over the two-tier approach above, and the spec explicitly prohibits adding a dependency solely for token counting (FR-026b).
+- *Never use real `tokenize()` at all*: rejected — it's already linked and safely usable for the one-call-per-request final check, so declining to use it there would leave FR-026b's "prefer runtime-backed counting when safely available" unmet without a real reason.
 
 ## 2. Conversational-reference classification heuristic
 
@@ -25,13 +31,14 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 
 ## 3. Lexical/semantic fusion algorithm
 
-**Decision**: Reciprocal Rank Fusion (RRF): for a candidate appearing at rank `r` in a ranked list, its contribution is `1 / (k + r)` with `k = 60`; a candidate's fused score is the sum of its contributions across the lexical-overlap ranking and the cosine-similarity ranking (zero contribution from a list it doesn't appear in). Dedup by source message, keep the higher-scoring instance, then apply the existing deterministic tie-break (`createdAt` desc, then `stableId` asc) from `compareRetrievedItems`.
+**Decision**: Reciprocal Rank Fusion (RRF): for a candidate appearing at rank `r` in a ranked list, its contribution is `1 / (k + r)` with `k = 60`; a candidate's fused score is the sum of its contributions across the lexical-overlap ranking and the cosine-similarity ranking (zero contribution from a list it doesn't appear in). Dedup by source message, keep the higher-scoring instance, then apply the existing deterministic tie-break (`createdAt` desc, then `stableId` asc) from `compareRetrievedItems`. **Exact-match guarantee (spec FR-019a)**: before applying the per-request retrieval limit, any candidate containing a verbatim (case-insensitive) match for a number, price-like token (e.g. `$12.99`), date-like token, or the query's likely proper-noun/identifier token is retained in the final list regardless of its RRF rank — RRF alone cannot guarantee this, since a candidate with a perfect lexical hit but no semantic signal can still be outranked by several moderate semantic matches.
 
-**Rationale**: RRF needs no score normalization between lexical-overlap counts (small integers) and cosine similarity (0–1 floats) — a common failure mode when naively summing heterogeneous scores. It's a standard, well-understood hybrid-search technique, entirely deterministic, and requires no new dependency (a handful of arithmetic lines). It directly satisfies spec FR-014's requirement that fusion never let semantic scoring silently discard an exact lexical match: an item ranked #1 lexically always receives a meaningful RRF contribution even if it has no or a weak semantic match.
+**Rationale**: RRF needs no score normalization between lexical-overlap counts (small integers) and cosine similarity (0–1 floats) — a common failure mode when naively summing heterogeneous scores. It's a standard, well-understood hybrid-search technique, entirely deterministic, and requires no new dependency (a handful of arithmetic lines). The exact-match guarantee is a small, deterministic, additional rule layered on top of RRF, not a replacement for it — it exists specifically because spec item 9 (names/numbers/prices/dates/identifiers) is a correctness requirement RRF's rank-based scoring does not, by itself, satisfy in every case.
 
 **Alternatives considered**:
 - *Weighted linear combination of normalized scores*: requires picking and justifying normalization + weighting constants with no natural scale; more tunable surface area than RRF for no demonstrated benefit at this corpus size.
 - *Semantic-first with lexical as tie-break only*: this is close to today's `HybridRetriever` behavior (semantic replaces lexical when embeddings are present) — exactly what spec FR-014 requires changing.
+- *Rely on RRF alone without an explicit exact-match guarantee*: rejected after considering the failure mode above — a precise factual match (a price, a date, an ID) is exactly the kind of result a user most needs preserved, and RRF's rank-sum design does not structurally protect it.
 
 ## 4. Cross-chat exclusion storage (Phase 7)
 
@@ -63,6 +70,8 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 - *Only ever clean up after full generation completes (today's behavior)*: correct but wasteful — the model keeps generating tokens for a loop that's already been detected.
 - *Lower `n_predict` globally to reduce loop cost*: rejected — this is a blunt instrument that would also truncate legitimately long High-mode answers; it doesn't address the actual defect (a loop, not a long answer).
 
+**Runtime-verification requirement (spec FR-036a)**: `stopCompletion()`'s availability and behavior were confirmed by reading the currently linked `llama.rn` 0.12.5 source directly (`node_modules/llama.rn/src/index.ts:869`), not assumed from memory or from a different version's documentation. Before Phase 5 implementation, re-confirm this call shape against whatever `llama.rn` version is actually linked at that time, and manually validate on a physical device that a mid-stream `stopCompletion()` call behaves as expected (stops generation, preserves already-streamed text) before pinning any specific detection threshold or stop-trigger constant. If a future `llama.rn` upgrade exposes a more direct repetition-penalty or stop-sequence API, that should be evaluated against this same manual-validation bar before being adopted in place of the buffer-scan approach above — no exact sampling/stopping value in this feature is chosen without that check.
+
 ## 7. Deterministic grounding/hallucination heuristic (Phase 8, non-blocking)
 
 **Decision**: Deferred design note only, per spec Section 14 (Phase 8 is optional and built after Phases 1–7 are stable). Working direction: extract "claim tokens" from the answer — numbers, quoted or extracted-text spans, capitalized color/object nouns — and check each against the token/text set of the evidence and retrieved content that was actually included in context for that turn; flag the turn if a claim token has no match. This is intentionally the same lightweight, deterministic, no-second-inference-pass shape as the existing lexical-overlap relevance checks already in `ContextOrchestrator`.
@@ -70,3 +79,29 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 **Rationale**: Recorded now so Phase 8 isn't a blank slate later, but explicitly not designed to production detail — spec FR-036 and Section 14 both require this to be non-blocking for Phases 1–7, and over-designing it now would risk coupling earlier phases to a heuristic that hasn't been validated against real false-positive/negative rates yet.
 
 **Alternatives considered**: Not evaluated in depth at this time — deferred to Phase 8's own research pass, consistent with the phased scope.
+
+## 8. Ambiguous image-reference default (Phase 2)
+
+**Decision**: When a reference could plausibly mean more than one prior image and the request carries no disambiguating detail (an ordinal like "the first one", a description like "the receipt", or similar), resolve the request as a same-image follow-up against the conversation's current active image, rather than guessing among the older images or refusing to answer. Record the ambiguity and this resolution in diagnostics (spec FR-012a, FR-037).
+
+**Rationale**: The spec requires that missing or ambiguous images never cause another image to be silently substituted. Guessing among two or more equally-plausible older images would be exactly that kind of silent substitution — the router would be picking one specific older image without justification. Defaulting to the current active image is not a guess among *ambiguous* candidates: the active image is a well-defined, already-existing default used throughout Section 5 for same-image follow-ups, so this reuses an existing, unambiguous fallback rather than inventing a new one.
+
+**Alternatives considered**:
+- *Ask the user to disambiguate*: would require new UI/conversational-flow beyond this spec's scope (Non-Goals: no broad UI redesign); deferred as a possible future enhancement, not required for this feature.
+- *Refuse to resolve and answer with a generic "not sure which image" response*: closer to correct than guessing, but is a product/UX decision about response content, not a routing decision — Locra's task in this feature is to select context, not author response copy. Defaulting to the active image and letting the model's own answer reflect what it was actually shown is simpler and keeps this feature's scope to context selection.
+- *Always resolve to the most recently attached image, even calling it an "older-image reference"*: rejected — that would misclassify the request and could cause a false claim of having resolved a specific referenced image; classifying it as a same-image follow-up against the active image is the more honest classification for what's actually happening.
+
+## 9. Implementation-time llama.rn API re-verification (T002)
+
+**Verified on 2026-07-26** against the installed `llama.rn` 0.12.5 source at
+`node_modules/llama.rn/src/index.ts`:
+
+- `tokenize(text: string, { media_paths?: string[] } = {}): Promise<NativeTokenizeResult>`
+- `detokenize(tokens: number[]): Promise<string>`
+- `stopCompletion(): Promise<void>`
+
+All three methods are instance methods on the linked llama context. `tokenize`
+forwards the context id, text, and optional media paths to `llamaTokenize`;
+`detokenize` forwards the context id and token array to `llamaDetokenize`; and
+`stopCompletion` forwards the context id to `llamaStopCompletion`. No new
+dependency or network call is needed.

@@ -270,14 +270,14 @@ describe('unified chat mixed-multimodal flow (T040)', () => {
     expect(messageById(conversation, t2.assistantMessageId)?.text).toBe(EVIDENCE_A);
     expect(messageById(conversation, t2.assistantMessageId)?.errorMessage).toBeNull();
 
-    // The queue saw each image on its own request only, never re-attached to a
-    // later text turn, and each request targeted its own assistant message id.
+    // Pixel-dependent follow-ups re-run the correct original image, while
+    // non-visual text turns remain image-free.
     const requestFor = (assistantMessageId: string): InferenceRequest | undefined =>
       queue.submitted.find((request) => request.assistantMessageId === assistantMessageId);
     expect(requestFor(t2.assistantMessageId)?.imagePath).toBe(IMAGE_A);
     expect(requestFor(t4.assistantMessageId)?.imagePath).toBe(IMAGE_B);
     expect(requestFor(t1.assistantMessageId)?.imagePath).toBeNull();
-    expect(requestFor(t3.assistantMessageId)?.imagePath).toBeNull();
+    expect(requestFor(t3.assistantMessageId)?.imagePath).toBe(IMAGE_A);
     expect(requestFor(t5.assistantMessageId)?.imagePath).toBeNull();
 
   });

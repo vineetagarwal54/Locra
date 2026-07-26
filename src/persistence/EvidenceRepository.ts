@@ -82,6 +82,15 @@ export class EvidenceRepository {
     return row;
   }
 
+  saveReinferredEvidence(input: SaveEvidenceInput): VisualEvidenceRow {
+    const id = input.id ?? this.createId();
+    return this.saveEvidence({
+      ...input,
+      id,
+      sourceRevision: `${input.sourceRevision}:reinference:${id}`,
+    });
+  }
+
   getEvidenceForMessage(sourceMessageId: string): VisualEvidenceRow[] {
     return this.driver.getAllSync<VisualEvidenceRow>(
       `SELECT * FROM visual_evidence WHERE source_message_id = ?
@@ -93,13 +102,17 @@ export class EvidenceRepository {
   getActiveImageEvidence(conversationId: string): VisualEvidenceRow | null {
     return this.driver.getFirstSync<VisualEvidenceRow>(
       `SELECT evidence.* FROM visual_evidence evidence
-         JOIN message source ON source.id = evidence.source_message_id
-         JOIN message_image link
-           ON link.message_id = source.id AND link.image_asset_id = evidence.image_asset_id
         WHERE evidence.conversation_id = ?
-        ORDER BY source.created_at DESC, link.ordinal DESC, evidence.created_at DESC, evidence.id ASC
+          AND evidence.image_asset_id = (
+            SELECT link.image_asset_id FROM message_image link
+              JOIN message source ON source.id = link.message_id
+             WHERE source.conversation_id = ?
+             ORDER BY source.created_at DESC, link.ordinal DESC, link.image_asset_id ASC
+             LIMIT 1
+          )
+        ORDER BY evidence.created_at DESC, evidence.id ASC
         LIMIT 1`,
-      [conversationId],
+      [conversationId, conversationId],
     );
   }
 

@@ -7,16 +7,16 @@ description: "Task list for Context Routing and Answer Quality"
 **Input**: Design documents from `specs/007-context-routing-and-answer-quality/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
-**Tests**: INCLUDED but intentionally focused, per spec Section 12: only the five named high-risk areas (request routing, token-budget protection, image-reference selection, cross-chat isolation, semantic/lexical fallback+fusion) get failing-test-first coverage (Constitution VI). No tests are added for exact answer wording, end-to-end generation quality, UI snapshots, voice-transcription accuracy, or precise loop-stop timing — those are manual/evaluation-harness validation only (spec Section 11, `quickstart.md`).
+**Tests**: INCLUDED but intentionally focused, per spec Section 12: only the five named high-risk areas (request routing, image-reference and missing-image selection, token-budget protection and eviction, lexical/semantic fusion and fallback, cross-chat isolation) get failing-test-first coverage (Constitution VI). Generation-quality work (Phase 5) and the optional grounding heuristic (Phase 8) are explicitly **not** in that list — they are implemented and validated manually/via the evaluation harness, not via new required unit tests (spec Section 12 exclusions). No tests are added anywhere for exact answer wording, OCR/counting accuracy, tone, visual correctness, or general response quality.
 
-**Organization**: Grouped by the 10 user stories from spec.md; phase order matches `plan.md`'s Implementation Phases exactly (spec Section 14's sequencing is explicit and non-negotiable — image continuity ships before minimal-context routing, budgeting before generation improvements, cross-chat and grounding are deliberately last).
+**Organization**: Grouped by the 10 user stories from spec.md; phase numbers match `plan.md`'s Implementation Phases and spec Section 14's canonical 9-phase sequencing exactly (Setup precedes Phase 1 and is not itself numbered in that list).
 
-**Gates**: Phase 7 (same-chat semantic/hybrid retrieval) is **⛔ GATED** behind the pre-existing embedding-artifact approval (manifest hash, license, device-compatibility verification) established in Spec 006 — the same gate that already blocks `EmbeddingService`/`EmbeddingBackfill` today. Gated tasks ship code that remains inert (lexical-fallback only) until that approval lands.
+**Gates**: Phase 6 (same-chat semantic/hybrid retrieval) is **⛔ GATED** behind the pre-existing embedding-artifact approval (model identity, license, hash, dimensions, latency, memory, device compatibility) established in Spec 006 — the same gate that already blocks `EmbeddingService`/`EmbeddingBackfill` today. Gated tasks ship code that remains inert (lexical-fallback only) until that approval lands.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependency on an incomplete task)
-- **[Story]**: US1–US10 (setup/foundational/polish carry no story label)
+- **[Story]**: US1–US10 (Setup/Phase 1/Polish carry no story label)
 
 ## Path Conventions
 
@@ -24,143 +24,155 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ---
 
-## Phase 1: Setup
+## Setup
 
 **Purpose**: Baseline fixtures and dependency re-verification before any implementation.
 
-- [ ] T001 [P] Record baseline evaluation fixtures for independent-question, follow-up, image (new/same/older/pixel-dependent), long-conversation, and repetition/verbosity scenarios in `src/evaluation/baselines/`, for later before/after comparison (spec MV-001–MV-010; plan Phase 0).
-- [ ] T002 [P] Re-verify `llama.rn`'s `tokenize()`, `detokenize()`, and `stopCompletion()` call shapes against the currently linked `llama.rn` version (`node_modules/llama.rn/src/index.ts`) and record confirmation in `research.md` (Constitution IX; plan Phase 0).
-- [ ] T003 [P] Run `npm run type-check`, `npm run lint`, and `npm test` on the unchanged branch and record the baseline result before implementation.
+- [X] T001 [P] Record baseline evaluation fixtures for independent-question, follow-up, image (new/same/older/ambiguous/pixel-dependent), long-conversation, and repetition/verbosity scenarios in `src/evaluation/baselines/`, for later before/after comparison (spec MV-001–MV-011).
+- [X] T002 [P] Re-verify `llama.rn`'s `tokenize()`, `detokenize()`, and `stopCompletion()` call shapes against the currently linked `llama.rn` version (`node_modules/llama.rn/src/index.ts`) and record confirmation in `research.md` (Constitution IX).
+- [X] T003 [P] Run `npm run type-check`, `npm run lint`, and `npm test` on the unchanged branch and record the baseline result before implementation.
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 1: Diagnostics-Only Routing Visibility
 
-**Purpose**: Build the classification engine and extend diagnostics types in **observation-only** mode — computed and recorded, but not yet changing any answer's context — so every user-story phase below can build on a stable `RequestClassifier` and diagnostics shape (spec Section 14, Phase 1: "Routing diagnostics... before changing any routing behavior").
+**Purpose**: Build the classification engine and extend diagnostics types in **observation-only** mode — computed and recorded, but not yet changing any answer's context — so every later phase can build on a stable `RequestClassifier` and diagnostics shape (spec Section 14, Phase 1).
 
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete.
+**⚠️ CRITICAL**: No later phase may begin until this phase is complete.
 
-- [ ] T004 [P] Add the `RequestClassification` type and extend `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` in `src/inference/ContextOrchestrator.ts` (and `src/types/models.ts` if needed) per `data-model.md`, without changing existing selection behavior yet.
-- [ ] T005 [P] Write failing tests for `RequestClassifier` in `tests/unit/inference/RequestClassifier.test.ts`: all 8 classification flags, `isIndependentTextQuestion`/`isTextFollowUp` mutual exclusivity, combinability of image/pixel/long-context/cross-chat-eligible flags, and the conservative ambiguous-short-reply-defaults-to-follow-up rule (contracts/request-routing.md).
-- [ ] T006 Implement `src/inference/RequestClassifier.ts` (`classifyRequest`) to make T005 pass. (depends on T005)
-- [ ] T007 Wire `classifyRequest` into `ContextOrchestrator.orchestrate()` in **observation-only** mode: compute and record the classification plus would-be `retrievalMode`/`imageDecision` in diagnostics without changing actual source selection (depends on T004, T006).
-- [ ] T008 [P] Extend `src/diagnostics/DiagnosticsBundleBuilder.ts` and `src/diagnostics/DiagnosticsTraceStore.ts` to export the new classification/retrievalMode/imageDecision/crossChatActive/groundingVerdict(`null`) fields per `contracts/diagnostics.md`.
+- [X] T004 [P] Add the `RequestClassification` type (including `imageReferenceAmbiguous`) and extend `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` in `src/inference/ContextOrchestrator.ts` (and `src/types/models.ts` if needed) per `data-model.md`, without changing existing selection behavior yet.
+- [X] T005 [P] Write failing tests for `RequestClassifier` in `tests/unit/inference/RequestClassifier.test.ts`: all 8 classification flags, `isIndependentTextQuestion`/`isTextFollowUp` mutual exclusivity, combinability of image/pixel/long-context/cross-chat-eligible flags, the conservative ambiguous-short-reply-defaults-to-follow-up rule, and the `imageReferenceAmbiguous` flag forcing `isSameImageFollowUp = true` / `isOlderImageReference = false` (contracts/request-routing.md, spec FR-012a).
+- [X] T006 Implement `src/inference/RequestClassifier.ts` (`classifyRequest`) to make T005 pass. (depends on T005)
+- [X] T007 Wire `classifyRequest` into `ContextOrchestrator.orchestrate()` in **observation-only** mode: compute and record the classification plus would-be `retrievalMode`/`imageDecision`/`imageReferenceAmbiguous` in diagnostics without changing actual source selection. (depends on T004, T006)
+- [X] T008 [P] Extend `src/diagnostics/DiagnosticsBundleBuilder.ts` and `src/diagnostics/DiagnosticsTraceStore.ts` to export the new classification/retrievalMode/imageDecision/imageReferenceAmbiguous/crossChatActive/groundingVerdict(`null`) fields per `contracts/diagnostics.md`.
 
 **Checkpoint**: Classification and diagnostics are observable end-to-end; no answer behavior has changed yet.
 
 ---
 
-## Phase 3: User Stories 4, 5, 6, 7 — Image Continuity and Original-Pixel Reuse (Priority: P1/P1/P2/P1)
+## Phase 2: Image Identity, Reference Resolution, and Original-Pixel Follow-Ups
 
-**Goal**: New image questions get evidenced; same-image follow-ups reuse evidence without reprocessing; older-image references resolve to the correct image without silent substitution; pixel-dependent requests re-run the original image through vision inference.
+**User Stories**: US4 (new image), US5 (same-image follow-up), US6 (older-image and ambiguous-image reference), US7 (pixel-dependent re-inference) — Priorities P1/P1/P2/P1.
 
-**Independent Test**: Attach an image and ask about it (evidenced); ask a non-visual follow-up (no re-attach); attach a second image and reference the first (correct resolution); ask a pixel-dependent follow-up (fresh re-inference, visible as a new evidence timestamp).
+**Goal**: New image questions get evidenced; same-image follow-ups reuse evidence without reprocessing; unambiguous older-image references resolve to the correct image; a genuinely ambiguous reference defaults to the active image instead of guessing; pixel-dependent requests re-run the correct original image through the Qwen vision path.
+
+**Independent Test**: Attach an image and ask about it (evidenced); ask a non-visual follow-up (no re-attach); attach a second image and reference the first (correct resolution); attach a third and ask ambiguously (defaults to active, flagged in diagnostics); ask a pixel-dependent follow-up (fresh re-inference, visible as a new evidence timestamp).
 
 ### Tests for Image Continuity ⚠️ (write first, must fail)
 
-- [ ] T009 [P] [US7] Write failing tests extending `tests/unit/inference/ImageEvidencePolicy.test.ts`: pixel-dependent + asset available → `use-original`; pixel-dependent + asset missing → `original-unavailable`; non-pixel-dependent + evidence available → `use-evidence`; all input combinations from `data-model.md`.
-- [ ] T010 [P] [US6] Write failing tests extending `tests/unit/persistence/EvidenceRepository.test.ts`: `resolveReferencedImageEvidence` keyed by `RequestClassification.referencedImageId` never returns a different image's evidence.
+- [X] T009 [P] [US7] Write failing tests extending `tests/unit/inference/ImageEvidencePolicy.test.ts`: pixel-dependent + asset available → `use-original`; pixel-dependent + asset missing → `original-unavailable`; non-pixel-dependent + evidence available → `use-evidence`; all input combinations from `data-model.md`.
+- [X] T010 [P] [US6] Write failing tests extending `tests/unit/persistence/EvidenceRepository.test.ts`: `resolveReferencedImageEvidence` keyed by `RequestClassification.referencedImageId` never returns a different image's evidence.
+- [X] T011 [P] [US6] Write failing tests for the ambiguous-image-reference default in `tests/unit/inference/ContextOrchestrator.test.ts` (or a dedicated file): with three or more images and no disambiguating detail, the resolved decision matches a same-image follow-up against the current active image, `referencedImageId` is not set to a guessed ID, and diagnostics record `imageReferenceAmbiguous: true` (spec FR-012a).
 
 ### Implementation for Image Continuity
 
-- [ ] T011 [US4] Wire `evaluateImageEvidenceAvailability` into `ContextOrchestrator` for `isNewImageQuestion`, aligning with the existing `messageHasImage`/active-image-turn handling. (depends on T006, T009)
-- [ ] T012 [US5] Extend orchestrator wiring for `isSameImageFollowUp`: reuse stored evidence, no reprocessing, and no evidence attached when the follow-up carries no visual/reference signal. (depends on T011)
-- [ ] T013 [US6] Extend orchestrator wiring for `isOlderImageReference`: resolve via `referencedImageId` through `EvidenceRepository.resolveReferencedImageEvidence`; missing-original + non-pixel-dependent → `use-evidence`; missing-original + pixel-dependent → `original-unavailable`. (depends on T010, T011)
-- [ ] T014 [US7] Implement the `use-original` re-inference trigger in `src/inference/InferenceService.ts` + `src/persistence/EvidenceRepository.ts`: issue a new vision-inference call through the existing single-flight `InferenceQueue`/`DeviceResourcePolicy`, persist a new versioned evidence row linked to the same `image_asset_id`. (depends on T009, T011)
-- [ ] T015 [US7] Replace the Phase 2 observation-only `imageDecision` diagnostics placeholder with the real, behaviorally-selected decision for every image classification. (depends on T014)
+- [X] T012 [US4] Wire `evaluateImageEvidenceAvailability` into `ContextOrchestrator` for `isNewImageQuestion`, aligning with the existing `messageHasImage`/active-image-turn handling. (depends on T006, T009)
+- [X] T013 [US5] Extend orchestrator wiring for `isSameImageFollowUp`: reuse stored evidence, no reprocessing, and no evidence attached when the follow-up carries no visual/reference signal. (depends on T012)
+- [X] T014 [US6] Extend orchestrator wiring for an unambiguous `isOlderImageReference`: resolve via `referencedImageId` through `EvidenceRepository.resolveReferencedImageEvidence`; missing-original + non-pixel-dependent → `use-evidence`; missing-original + pixel-dependent → `original-unavailable`. (depends on T010, T012)
+- [X] T015 [US6] Implement the ambiguous-image-reference default: when `imageReferenceAmbiguous` is true, resolve as `isSameImageFollowUp` against the active image and never call the referenced-image resolver with a guessed ID; record the resolution in diagnostics. (depends on T011, T014; make T011 pass)
+- [X] T016 [US7] Implement the `use-original` re-inference trigger in `src/inference/InferenceService.ts` + `src/persistence/EvidenceRepository.ts`: issue a new vision-inference call through the Qwen path via the existing single-flight `InferenceQueue`/`DeviceResourcePolicy`, persist a new versioned evidence row linked to the same `image_asset_id`. Applies identically whether the pixel-dependent request targets the active image or an unambiguously referenced older image. (depends on T009, T012, T014)
+- [X] T017 [US7] Replace the Phase 1 observation-only `imageDecision`/`imageReferenceAmbiguous` diagnostics placeholders with the real, behaviorally-selected decision for every image classification. (depends on T015, T016)
 
-**Checkpoint**: Image continuity and pixel-dependent re-inference are behaviorally correct and independently testable (spec MV-003, MV-004, MV-005, MV-006).
+**Checkpoint**: Image continuity, ambiguous-reference safety, and pixel-dependent re-inference are behaviorally correct and independently testable (spec MV-004–MV-009).
 
 ---
 
-## Phase 4: User Stories 1, 2, 3, 8 — Minimal-Context Routing (Priority: P1/P1/P1/P3)
+## Phase 3: Minimal-Context Request Routing
 
-**Goal**: Independent, self-contained questions receive zero conversational context; text follow-ups receive only what their reference requires; long-context retrieval requests stay coherent and bounded; voice-transcribed questions route identically to typed text.
+**User Stories**: US1 (independent question), US2 (text follow-up), US3 (long-context retrieval), US8 (voice parity) — Priorities P1/P1/P1/P3.
 
-**Independent Test**: Ask an independent factual question in a chat with unrelated history/facts/summary/image → zero non-current-request sources considered. Ask a follow-up with a clear reference → only the needed recent turns included. Ask about an earlier topic in a long conversation → relevant facts/summary/retrieval included, unrelated independent questions still get nothing extra.
+**Goal**: Independent, self-contained questions receive zero conversational context; text follow-ups receive only what their reference requires; long-context retrieval requests stay coherent and bounded; voice-transcribed questions route identically to typed text (validated manually, no dedicated automated test — see Checkpoint).
+
+**Independent Test**: Ask an independent factual question in a chat with unrelated history/facts/summary/image → zero non-current-request sources considered. Ask a follow-up with a genuine reference → only the needed recent turns included. Ask about an earlier topic in a long conversation → relevant facts/summary/retrieval included, unrelated independent questions still get nothing extra.
 
 ### Tests for Minimal-Context Routing ⚠️ (write first, must fail)
 
-- [ ] T016 [P] [US1] Write failing tests extending `tests/unit/inference/ContextOrchestrator.test.ts`: an independent-question classification yields zero prior turns/summary/facts/retrieval/image evidence **considered**, even when all of them exist and would otherwise qualify.
-- [ ] T017 [P] [US2] Write failing tests for follow-up scoping: recent turns included up to the mode's floor; no unrelated retrieval/summary pulled in absent a supporting classification.
-- [ ] T018 [P] [US3] Write failing tests for long-context-retrieval-request selection (facts/summary/same-chat retrieval included when relevant, excluded for an independent question in the same long conversation) and for deterministic repeatability of selection given identical input/state/mode/embedding-version.
+- [ ] T018 [P] [US1] Write failing tests extending `tests/unit/inference/ContextOrchestrator.test.ts`: an independent-question classification yields zero prior turns/summary/facts/retrieval/image evidence **considered**, even when all of them exist and would otherwise qualify, and confirm no recent-turn floor is applied at all for this classification (not merely reduced to zero).
+- [ ] T019 [P] [US2] Write failing tests for follow-up scoping: recent turns included up to the mode's floor; no unrelated retrieval/summary pulled in absent a supporting classification.
+- [ ] T020 [P] [US3] Write failing tests for long-context-retrieval-request selection (facts/summary/same-chat retrieval included when relevant, excluded for an independent question in the same long conversation) and for deterministic repeatability of selection given identical input/state/mode/embedding-version.
 
 ### Implementation for Minimal-Context Routing
 
-- [ ] T019 [US1] Implement the hard-skip gate in `ContextOrchestrator.orchestrate()`: for `isIndependentTextQuestion` with no co-occurring image/long-context classification, short-circuit before querying the evidence repository, retriever, or fact/summary sources. (depends on T016; make T016 pass)
-- [ ] T020 [US2] Implement follow-up-scoped source resolution: recent-turn inclusion gated on `isTextFollowUp`, unchanged priority order otherwise. (depends on T017, T019)
-- [ ] T021 [US3] Implement long-context-retrieval-request source resolution: facts/summary/same-chat retrieval gated on `isLongContextRetrievalRequest`. (depends on T018, T020)
-- [ ] T022 [P] [US8] Write and pass an integration regression test in `tests/integration/voiceRouting.test.ts` confirming a transcribed-and-submitted voice message produces identical `RequestClassification` and identical selected context to typed text with the same content — no new production code expected. (depends on T021)
+- [ ] T021 [US1] Implement the hard-skip gate in `ContextOrchestrator.orchestrate()`: for `isIndependentTextQuestion` with no co-occurring image/long-context classification, short-circuit before querying the evidence repository, retriever, or fact/summary sources, and before any recent-turn-floor logic runs. (depends on T018; make T018 pass)
+- [ ] T022 [US2] Implement follow-up-scoped source resolution: recent-turn inclusion gated on `isTextFollowUp`, unchanged priority order otherwise. (depends on T019, T021)
+- [ ] T023 [US3] Implement long-context-retrieval-request source resolution: facts/summary/same-chat retrieval gated on `isLongContextRetrievalRequest`. (depends on T020, T022)
 
-**Checkpoint**: Spec MV-001, MV-002, MV-003, and MV-009 all pass; classification-gated routing fully replaces today's fixed-assembly behavior.
+**Checkpoint**: Spec MV-001, MV-002, MV-003, and MV-010 all pass; classification-gated routing fully replaces today's fixed-assembly behavior. Manually verify MV-012 (voice-transcribed text routes identically to typed text with the same content) — no dedicated automated test is added for this per spec Section 12; it is a direct consequence of routing keying only off message content.
 
 ---
 
-## Phase 5: Token Budgeting (serves US1, US3, US6)
+## Phase 4: Model-Aware Token Budgeting
 
-**Goal**: Replace character-based context budgeting with a token-aware (or calibrated token-equivalent) measurement, reconciled with the existing hard `ContextWindow` trim, while preserving protected-source and eviction-order guarantees.
+**Serves**: US1, US3, US6 (no dedicated user story of its own; a cross-cutting requirement, Section 8).
 
-**Independent Test**: Export diagnostics across Low/Medium/High modes and confirm budget units are token-denominated; construct a near-limit conversation and confirm the router never selects a set that `ContextWindow`'s downstream trim would still need to cut; confirm the current request and active/referenced image evidence are never evicted under a deliberately tight budget.
+**Goal**: Replace character-based context budgeting with the two-tier token measurement (calibrated estimate for selection, one real `tokenize()` check for final verification), reserve distinct capacity for system instructions / current input / image input / selected context / generated output, and fix the eviction order so a recent-turn floor is only ever protected for a request that has one.
+
+**Independent Test**: Export diagnostics across Low/Medium/High modes and confirm budget units are token-denominated and bucketed; construct a near-limit conversation and confirm the router never selects a set that `ContextWindow`'s downstream trim would still need to cut; confirm the current request and active/referenced image evidence are never evicted, and that an independent question shows no recent-turn-floor entry at all.
 
 ### Tests for Token Budgeting ⚠️ (write first, must fail)
 
-- [ ] T023 [P] [US3] Write failing tests for the new token-based `ContextBudgetPolicy` implementation in `tests/unit/inference/TokenContextBudgetPolicy.test.ts`: `measure()` returns a calibrated token estimate (not `content.length`), per-mode budgets stay monotonic, output is deterministic.
-- [ ] T024 [P] [US1] Write failing tests asserting the current request is never evicted, even under a deliberately tiny budget.
-- [ ] T025 [P] [US6] Write failing tests asserting active/referenced image evidence is never evicted and that the eviction order (cross-chat → same-chat retrieved → facts → summary) holds under budget pressure.
-- [ ] T026 [P] [US3] Write failing reconciliation tests asserting the router's `maximumUnits` for a given mode never exceeds what `ContextWindow`'s hard trim allows for that mode (spec FR-027, MV-007).
+- [ ] T024 [P] [US3] Write failing tests for the new token-based `ContextBudgetPolicy` implementation in `tests/unit/inference/TokenContextBudgetPolicy.test.ts`: `measure()` returns a calibrated (tier-1) token estimate (not `content.length`), per-mode budgets stay monotonic, output is deterministic.
+- [ ] T025 [P] [US1] Write failing tests asserting the current request is never evicted, even under a deliberately tiny budget, and that an independent-question turn shows zero recent-turn-floor consumption (not a protected-but-empty floor).
+- [ ] T026 [P] [US6] Write failing tests asserting active/referenced image evidence is never evicted and that the eviction order (cross-chat → same-chat retrieved → facts → summary → recent-turn floor, only for a request that has one) holds under budget pressure.
+- [ ] T027 [P] [US3] Write failing reconciliation tests asserting the router's `maximumUnits` (selected-context-pool bucket) for a given mode never exceeds what `ContextWindow`'s hard trim allows for that mode once the other four buckets are subtracted (spec FR-027, MV-016).
+- [ ] T028 [P] [US3] Write failing tests for the five reserved-capacity buckets (spec FR-026a): buckets never sum above `QWEN_CONTEXT_TOKEN_LIMIT - CONTEXT_SAFETY_TOKENS`; the selected-context pool cannot be sized into headroom reserved for system instructions, current input, image input, or generated output.
 
 ### Implementation for Token Budgeting
 
-- [ ] T027 [US3] Implement `TokenContextBudgetPolicy` (`policyId: 'token-estimate-budget-v1'`) in `src/inference/ContextOrchestrator.ts`, replacing `CharacterContextBudgetPolicy` as the runtime default. (make T023 pass)
-- [ ] T028 [US6] Verify/adjust protected-source and eviction-order logic against the new token measurement — same algorithm, new unit semantics. (make T024, T025 pass)
-- [ ] T029 [US3] Reconcile the router's per-mode `maximumUnits` with `ContextWindow`'s existing `QWEN_CONTEXT_TOKEN_LIMIT - generationLimit - CONTEXT_SAFETY_TOKENS` calculation in `src/inference/ContextWindow.ts`, sharing one constant/calculation. (make T026 pass)
-- [ ] T030 [US3] Recalibrate the three response-mode budgets from characters to tokens in `src/inference/ResponseMode.ts`, using the ratio from `research.md` §1 as the starting point (final numbers per spec Open Questions/evaluation harness).
+- [ ] T029 [US3] Implement `TokenContextBudgetPolicy` (`policyId: 'token-estimate-budget-v1'`, tier-1 calibrated estimator) in `src/inference/ContextOrchestrator.ts`, replacing `CharacterContextBudgetPolicy` as the runtime default. (make T024 pass)
+- [ ] T030 [US6] Fix protected-source and eviction-order logic against the new token measurement: cross-chat → same-chat retrieved → facts → summary → recent-turn floor **only when a floor applies** to this request's classification; current request and protected image evidence are never reached. (make T025, T026 pass)
+- [ ] T031 [US3] Implement the tier-2 reconciliation: one real `tokenize()` call on the final assembled prompt (reusing the inference context acquisition for that request), replacing the previous "shared constant, hoped to agree" approach with an exact check against `ContextWindow`'s `QWEN_CONTEXT_TOKEN_LIMIT - generationLimit - CONTEXT_SAFETY_TOKENS`. (make T027 pass)
+- [ ] T032 [US3] Implement the five reserved-capacity buckets (system instructions, current input, image input, selected-context pool, generated output) in `src/inference/ContextOrchestrator.ts`/`src/inference/ContextWindow.ts`, wiring existing constants (`IMAGE_RESERVE_TOKENS`, `getResponseGenerationLimit`) into the shared accounting. (make T028 pass)
+- [ ] T033 [US3] Recalibrate the three response-mode budgets from characters to the selected-context-pool token bucket in `src/inference/ResponseMode.ts`, using the ratio from `research.md` §1 as the starting point (final numbers per spec Open Questions/evaluation harness).
 
-**Checkpoint**: Spec MV-007 passes; budgets are token-denominated and reconciled with the real model context window.
-
----
-
-## Phase 6: User Story 10 — Generation and Repetition Improvements (Priority: P2)
-
-**Goal**: Independent/short-follow-up questions get concise, non-padded answers regardless of mode; emerging loops stop generation earlier instead of running to the hard limit; existing post-processing is preserved and may be improved.
-
-**Independent Test**: Ask a short independent question in each mode → answer length trends short, not padded to the mode's soft target. Trigger a known loop-prone prompt → generation stops noticeably earlier and the answer is still cleaned up.
-
-### Tests for Generation and Repetition ⚠️ (write first, must fail)
-
-- [ ] T031 [P] [US10] Write failing tests for `resolveGenerationTarget(mode, classification)` in `tests/unit/inference/GenerationTuning.test.ts`: reduced soft target for independent/short-follow-up classifications, unchanged for others, hard generation limit never reduced below safe completion room.
-- [ ] T032 [P] [US10] Write failing tests for the streaming loop-detector's pure trigger function (buffer → loop-confirmed boolean) in `tests/unit/inference/AnswerPostProcessor.streaming.test.ts`, reusing `collapseLoopingTail`'s detection logic; do not pin exact stop timing (spec Section 12 exclusion).
-
-### Implementation for Generation and Repetition
-
-- [ ] T033 [US10] Implement `resolveGenerationTarget` in `src/inference/GenerationTuning.ts` and wire it into the answer-generation call site. (make T031 pass)
-- [ ] T034 [US10] Implement the streaming loop-detector hook at the existing checkpoint-throttle cadence in `src/inference/llamaRn/QwenLlamaRuntime.ts`, calling the existing `stopCompletion()` path on a confirmed loop. (make T032 pass)
-- [ ] T035 [US10] Run the existing `postProcessAnswer` pass on the early-stopped buffer exactly as on a normal completion; extend `src/inference/AnswerPostProcessor.ts` only if early-stopping introduces a new truncation shape to handle (spec FR-031, "may improve, not required to stay unchanged").
-
-**Checkpoint**: Spec MV-010 passes; independent short-answer questions are concise; loop-prone fixtures stop earlier without affecting legitimate long High-mode answers.
+**Checkpoint**: Spec MV-016 passes; budgets are token-denominated, bucketed, and reconciled with the real model context window; independent questions show no recent-turn-floor artifact.
 
 ---
 
-## Phase 7: User Story 3 (continued) — Same-Chat Semantic and Hybrid Retrieval ⛔ GATED (Priority: P1)
+## Phase 5: Generation Length, Repetition, and Stopping Improvements
 
-**Goal**: Query-time embeddings are wired so `HybridRetriever` receives a real vector when the embedding runtime is active; lexical and semantic candidates are fused (RRF) instead of semantic silently overriding lexical.
+**User Story**: US10 (generation stays concise, avoids repetition, stops loops earlier) — Priority P2.
 
-**Independent Test**: With an approved embedding runtime, ask a question with both an exact lexical match and a semantically related but non-overlapping passage → both influence the fused result. Simulate a stale/incompatible embedding version → falls back to lexical-only without failing.
+**Goal**: Independent/short-follow-up questions get concise, non-padded answers regardless of mode; genuinely detailed requests are not shortened; emerging loops stop generation earlier using runtime-verified controls instead of running to the hard limit; interrupted generation preserves partial text; existing post-processing is preserved and may be improved.
+
+**Independent Test**: Ask a short independent question in each mode → answer length trends short, not padded to the mode's soft target. Ask a genuinely detailed question → length is not artificially reduced. Trigger a known loop-prone prompt → generation stops noticeably earlier, partial text is preserved, and the answer is still cleaned up.
+
+No automated tests are added in this phase (spec Section 12 explicitly excludes generation-quality logic, loop-stop timing, and sampling parameter choices from the required test set); it is validated manually and via `src/evaluation` per the Checkpoint below.
+
+- [ ] T034 Re-verify `stopCompletion()`'s current call shape and behavior against the actually-linked `llama.rn` version; manually validate on a physical device that a mid-stream call stops generation and preserves already-streamed text, before any detection threshold is chosen (spec FR-036a, Constitution IX). (depends on T002)
+- [ ] T035 [US10] Implement `resolveGenerationTarget(mode, classification)` in `src/inference/GenerationTuning.ts` and wire it into the answer-generation call site: reduced soft target for independent/short-follow-up classifications; unchanged or unshortened target for long-context/detailed requests; hard generation limit never reduced below safe completion room.
+- [ ] T036 [US10] Implement the streaming loop-detector hook at the existing checkpoint-throttle cadence in `src/inference/llamaRn/QwenLlamaRuntime.ts`, calling the verified `stopCompletion()` path on a confirmed loop, and preserving partial text via the existing Spec 006 checkpoint/interruption-recovery path (FR-A02). (depends on T034)
+- [ ] T037 [US10] Run the existing `postProcessAnswer` pass on the early-stopped buffer exactly as on a normal completion; extend `src/inference/AnswerPostProcessor.ts` only if early-stopping introduces a new truncation shape to handle (spec FR-031, "may improve, not required to stay unchanged"). (depends on T036)
+
+**Checkpoint**: Spec MV-011 passes manually; independent short-answer questions are concise; genuinely detailed answers are unaffected; loop-prone fixtures stop earlier without losing partial text.
+
+---
+
+## Phase 6: Same-Chat Semantic Embedding Activation and Hybrid Fusion ⛔ GATED
+
+**User Story**: US3 (continued — long-context retrieval quality) — Priority P1.
+
+**Goal**: Query-time embeddings are wired so `HybridRetriever` receives a real vector when the embedding runtime is active; lexical and semantic candidates are fused (RRF) instead of semantic silently overriding lexical, with a guarantee that exact matches on names/numbers/prices/dates/identifiers are never dropped by fusion.
+
+**Independent Test**: With an approved embedding runtime, ask a question with both an exact lexical match and a semantically related but non-overlapping passage → both influence the fused result and the exact match survives. Simulate a stale/incompatible embedding version, or an embedding-call failure → falls back to lexical-only without failing.
 
 ### Tests for Retrieval Fusion ⚠️ (write first, must fail)
 
-- [ ] T036 [P] [US3] Write failing tests extending `tests/unit/retrieval/HybridRetriever.test.ts`: RRF-fused ranking never drops a top lexical match, dedup by source message keeps the higher fused score, deterministic tie-break holds, and lexical-only fallback triggers when there is no query vector or embeddings are stale/incompatible.
+- [ ] T038 [P] [US3] Write failing tests extending `tests/unit/retrieval/HybridRetriever.test.ts`: RRF-fused ranking never drops a top lexical match, the exact-match guarantee (spec FR-019a) retains a verbatim number/price/date/identifier match regardless of RRF rank, dedup by source message keeps the higher fused score, deterministic tie-break holds, and lexical-only fallback triggers when there is no query vector, embeddings are stale/incompatible/still building, or the embedding call throws.
 
 ### Implementation for Retrieval Fusion
 
-- [ ] T037 **⛔ GATED (embedding manifest)** [US3] Implement query-time embedding generation in `ContextOrchestrator`/`src/store/conversationStore.ts`: call `EmbeddingService.embed([currentRequestText])` under the `DeviceResourcePolicy` `'embedding'` lease when the embedding runtime is active, and pass the result as `queryVector` into `HybridRetriever.search` (spec FR-015; ships inert/unreachable until the manifest is approved, same gate as Spec 006 T005).
-- [ ] T038 **⛔ GATED (embedding manifest)** [US3] Implement RRF fusion (`k = 60`) in `src/retrieval/HybridRetriever.ts`, replacing "semantic overrides lexical" with combined-ranking fusion, dedup, and tie-break. (make T036 pass)
+- [ ] T039 **⛔ GATED (embedding manifest)** [US3] Implement query-time embedding generation in `ContextOrchestrator`/`src/store/conversationStore.ts`: call `EmbeddingService.embed([currentRequestText])` under the `DeviceResourcePolicy` `'embedding'` lease when the embedding runtime is active, catching and degrading any error to lexical-fallback, and pass the result as `queryVector` into `HybridRetriever.search` (spec FR-015; ships inert/unreachable until the manifest is approved, same gate as Spec 006 T005).
+- [ ] T040 **⛔ GATED (embedding manifest)** [US3] Implement RRF fusion (`k = 60`) in `src/retrieval/HybridRetriever.ts`, replacing "semantic overrides lexical" with combined-ranking fusion, dedup, and tie-break. (make T038's non-exact-match assertions pass)
+- [ ] T041 **⛔ GATED (embedding manifest)** [US3] Implement the exact-match guarantee (spec FR-019a) as a small post-fusion step in `src/retrieval/HybridRetriever.ts`: retain any candidate with a verbatim number/price/date/identifier match before the per-request limit is applied. (depends on T040; make T038's exact-match assertions pass)
 
-**Checkpoint**: Retrieval fusion code is complete and tested but remains behind the pre-existing embedding-manifest approval gate; the app continues to serve lexical-only results until that approval lands.
+**Checkpoint**: Retrieval fusion and the exact-match guarantee are complete and tested but remain behind the pre-existing embedding-manifest approval gate; the app continues to serve lexical-only results until that approval lands.
 
 ---
 
-## Phase 8: User Story 9 — Optional Scoped Cross-Chat Retrieval (Priority: P3, built only once Phases 3–6 are validated stable)
+## Phase 7: Optional Scoped Cross-Chat Retrieval
+
+**User Story**: US9 — Priority P3, built only once Phases 1–6 are validated stable.
 
 **Goal**: A global, off-by-default setting lets relevant content from other local, non-excluded conversations inform answers; any conversation can be individually excluded in both directions; disabling takes effect immediately.
 
@@ -168,43 +180,46 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for Cross-Chat Retrieval ⚠️ (write first, must fail)
 
-- [ ] T039 [P] [US9] Write failing migration tests extending `tests/unit/persistence/Migrations.test.ts`: `SCHEMA_VERSION` 3→4 adds `excluded_from_cross_chat`, existing rows default to `0`, migration applies transactionally.
-- [ ] T040 [P] [US9] Write failing tests in `tests/unit/retrieval/HybridRetriever.crossChat.test.ts`: scope unchanged when the setting is off; scope expands to non-excluded local conversations when on; an excluded conversation is isolated in both directions; scope-before-scoring is preserved.
+- [ ] T042 [P] [US9] Write failing migration tests extending `tests/unit/persistence/Migrations.test.ts`: `SCHEMA_VERSION` 3→4 adds `excluded_from_cross_chat`, existing rows default to `0`, migration applies transactionally.
+- [ ] T043 [P] [US9] Write failing tests in `tests/unit/retrieval/HybridRetriever.crossChat.test.ts`: scope unchanged when the setting is off; scope expands to non-excluded local conversations when on; an excluded conversation is isolated in both directions; scope-before-scoring is preserved; zero cross-chat queries run while disabled (not merely zero results).
 
 ### Implementation for Cross-Chat Retrieval
 
-- [ ] T041 [US9] Add the `excluded_from_cross_chat` migration entry in `src/persistence/sqlite/Migrations.ts` and `setCrossChatExcluded`/read exposure in `src/persistence/ConversationRepository.ts`. (make T039 pass)
-- [ ] T042 [US9] Add `crossChatMemoryEnabled` (default `false`) to `src/store/settingsStore.ts`, mirroring the existing `defaultResponseMode` MMKV pattern.
-- [ ] T043 [US9] Extend `HybridRetriever`/`ContextOrchestrator` scope resolution to expand `conversationIds` when cross-chat is enabled and the current conversation isn't excluded. (make T040 pass; depends on T037/T038's fusion-capable `HybridRetriever` existing, even while gated)
-- [ ] T044 [US9] Add the global cross-chat settings-row toggle (`src/components/settings/CrossChatSettingRow.tsx`) and a per-conversation exclusion control, using existing `design/` tokens and shared settings components (spec Non-Goal: no new picker UX).
-- [ ] T045 [US9] Replace the Phase 2 always-`false` `crossChatActive` diagnostics placeholder with real per-turn usage.
+- [ ] T044 [US9] Add the `excluded_from_cross_chat` migration entry in `src/persistence/sqlite/Migrations.ts` and `setCrossChatExcluded`/read exposure in `src/persistence/ConversationRepository.ts`. (make T042 pass)
+- [ ] T045 [US9] Add `crossChatMemoryEnabled` (default `false`) to `src/store/settingsStore.ts`, mirroring the existing `defaultResponseMode` MMKV pattern.
+- [ ] T046 [US9] Extend `HybridRetriever`/`ContextOrchestrator` scope resolution to expand `conversationIds` when cross-chat is enabled and the current conversation isn't excluded. (make T043 pass; depends on T040/T041's fusion-capable `HybridRetriever` existing, even while gated)
+- [ ] T047 [US9] Add the global cross-chat settings-row toggle (`src/components/settings/CrossChatSettingRow.tsx`) and a per-conversation exclusion control, using existing `design/` tokens and shared settings components (spec Non-Goal: no new picker UX).
+- [ ] T048 [US9] Replace the Phase 1 always-`false` `crossChatActive` diagnostics placeholder with real per-turn usage.
 
-**Checkpoint**: Spec MV-008 passes; cross-chat is off by default, opt-in, per-conversation-excludable, and immediately reversible.
+**Checkpoint**: Spec MV-014 passes; cross-chat is off by default, opt-in, per-conversation-excludable, and immediately reversible.
 
 ---
 
-## Phase 9: User Story 10 (continued) — Optional Grounding Diagnostics (Priority: P2, built only once Phases 3–8 are validated stable)
+## Phase 8: Optional Grounding Diagnostics
 
-**Goal**: A deterministic, diagnostics-only assessment flags answers whose specific claims aren't supported by the evidence/retrieved text actually included in context — no visible answer change, no second model-generation pass.
+**User Story**: US10 (deferred item) — Priority P2, built only once Phases 1–7 are validated stable. Not part of this feature's core delivery or core required tests (spec Section 12).
 
-**Independent Test**: Ask a pixel-dependent question with clear supporting evidence → `groundingVerdict: 'supported'`. Construct a case where the answer states a claim absent from the included evidence → `groundingVerdict: 'unsupported'` appears in diagnostics only.
+**Goal**: A deterministic, diagnostics-only assessment flags answers whose specific claims aren't supported by the evidence/retrieved text actually included in context — no visible answer change, no second model-generation pass, never an automatic rewrite or suppression of the answer.
 
-- [ ] T046 [US10] Design and pin the deterministic claim-extraction/comparison heuristic (research.md §7 direction) with its own failing test suite in `tests/unit/inference/GroundingAssessment.test.ts` (write first).
-- [ ] T047 [US10] Implement the heuristic in new `src/inference/GroundingAssessment.ts`, invoked only for turns that included image evidence or retrieved text, writing `groundingVerdict` to diagnostics only. (make T046 pass; spec FR-036)
+**Independent Test**: Ask a pixel-dependent question with clear supporting evidence → `groundingVerdict: 'supported'`. Construct a case where the answer states a claim absent from the included evidence → `groundingVerdict: 'unsupported'` appears in diagnostics only, with no change to the visible answer.
+
+- [ ] T049 [US10] Design and pin the deterministic claim-extraction/comparison heuristic (research.md §7 direction) with its own failing test suite in `tests/unit/inference/GroundingAssessment.test.ts` (write first). This is scoped and approved separately from this feature's core five test areas.
+- [ ] T050 [US10] Implement the heuristic in new `src/inference/GroundingAssessment.ts`, invoked only for turns that included image evidence or retrieved text, writing `groundingVerdict` to diagnostics only, never altering the visible answer. (make T049 pass; spec FR-036)
 
 **Checkpoint**: Grounding assessment is diagnostics-only and does not alter any visible answer; `quickstart.md` Phase 8 validation passes.
 
 ---
 
-## Phase 10: Polish & Integration Validation
+## Phase 9: Final Manual Device Validation
 
-**Purpose**: Full regression pass, cross-phase validation, and documentation alignment.
+**Purpose**: Full manual validation matrix, regression pass, and documentation alignment.
 
-- [ ] T048 [P] Run `npm run type-check`, `npm run lint`, and the five focus-area test suites (spec Section 12) across the full feature; fix any regressions.
-- [ ] T049 Run the full manual validation pass (spec Section 11, MV-001–MV-011) against the Phase 0 baseline fixtures recorded in T001; record a before/after comparison.
-- [ ] T050 Run the Spec 006 physical-device regression checklist (History pagination/search, model download/verify, generation cancellation, checkpoint/recovery, durable images, offline/airplane-mode) per spec MV-011; confirm zero regression.
-- [ ] T051 [P] Execute `quickstart.md` Phases 1–9 end-to-end on a physical device and record results/deviations.
-- [ ] T052 Update `AGENTS.md`/`README.md` only if this feature changes a previously documented architecture claim (e.g., character-based → token-based budgeting); otherwise skip.
+- [ ] T051 [P] Run `npm run type-check`, `npm run lint`, and the five focus-area test suites (spec Section 12) across the full feature; fix any regressions.
+- [ ] T052 Run the full manual validation matrix (spec Section 11, MV-001–MV-018) against the Setup baseline fixtures recorded in T001; record a before/after comparison.
+- [ ] T053 Run the final airplane-mode validation (MV-017): confirm zero network calls across classification, image re-inference, token budgeting, retrieval fusion (if active), cross-chat scope resolution (if active), and generation controls.
+- [ ] T054 Run the Spec 006 physical-device regression checklist (History pagination/search, model download/verify, generation cancellation, checkpoint/recovery, durable images) per spec MV-018; confirm zero regression.
+- [ ] T055 [P] Execute `quickstart.md` Phases 1–9 end-to-end on a physical device and record results/deviations.
+- [ ] T056 Update `AGENTS.md`/`README.md` only if this feature changes a previously documented architecture claim (e.g., character-based → token-based budgeting); otherwise skip.
 
 ---
 
@@ -212,52 +227,54 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies — can start immediately.
-- **Foundational (Phase 2)**: Depends on Setup — BLOCKS all user-story phases.
-- **Phase 3 (US4/5/6/7, image continuity)**: Depends on Foundational. Ships first among story phases per spec Section 14.
-- **Phase 4 (US1/2/3/8, minimal-context routing)**: Depends on Phase 3 (routing gating builds on the image-aware resolution wired there).
-- **Phase 5 (token budgeting)**: Depends on Phase 4 (needs classification-gated selection in place before its budget can be meaningfully measured/evicted).
-- **Phase 6 (US10, generation/repetition)**: Depends on Phase 5.
-- **Phase 7 (US3 continued, retrieval fusion, ⛔ gated)**: Depends on Phase 6.
-- **Phase 8 (US9, cross-chat)**: Depends on Phases 3–6 being stable (spec Section 14: "built once Phases 1–5 are stable"); also depends on Phase 7's `HybridRetriever` fusion code existing (even while gated), since cross-chat scope wraps the same function.
-- **Phase 9 (US10 continued, grounding)**: Depends on Phases 3–8 being stable.
-- **Polish (Phase 10)**: Depends on all implemented phases.
+- **Setup**: No dependencies — can start immediately.
+- **Phase 1 (diagnostics-only routing visibility)**: Depends on Setup — BLOCKS all later phases.
+- **Phase 2 (image identity/reference/pixel follow-ups)**: Depends on Phase 1. Ships first among behavioral phases per spec Section 14.
+- **Phase 3 (minimal-context request routing)**: Depends on Phase 2 (routing gating builds on the image-aware resolution wired there).
+- **Phase 4 (model-aware token budgeting)**: Depends on Phase 3 (needs classification-gated selection in place before its budget can be meaningfully measured/evicted).
+- **Phase 5 (generation/repetition improvements)**: Depends on Phase 4.
+- **Phase 6 (same-chat semantic/hybrid retrieval, ⛔ gated)**: Depends on Phase 5.
+- **Phase 7 (cross-chat)**: Depends on Phases 1–6 being stable (spec Section 14: "built only once Phases 1–6 are stable"); requires Phase 6's `HybridRetriever` fusion code to exist (even while gated), since cross-chat scope wraps the same function.
+- **Phase 8 (grounding)**: Depends on Phases 1–7 being stable.
+- **Phase 9 (final manual device validation)**: Depends on all implemented phases.
 
 ### User Story Dependencies
 
-Unlike a typical spec where stories are independent from Foundational onward, this feature has an **authored, non-negotiable phase order** (spec Section 14): US4/US5/US6/US7 (image) → US1/US2/US3/US8 (routing) → token budgeting → US10 (generation) → US3 continued (retrieval fusion) → US9 (cross-chat) → US10 continued (grounding). Stories are still independently testable at their own checkpoint (each phase has its own Independent Test), but they are **not** independently sequenced — do not start a later phase's story before its prerequisite phase's checkpoint passes.
+Unlike a typical spec where stories are independent from a foundational phase onward, this feature has an **authored, non-negotiable phase order** (spec Section 14): US4/US5/US6/US7 (image) → US1/US2/US3/US8 (routing) → token budgeting → US10 (generation) → US3 continued (retrieval fusion) → US9 (cross-chat) → US10 continued (grounding). Stories are still independently testable at their own checkpoint (each phase has its own Independent Test), but they are **not** independently sequenced — do not start a later phase's story before its prerequisite phase's checkpoint passes.
 
 ### Within Each Phase
 
-- Tests MUST be written and FAIL before implementation (Constitution VI).
-- Diagnostics/type extensions before behavioral wiring (Phase 2 pattern, reused at each phase where a diagnostics field goes from placeholder to real).
+- Tests MUST be written and FAIL before implementation, for the five phases that have required tests (Constitution VI, spec Section 12). Phase 5 and Phase 8 do not have a required-tests subsection by design.
+- Diagnostics/type extensions before behavioral wiring (Phase 1 pattern, reused at each phase where a diagnostics field goes from placeholder to real).
 - Story complete (checkpoint passes) before moving to the next phase.
 
 ### Parallel Opportunities
 
 - All Setup tasks (T001–T003) run in parallel.
-- Within Foundational, T004/T005/T008 run in parallel; T006 depends on T005, T007 depends on T004+T006.
+- Within Phase 1, T004/T005/T008 run in parallel; T006 depends on T005, T007 depends on T004+T006.
 - Within each phase's Tests subsection, all `[P]`-marked tests run in parallel (different files).
-- T009/T010 (Phase 3 tests) run in parallel; implementation tasks T011→T012→T013→T014→T015 are sequential (same file, layered wiring).
-- T016/T017/T018 (Phase 4 tests) run in parallel; T019→T020→T021 are sequential (same orchestrator file); T022 is independent once T021 lands.
-- T023–T026 (Phase 5 tests) run in parallel; T027–T030 are largely sequential (same files/shared constant).
-- T031/T032 (Phase 6 tests) run in parallel; T033/T034 can run in parallel (different files), T035 depends on T034.
-- T039/T040 (Phase 8 tests) run in parallel; T041/T042 run in parallel, T043 depends on both, T044/T045 run in parallel after T043.
+- T009/T010/T011 (Phase 2 tests) run in parallel; implementation tasks T012→T013→T014→T015→T016→T017 are sequential (same file, layered wiring).
+- T018/T019/T020 (Phase 3 tests) run in parallel; T021→T022→T023 are sequential (same orchestrator file).
+- T024–T028 (Phase 4 tests) run in parallel; T029–T033 are largely sequential (same files/shared constant), though T032 (buckets) and T033 (recalibration) can overlap once T029/T031 land.
+- T035 and T036 (Phase 5) can run in parallel (different files) once T034 (verification) completes; T037 depends on T036.
+- T042/T043 (Phase 7 tests) run in parallel; T044/T045 run in parallel, T046 depends on both, T047/T048 run in parallel after T046.
 
 ---
 
-## Parallel Example: Phase 3 (Image Continuity)
+## Parallel Example: Phase 2 (Image Continuity)
 
 ```bash
 # Tests first (must fail):
 Task: "T009 pixel-dependent policy tests in tests/unit/inference/ImageEvidencePolicy.test.ts"
 Task: "T010 older-image resolution tests in tests/unit/persistence/EvidenceRepository.test.ts"
+Task: "T011 ambiguous-image-reference default tests in tests/unit/inference/ContextOrchestrator.test.ts"
 
 # Then sequential wiring (same orchestrator file):
-Task: "T011 wire new-image-question resolution"
-Task: "T012 wire same-image-follow-up reuse"
-Task: "T013 wire older-image-reference resolution"
-Task: "T014 implement use-original re-inference trigger"
+Task: "T012 wire new-image-question resolution"
+Task: "T013 wire same-image-follow-up reuse"
+Task: "T014 wire unambiguous older-image-reference resolution"
+Task: "T015 implement ambiguous-reference default"
+Task: "T016 implement use-original re-inference trigger"
 ```
 
 ---
@@ -266,24 +283,25 @@ Task: "T014 implement use-original re-inference trigger"
 
 ### MVP Scope
 
-This feature's spec explicitly mandates a phase order (Section 14) that does **not** start with the highest-priority user story alone — image continuity (US4/5/6/7) ships before minimal-context routing (US1/2/3), because the router's classification and image-decision fields need to exist and be observable (Phase 2) before either behavioral slice lands, and image continuity was ordered first among the two. The realistic MVP checkpoint is therefore **Setup + Foundational + Phase 3 + Phase 4** (T001–T022): at that point, independent questions get zero context, follow-ups get only what they need, long conversations stay bounded, image continuity (including pixel-dependent re-inference) works end-to-end, and voice-transcribed input is confirmed to route identically — covering 8 of the 10 user stories' core behavior (US1, US2, US3, US4, US5, US6, US7, US8).
+This feature's spec explicitly mandates a phase order (Section 14) that does **not** start with the highest-priority user story alone — image continuity (US4/5/6/7) ships before minimal-context routing (US1/2/3), because the router's classification and image-decision fields need to exist and be observable (Phase 1) before either behavioral slice lands, and image continuity was ordered first among the two. The realistic MVP checkpoint is therefore **Setup + Phase 1 + Phase 2 + Phase 3** (T001–T023): at that point, independent questions get zero context, follow-ups get only what they need, long conversations stay bounded, image continuity (including ambiguous-reference safety and pixel-dependent re-inference) works end-to-end, and voice-transcribed input is confirmed (manually) to route identically — covering 8 of the 10 user stories' core behavior (US1, US2, US3, US4, US5, US6, US7, US8).
 
 ### Incremental Delivery
 
-1. Setup + Foundational → classification/diagnostics observable, no behavior change.
-2. Phase 3 (image) → Phase 4 (routing) → **MVP checkpoint**, validate against `quickstart.md` Phases 1–3.
-3. Phase 5 (token budgeting) → validate MV-007.
-4. Phase 6 (generation/repetition) → validate MV-010.
-5. Phase 7 (retrieval fusion, gated) → ships inert until the embedding manifest is approved.
-6. Phase 8 (cross-chat) → validate MV-008, only after Phases 3–6 are confirmed stable in production use.
-7. Phase 9 (grounding) → validate `quickstart.md` Phase 8, only after Phases 3–8 are confirmed stable.
-8. Phase 10 → full regression and documentation pass.
+1. Setup + Phase 1 → classification/diagnostics observable, no behavior change.
+2. Phase 2 (image) → Phase 3 (routing) → **MVP checkpoint**, validate against `quickstart.md` Phases 1–3.
+3. Phase 4 (token budgeting) → validate MV-016.
+4. Phase 5 (generation/repetition) → validate MV-011 manually.
+5. Phase 6 (retrieval fusion, gated) → ships inert until the embedding manifest is approved.
+6. Phase 7 (cross-chat) → validate MV-014, only after Phases 1–6 are confirmed stable in production use.
+7. Phase 8 (grounding) → validate `quickstart.md` Phase 8, only after Phases 1–7 are confirmed stable.
+8. Phase 9 → full manual validation matrix, airplane-mode check, and regression pass.
 
 ---
 
 ## Notes
 
-- Write one focused failing suite per invariant boundary, then implement — mirrors Spec 006's testing philosophy (reduced-test, not exhaustive). Pinned constants (RRF `k = 60`, `COSINE_SIMILARITY_THRESHOLD = 0.62`) are asserted inside their owning suites (T036, T038), not in separate micro-tests.
-- Do not add UI snapshot tests, nondeterministic model-output assertions, or exact-wording checks anywhere in this feature (spec Section 12).
-- T037/T038 (Phase 7) and any embedding-dependent portion of Phase 8 (T043) MUST NOT be merged as reachable/enabled production behavior until the pre-existing embedding-artifact approval lands — they ship as tested, dead code behind the existing lexical-fallback path, exactly like `EmbeddingService`/`EmbeddingBackfill` do today.
+- Write one focused failing suite per invariant boundary, then implement — mirrors Spec 006's testing philosophy (reduced-test, not exhaustive). Pinned constants (RRF `k = 60`, `COSINE_SIMILARITY_THRESHOLD = 0.62`) are asserted inside their owning suites (T038), not in separate micro-tests.
+- Do not add UI snapshot tests, nondeterministic model-output assertions, exact-wording checks, or tests for OCR/counting/visual-correctness accuracy anywhere in this feature (spec Section 12).
+- Phase 5 (generation/repetition) and Phase 8 (grounding) intentionally have no "write failing tests first" subsection — they are outside the five required test areas and are validated manually/via `src/evaluation` (Phase 8's own tests, if built, are scoped separately at that time and are not part of this feature's required coverage).
+- T039/T040/T041 (Phase 6) and the embedding-dependent portion of Phase 7 (T046) MUST NOT be merged as reachable/enabled production behavior until the pre-existing embedding-artifact approval lands — they ship as tested, dead code behind the existing lexical-fallback path, exactly like `EmbeddingService`/`EmbeddingBackfill` do today.
 - Commit by logical phase rather than one commit per task, consistent with Spec 006 practice.

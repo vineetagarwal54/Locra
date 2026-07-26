@@ -4,7 +4,9 @@ import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import { useModelStore } from '../store/modelStore';
 import { useSettingsStore } from '../store/settingsStore';
 import type { IInferenceQueue } from '../types/interfaces';
+import type { InferenceRequest } from '../types/models';
 
+import type { ImageSelectionResult } from './ContextOrchestrator';
 import { deviceResourcePolicy } from './DeviceResourcePolicy';
 import { inferenceEngineAdapter } from './InferenceEngineRegistry';
 import { createInferenceQueue } from './InferenceQueue';
@@ -29,3 +31,16 @@ export const inferenceQueue: IInferenceQueue = {
   subscribe: (listener) => queue.subscribe(listener),
   getState: () => queue.getState(),
 };
+
+export function applyImageSelectionToInferenceRequest(
+  request: InferenceRequest,
+  selection: ImageSelectionResult | null,
+): InferenceRequest {
+  if (selection?.decision !== 'use-original' || selection.originalPath === null) {
+    return request;
+  }
+  return {
+    ...request,
+    imagePath: selection.originalPath,
+  };
+}

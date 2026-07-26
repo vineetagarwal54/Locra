@@ -155,7 +155,7 @@ describe('ContextOrchestrator', () => {
     const messages = [
       ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
       ...completedTurn(2, 'Inspect the chair.', 'The chair is wooden.', '/images/chair.jpg'),
-      currentMessage(3, 'Which serial code was visible on the label?'),
+      currentMessage(3, 'Which object was visible in the label image?'),
     ];
     let memory = mergeVisualEvidenceIntoMemory(
       null,
@@ -324,7 +324,7 @@ describe('ContextOrchestrator', () => {
     expect(result.context.mediaEvidence).toEqual([]);
   });
 
-  it('includes image evidence on an active image turn even without visual keywords', () => {
+  it('routes a newly attached image to original-pixel inference', () => {
     const messages = [
       ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
       {
@@ -347,10 +347,11 @@ describe('ContextOrchestrator', () => {
       createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
     );
 
-    expect(result.context.mediaEvidence).toHaveLength(1);
+    expect(result.context.mediaEvidence).toEqual([]);
+    expect(result.imageSelection?.decision).toBe('use-original');
   });
 
-  it('still includes image evidence for explicit visual language', () => {
+  it('routes a pixel-dependent visual follow-up to original-pixel inference', () => {
     const messages = [
       ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
       currentMessage(2, 'What color was shown in the image?'),
@@ -365,7 +366,8 @@ describe('ContextOrchestrator', () => {
       createCanonicalConversationSnapshot(conversation(messages, memory), 'user-2'),
     );
 
-    expect(result.context.mediaEvidence).toHaveLength(1);
+    expect(result.context.mediaEvidence).toEqual([]);
+    expect(result.imageSelection?.decision).toBe('use-original');
   });
 
   it('advances the rolling summary boundary as completed turns age out of the exact window', () => {
@@ -432,11 +434,11 @@ describe('ContextOrchestrator', () => {
     expect(result.diagnostics?.budget).toEqual(result.context.budget);
   });
 
-  it('marks excluded media evidence candidates with a budget or item-cap reason', () => {
+  it('selects only the active image evidence for a generic image follow-up', () => {
     const messages = [
       ...completedTurn(1, 'Inspect the label.', 'The label is readable.', '/images/label.jpg'),
       ...completedTurn(2, 'Inspect the chair.', 'The chair is wooden.', '/images/chair.jpg'),
-      currentMessage(3, 'Which serial code was visible on the label?'),
+      currentMessage(3, 'Which object is visible in the image?'),
     ];
     let memory = mergeVisualEvidenceIntoMemory(
       null,
@@ -458,13 +460,12 @@ describe('ContextOrchestrator', () => {
     );
 
     const candidates = result.diagnostics?.mediaEvidenceCandidates ?? [];
-    expect(candidates).toHaveLength(2);
+    expect(candidates).toHaveLength(1);
     const selected = candidates.filter((candidate) => candidate.selected);
     const excluded = candidates.filter((candidate) => !candidate.selected);
     expect(selected).toHaveLength(1);
     expect(selected[0]?.exclusionReason).toBeNull();
-    expect(excluded).toHaveLength(1);
-    expect(excluded[0]?.exclusionReason).toBe('item-cap');
+    expect(excluded).toHaveLength(0);
   });
 
   it('marks a candidate excluded for budget when the item cap has not been reached', () => {
@@ -626,5 +627,178 @@ describe('ContextOrchestrator', () => {
 
     expect(result.context.mediaEvidence).toEqual([]);
     expect(result.context.budget.usedUnits).toBeLessThanOrEqual(120);
+  });
+
+  it('defaults an ambiguous reference among three images to the active image', () => {
+    const messages = [
+      ...completedTurn(1, 'Describe this.', 'A receipt.', '/images/one.jpg'),
+      ...completedTurn(2, 'Describe this.', 'A chair.', '/images/two.jpg'),
+      ...completedTurn(3, 'Describe this.', 'A label.', '/images/three.jpg'),
+      currentMessage(4, 'What is visible in the image?'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-1';
+    messages[2].attachments[0].imageAssetId = 'asset-2';
+    messages[4].attachments[0].imageAssetId = 'asset-3';
+    const activeEvidence = {
+      id: 'evidence-3',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-3',
+      image_asset_id: 'asset-3',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'label',
+      visible_features_json: '["white paper"]',
+      visible_text_json: '["ACTIVE"]',
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-3',
+      created_at: 3,
+    };
+    const resolveReferencedImageEvidence = jest.fn(() => null);
+    const orchestrator = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => activeEvidence,
+        resolveReferencedImageEvidence,
+      },
+    });
+
+    const result = orchestrator.orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-4'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.diagnostics?.classification).toEqual(expect.objectContaining({
+      imageReferenceAmbiguous: true,
+      isSameImageFollowUp: true,
+      isOlderImageReference: false,
+      referencedImageId: null,
+    }));
+    expect(result.diagnostics?.imageReferenceAmbiguous).toBe(true);
+    expect(result).toEqual(expect.objectContaining({
+      imageSelection: expect.objectContaining({
+        decision: 'use-evidence',
+        imageAssetId: 'asset-3',
+      }),
+    }));
+    expect(result.context.mediaEvidence[0]?.sourcePath).toBe('asset-3');
+    expect(resolveReferencedImageEvidence).not.toHaveBeenCalled();
+  });
+
+  it('reuses active evidence for a non-pixel same-image follow-up', () => {
+    const messages = [
+      ...completedTurn(1, 'Describe this.', 'A receipt.', '/images/receipt.jpg'),
+      currentMessage(2, 'What kind of document is that image?'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-receipt';
+    const evidence = {
+      id: 'evidence-receipt',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-receipt',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'receipt',
+      visible_features_json: '["paper document"]',
+      visible_text_json: '[]',
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-1',
+      created_at: 1,
+    };
+    const resolveReferencedImageEvidence = jest.fn(() => null);
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => evidence,
+        resolveReferencedImageEvidence,
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.imageSelection).toEqual(expect.objectContaining({
+      decision: 'use-evidence',
+      imageAssetId: 'asset-receipt',
+    }));
+    expect(result.context.mediaEvidence[0]?.summary).toBe('receipt');
+    expect(resolveReferencedImageEvidence).not.toHaveBeenCalled();
+  });
+
+  it('uses exact older-image evidence when its original is missing and pixels are not needed', () => {
+    const messages = [
+      ...completedTurn(1, 'Describe this.', 'A receipt.', '/images/receipt.jpg'),
+      ...completedTurn(2, 'Describe this.', 'A chair.', '/images/chair.jpg'),
+      currentMessage(3, 'What object was in the first image?'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-receipt';
+    messages[0].attachments[0].available = false;
+    messages[2].attachments[0].imageAssetId = 'asset-chair';
+    const evidence = {
+      id: 'evidence-receipt',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-receipt',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'receipt',
+      visible_features_json: '["paper document"]',
+      visible_text_json: '["TOTAL $12"]',
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-1',
+      created_at: 1,
+    };
+    const resolveReferencedImageEvidence = jest.fn(() => evidence);
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => null,
+        resolveReferencedImageEvidence,
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(resolveReferencedImageEvidence).toHaveBeenCalledWith({
+      conversationId: 'conversation-a',
+      imageAssetId: 'asset-receipt',
+    });
+    expect(result.imageSelection?.decision).toBe('use-evidence');
+    expect(result.context.mediaEvidence[0]?.sourcePath).toBe('asset-receipt');
+  });
+
+  it('reports original-unavailable without stale evidence for a pixel-dependent older image', () => {
+    const messages = [
+      ...completedTurn(1, 'Describe this.', 'A receipt.', '/images/receipt.jpg'),
+      ...completedTurn(2, 'Describe this.', 'A chair.', '/images/chair.jpg'),
+      currentMessage(3, 'Read the exact total from the first image.'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-receipt';
+    messages[0].attachments[0].available = false;
+    messages[2].attachments[0].imageAssetId = 'asset-chair';
+    const evidence = {
+      id: 'evidence-receipt',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-receipt',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'receipt',
+      visible_features_json: '[]',
+      visible_text_json: '["TOTAL $12"]',
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-1',
+      created_at: 1,
+    };
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => null,
+        resolveReferencedImageEvidence: () => evidence,
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.imageSelection?.decision).toBe('original-unavailable');
+    expect(result.context.mediaEvidence).toEqual([]);
+    expect(result.diagnostics?.imageDecision).toBe('original-unavailable');
   });
 });

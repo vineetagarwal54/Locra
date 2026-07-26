@@ -13,12 +13,14 @@ export function resolveGenerationTarget(
 
 - **MUST** return the existing `getResponseTokenBudget(mode)`/`getResponseGenerationLimit(mode)` values unchanged for any classification other than a short independent-question/follow-up case (spec Non-Goal: not changing response-mode generation limits wholesale).
 - **MUST** return a reduced `targetTokens` (exact ratio pinned by test) when `classification.isIndependentTextQuestion || classification.isTextFollowUp` is true and no other classification (image/long-context) is also active, so a short, self-contained question is not encouraged to reach the mode's full soft target (spec FR-032/FR-034).
+- **MUST NOT** reduce `targetTokens` or `generationLimit` for a request that genuinely needs a longer answer (e.g., `isLongContextRetrievalRequest`, or any request where the mode itself calls for detail) — length follows task need in both directions (spec FR-032).
 - **MUST NOT** reduce `generationLimit` (the hard `n_predict` cap) below what's needed to finish a normal short answer cleanly — only the soft target shifts; the hard cap keeps its existing safety margin.
 
 ## Earlier in-stream loop stopping (new)
 
 - **MUST** run an incremental loop-detection check against the accumulating streamed buffer at the same throttle cadence already used for streaming checkpoints (Spec 006 FR-A02), reusing the detection logic already proven in `AnswerPostProcessor.collapseLoopingTail` (spec FR-033).
-- **MUST**, on confirming a loop mid-stream, call the existing `stopCompletion()` native method (already wired in `QwenLlamaRuntime.ts` for user cancellation) — no new native call is introduced.
+- **MUST**, on confirming a loop mid-stream, call the existing `stopCompletion()` native method (already wired in `QwenLlamaRuntime.ts` for user cancellation) — no new native call is introduced. Before pinning any detection threshold, re-verify `stopCompletion()`'s current call shape and behavior against the actually-linked `llama.rn` version and manually validate on a physical device (spec FR-036a, Constitution IX) — no sampling/stopping constant is assumed from a prior version or from documentation for a different runtime.
+- **MUST** preserve the partial text already streamed when a loop-triggered stop occurs, exactly as Spec 006's existing checkpointing/interruption-recovery behavior (FR-A02) already guarantees for user-initiated cancellation and failure — this is the same code path, not a new one.
 - **MUST** run the existing full post-processing pass (`postProcessAnswer`) on the resulting (now shorter) buffer exactly as it would on a normally completed answer, so the persisted/displayed text is still cleaned and verdict-tagged.
 
 ## Post-processing (relaxed requirement)
@@ -34,4 +36,8 @@ export function postProcessAnswer(raw: string): ProcessedAnswer; // existing sig
 ## Invariants
 
 - No change in this contract adds a second model-generation pass (spec Non-Goal); classification-aware targeting and earlier stopping both act on the single existing generation call.
-- Existing `TRUNCATED_ANSWER_NOTICE`/`LOOPING_ANSWER_NOTICE` user-facing strings and verdict semantics (`AnswerVerdict`) are unchanged unless a specific improvement requires updating them, in which case the change is scoped and tested like any other `AnswerPostProcessor` change.
+- Existing `TRUNCATED_ANSWER_NOTICE`/`LOOPING_ANSWER_NOTICE` user-facing strings and verdict semantics (`AnswerVerdict`) are unchanged unless a specific improvement requires updating them.
+
+## Testing note
+
+This contract's behavior (output-length targeting, loop-stop timing, post-processing improvements) is validated manually and via the existing evaluation harness (spec Section 11, MV-011), not by new automated unit tests — generation quality is explicitly outside the five focus areas in spec Section 12. Implementers MAY still add ordinary tests for genuinely deterministic pure helpers if convenient, but none are required by this feature's testing policy.

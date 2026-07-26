@@ -253,11 +253,12 @@ function toConversationMessage(row: MessageRow): ConversationMessage {
     id: row.id,
     role: row.role,
     text: row.text,
-    attachments: row.role === 'user'
+        attachments: row.role === 'user'
       ? imageRepository.getAssetsForMessage(row.id).map((asset) => ({
           kind: 'image' as const,
           path: asset.local_path,
           available: asset.available === 1,
+          imageAssetId: asset.id,
         }))
       : [],
     status: row.role === 'user' ? 'completed' : row.status === 'submitted' ? 'completed' : row.status,

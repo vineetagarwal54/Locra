@@ -1,8 +1,8 @@
-# Contract: Optional Scoped Cross-Chat Retrieval (Phase 7 — built only after Phases 1–5 are stable)
+# Contract: Optional Scoped Cross-Chat Retrieval (Phase 7 — built only after Phases 1–6 are stable)
 
 **Module**: extended `src/persistence/sqlite/Migrations.ts`, `src/persistence/ConversationRepository.ts`, `src/store/settingsStore.ts`, `src/retrieval/HybridRetriever.ts` | New UI: `src/components/settings/CrossChatSettingRow.tsx`
 
-This entire contract is out of scope for Phases 1–5 delivery; nothing in Phases 1–5 may import or depend on the shapes below.
+This entire contract is out of scope for Phases 1–6 delivery (routing, image continuity, token budgeting, generation improvements, and same-chat semantic retrieval); nothing in Phases 1–6 may import or depend on the shapes below.
 
 ## Schema migration
 

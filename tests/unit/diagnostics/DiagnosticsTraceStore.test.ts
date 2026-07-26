@@ -14,6 +14,7 @@ import {
   type DiagnosticTurnRecord,
   type DiagnosticsStorage,
 } from '../../../src/diagnostics/DiagnosticsTraceStore';
+import { ContextOrchestrator } from '../../../src/inference/ContextOrchestrator';
 
 class TestDiagnosticsStorage implements DiagnosticsStorage {
   private readonly values = new Map<string, string | number | boolean | ArrayBuffer>();
@@ -62,6 +63,38 @@ describe('DiagnosticsTraceStore', () => {
     const listed = store.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]?.id).toBe('turn-1');
+  });
+
+  it('round-trips the complete routing diagnostics shape', () => {
+    const contextDiagnostics = new ContextOrchestrator().orchestrate(
+      {
+        version: 'canonical-conversation-snapshot-v1',
+        conversationId: 'conversation-a',
+        priorMessages: [],
+        currentMessage: {
+          id: 'user-1',
+          role: 'user',
+          text: 'What is the capital of Japan?',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1,
+        },
+        contextMemory: null,
+      },
+      { diagnosticsEnabled: true },
+    ).diagnostics;
+    const store = new DiagnosticsTraceStore(new TestDiagnosticsStorage());
+    store.append(makeRecord({ contextDiagnostics }));
+
+    expect(store.list()[0]?.contextDiagnostics).toEqual(expect.objectContaining({
+      classification: expect.objectContaining({ isIndependentTextQuestion: true }),
+      retrievalMode: 'none',
+      imageDecision: 'not-applicable',
+      imageReferenceAmbiguous: false,
+      crossChatActive: false,
+      groundingVerdict: null,
+    }));
   });
 
   it('filters listed turns by conversation id', () => {

@@ -16,12 +16,14 @@ Computed per request by `RequestClassifier`; not persisted — it is a transient
 | `isPixelDependent` | boolean | OCR/counting/price/detailed-visual-inspection language detected; combinable with any image classification. |
 | `isLongContextRetrievalRequest` | boolean | Conversation length exceeds the response mode's recent-turn floor and the request plausibly concerns earlier content. |
 | `isCrossChatEligible` | boolean | Cross-chat setting enabled AND current conversation not excluded AND request is otherwise eligible (Phase 7 only; always `false` before Phase 7 ships). |
-| `referencedImageId` | string \| null | Set only when `isOlderImageReference` is true. |
+| `referencedImageId` | string \| null | Set only when `isOlderImageReference` is true and the reference is unambiguous. |
+| `imageReferenceAmbiguous` | boolean | `true` when the request's image reference could plausibly mean more than one prior image with no disambiguating detail; when `true`, `isOlderImageReference` is `false` and `isSameImageFollowUp` is `true` instead (spec FR-012a). |
 
 **Validation rules**:
 - At least one of `isIndependentTextQuestion` / `isTextFollowUp` is always true; they are mutually exclusive with each other (a request is either independent or a follow-up, never both), but each may combine with any image/pixel/long-context/cross-chat flag.
 - `isIndependentTextQuestion === true` implies every other flag is `false` except when another classification is *simultaneously and independently* true from its own signal (e.g., a genuinely independent question that also happens to attach a new image is `isIndependentTextQuestion && isNewImageQuestion`) — per spec FR-003's "unless the request also carries another classification" carve-out.
 - `referencedImageId` is non-null if and only if `isOlderImageReference` is true.
+- `imageReferenceAmbiguous` can only be `true` when the request contains image-reference language at all; when `true`, the classifier MUST set `isSameImageFollowUp = true` and `isOlderImageReference = false` (the ambiguous-reference default, spec FR-012a) rather than leaving both `false`.
 
 ## TokenBudget / ContextBudgetPolicy (changed)
 
@@ -30,12 +32,23 @@ Replaces `CharacterContextBudgetPolicy` as the concrete implementation the runti
 | Field | Type | Notes |
 |---|---|---|
 | `policyId` | string | New value, e.g. `'token-estimate-budget-v1'`, replacing `'character-budget-v1'`. |
-| `maximumUnits` | number | Now a token count (or calibrated token-equivalent), not a character count; recalibrated per mode (see `research.md` §1 and Open Questions). |
-| `measure(content)` | function | Returns the calibrated token estimate for `content` (same ratio family as `ContextWindow.estimateMessageTokens`), not `content.length`. |
+| `maximumUnits` | number | Now a token count (or calibrated token-equivalent) representing the **selected-context pool only** (bucket 4 of 5, see Reserved Capacity Buckets below), not a character count and not the full context window; recalibrated per mode (see `research.md` §1 and Open Questions). |
+| `measure(content)` | function | Returns the calibrated token estimate for `content` (tier 1 of `research.md` §1's two-tier approach), not `content.length`. Used during iterative candidate selection; not a live native `tokenize()` call. |
+
+**Reserved Capacity Buckets (spec FR-026a)**: the full per-request token accounting is split into five distinct reservations, not one lump pool:
+
+| Bucket | Owner | Notes |
+|---|---|---|
+| 1. System instructions | `SystemPrompt.ts` (existing) | Fixed per response mode; measured once, not re-measured per candidate. |
+| 2. Current request/input | `ContextOrchestrator` (existing `selectRecentTurns` current-request accounting) | Variable; capped via the existing `capMessageToTokenBudget` shortening path in `ContextWindow` if oversized. |
+| 3. Image input | `ContextWindow.IMAGE_RESERVE_TOKENS` (existing constant, currently `768`) | Reserved only when an image is active/referenced for this request; zero otherwise. |
+| 4. Selected-context pool | `ContextBudgetPolicy.maximumUnits` (this entity) | Recent turns, facts, summary, and retrieval combined — the only bucket the router's ranking/eviction logic sizes. |
+| 5. Generated output | `getResponseGenerationLimit(mode)` (existing) | Hard `n_predict` reserve, unchanged mechanism. |
 
 **Validation rules**:
 - `measure()` output for a given string MUST be consistent (deterministic, no randomness) so repeated selection is reproducible (spec FR-006).
-- The router's total `usedUnits` for a fully assembled context MUST NOT exceed what `ContextWindow`'s downstream hard trim (against `QWEN_CONTEXT_TOKEN_LIMIT` minus the generation reserve) would itself allow for the same response mode — the two are reconciled, not merely independently bounded (spec FR-027).
+- Bucket 4 (`maximumUnits`) MUST be sized so that buckets 1 + 2 + 3 + 4 + 5 never exceed `QWEN_CONTEXT_TOKEN_LIMIT` minus `CONTEXT_SAFETY_TOKENS`; bucket 4 MUST NOT be allowed to grow into headroom reserved for 1, 2, 3, or 5.
+- The router's total `usedUnits` for bucket 4 MUST NOT exceed what `ContextWindow`'s downstream hard trim would itself allow for the same response mode once buckets 1/2/3/5 are subtracted — reconciled via the tier-2 final-prompt `tokenize()` check (`research.md` §1), not merely independently bounded (spec FR-027).
 
 ## ImageEvidenceDecision (changed)
 
@@ -76,6 +89,7 @@ Existing shape from `src/retrieval/types.ts` is unchanged in its fields; its *pr
 
 - `score` now reflects the RRF-fused score (§3 in `research.md`) when both lexical and semantic candidates exist, rather than a bare cosine similarity or bare lexical-overlap count.
 - A new internal `fusionSources: ('lexical' | 'semantic')[]` MAY be attached at the retriever layer for diagnostics purposes (not required on the persisted/consumed type, only on the diagnostic candidate record below).
+- A new internal `exactMatchGuaranteed: boolean` MAY be attached at the retriever layer to mark a result that was retained by the exact-match guarantee (spec FR-019a) rather than by its RRF rank alone — diagnostics-visible only, not part of the persisted item.
 
 ## RankedCandidateDiagnostic (changed, Router Diagnostics)
 
@@ -86,6 +100,7 @@ Extends the existing `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` s
 | `classification` | `RequestClassification` | New — recorded once per turn (not per candidate) alongside the existing `budget` field. |
 | `retrievalMode` | `'fused' \| 'lexical-fallback' \| 'none'` | New — which retrieval state (spec FR-013) was actually used for this turn, plus a `retrievalModeReason` string (e.g. `'embeddings-stale'`, `'below-threshold'`, `'no-candidate'`). |
 | `imageDecision` | `ImageEvidenceDecision \| 'not-applicable'` | New — the resolved decision for this turn. |
+| `imageReferenceAmbiguous` | boolean | New — mirrors `RequestClassification.imageReferenceAmbiguous`; `true` when an ambiguous reference was defaulted to the active image (spec FR-012a, FR-037). |
 | `crossChatActive` | boolean | New — `false` until Phase 7 ships; thereafter reflects whether cross-chat scope was used for this turn. |
 | `groundingVerdict` | `'supported' \| 'unsupported' \| null` | New, Phase 8 only — `null`/omitted until Phase 8 ships (spec FR-040). |
 

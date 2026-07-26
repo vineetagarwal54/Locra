@@ -46,6 +46,13 @@ export interface ProductionDiagnosticTurnSummary {
     readonly summariesSelected: number;
     readonly budgetMaximumUnits: number;
     readonly budgetUsedUnits: number;
+    readonly classification: ContextSelectionDiagnostics['classification'] | null;
+    readonly retrievalMode: ContextSelectionDiagnostics['retrievalMode'];
+    readonly retrievalModeReason: string;
+    readonly imageDecision: ContextSelectionDiagnostics['imageDecision'];
+    readonly imageReferenceAmbiguous: boolean;
+    readonly crossChatActive: boolean;
+    readonly groundingVerdict: ContextSelectionDiagnostics['groundingVerdict'];
   };
   readonly targetTokenCount: number;
   readonly generationLimit: number;

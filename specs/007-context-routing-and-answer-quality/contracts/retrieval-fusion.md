@@ -5,7 +5,7 @@
 ## Pinned constants (versioned; change only via recorded evaluation)
 
 - Cosine similarity threshold: `COSINE_SIMILARITY_THRESHOLD = 0.62` (unchanged from Spec 006).
-- Fusion method: Reciprocal Rank Fusion, `k = 60` (research.md §3).
+- Fusion method: Reciprocal Rank Fusion, `k = 60`, plus the exact-match guarantee below (research.md §3).
 
 ## HybridRetriever.search (extended)
 
@@ -23,9 +23,10 @@ export interface HybridSearchInput {
 search(input: HybridSearchInput): RetrievedItem[];
 ```
 
-- **MUST** support three outcomes per call: fused hybrid (both lexical and semantic candidates present), lexical-only fallback (embeddings missing/stale/incompatible/no query vector), or empty (no candidate clears the threshold / no lexical candidates either) (spec FR-013).
+- **MUST** support three outcomes per call: fused hybrid (both lexical and semantic candidates present), lexical-only fallback (embeddings missing, stale, incompatible, still building, no query vector, or a query-embedding call fails at runtime), or empty (no candidate clears the threshold / no lexical candidates either) (spec FR-013). Any error thrown by embedding generation MUST be caught and treated as "embeddings unavailable" for that request, not surfaced as a failed request.
 - **MUST NOT** let a present semantic ranking silently discard a candidate that ranks highly in the lexical ranking; fusion combines both rankings via RRF rather than replacing one with the other (spec FR-014). This changes today's behavior, where a non-empty semantic candidate set currently bypasses lexical scoring entirely.
 - **MUST** dedupe fused results by `sourceMessageId`, keeping the higher fused-score instance, then apply the existing deterministic tie-break (`createdAt` desc, `stableId` asc) from `compareRetrievedItems`.
+- **MUST** apply the exact-match guarantee (spec FR-019a) before the per-request `limit` truncates the list: any lexical candidate containing a verbatim (case-insensitive) match for a number, price-like token, date-like token, or the query's likely proper-noun/identifier token is retained regardless of its RRF rank. This runs whether or not semantic candidates are present — it is a floor on the lexical signal, not a fusion-only behavior.
 
 ## Query-time embedding (new wiring)
 

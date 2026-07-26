@@ -15,6 +15,7 @@ export interface RequestClassification {
   readonly isLongContextRetrievalRequest: boolean;
   readonly isCrossChatEligible: boolean;
   readonly referencedImageId: string | null;
+  readonly imageReferenceAmbiguous: boolean; // true => isSameImageFollowUp is forced true, isOlderImageReference forced false (spec FR-012a)
 }
 
 export function classifyRequest(
@@ -44,6 +45,6 @@ orchestrate(
 
 ## Invariants
 
-- Recent exact turns are never displaced by retrieval, for any classification that includes them (spec FR-004) — unchanged from Spec 006.
+- Recent exact turns are never displaced by retrieval, for any classification that includes them (spec FR-004) — unchanged from Spec 006. A pure independent-text-question classification has no recent-turn floor at all (FR-003/FR-004); this is a deliberate change from Spec 006's unconditional floor — see spec Superseded Requirements.
 - Retrieval (lexical, semantic, or cross-chat) is added only when at least one candidate clears the existing relevance threshold; no filler on an empty result (spec FR-005) — unchanged from Spec 006.
 - Diagnostics record the classification and which of the eight sources were *considered* vs. *selected* for every turn, including independent-question turns where the answer is "considered: none" (spec FR-037, see `diagnostics.md`).

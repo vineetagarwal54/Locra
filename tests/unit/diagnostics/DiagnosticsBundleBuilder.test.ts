@@ -5,6 +5,7 @@ import {
   type AppDiagnosticsInfo,
 } from '../../../src/diagnostics/DiagnosticsBundleBuilder';
 import type { DiagnosticTurnRecord } from '../../../src/diagnostics/DiagnosticsTraceStore';
+import { ContextOrchestrator } from '../../../src/inference/ContextOrchestrator';
 import type { Conversation } from '../../../src/types/models';
 
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
@@ -116,6 +117,34 @@ describe('DiagnosticsBundleBuilder', () => {
     expect(bundle.conversations[0]?.messages).toHaveLength(2);
     expect(bundle.turns).toHaveLength(1);
     expect(bundle.turns[0]?.stages).toHaveLength(2);
+  });
+
+  it('exports routing classification and image decision diagnostics', () => {
+    const conversation = makeConversation();
+    const diagnostics = new ContextOrchestrator().orchestrate(
+      {
+        version: 'canonical-conversation-snapshot-v1',
+        conversationId: conversation.id,
+        priorMessages: [],
+        currentMessage: conversation.messages[0],
+        contextMemory: null,
+      },
+      { diagnosticsEnabled: true },
+    ).diagnostics;
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [conversation],
+      turns: [makeTurn({ contextDiagnostics: diagnostics })],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.turns[0]?.contextDiagnostics).toEqual(expect.objectContaining({
+      classification: expect.objectContaining({ isNewImageQuestion: true }),
+      retrievalMode: 'none',
+      imageDecision: 'use-original',
+      imageReferenceAmbiguous: false,
+      crossChatActive: false,
+      groundingVerdict: null,
+    }));
   });
 
   it('derives refusalRecoveryTriggered from a stage marked as a refusal retry', () => {
