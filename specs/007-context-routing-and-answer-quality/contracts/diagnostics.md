@@ -29,6 +29,10 @@ export interface ContextSelectionDiagnostics {
   readonly imageReferenceAmbiguous: boolean;                    // NEW, spec FR-012a
   readonly imageReferenceResolution: 'not-applicable' | 'new-image' | 'active-image' | 'explicit-ordinal' | 'unique-description' | 'ambiguous-active-fallback';
   readonly crossChatActive: boolean;                            // NEW, actual per-turn scope use
+  readonly crossChatQueried: boolean;                           // expanded scope actually queried
+  readonly crossChatItemsSelected: number;                     // selected items from another chat
+  readonly estimatedPromptTokens: number | null;               // tier-1 final-prompt estimate
+  readonly finalNativePromptTokens: number | null;             // verified formatted prompt count
   readonly groundingVerdict: 'supported' | 'unsupported' | null; // NEW, diagnostics-only; null when not applicable
 }
 ```
@@ -40,7 +44,8 @@ export interface ContextSelectionDiagnostics {
 - **MUST** record `imageDecision` even when the answer is `'not-applicable'`.
 - **MUST** record `imageReferenceAmbiguous: true` whenever an image reference was defaulted to the active image per FR-012a, so the ambiguous-reference default is always disclosed, never silent.
 - **MUST** set `groundingVerdict` only from the deterministic Phase 8 assessment;
-  use `null` when no selected image/retrieved evidence makes assessment applicable.
+  use selected context plus the current turn's fresh `hiddenEvidence`, and use
+  `null` only when no image/retrieved evidence makes assessment applicable.
   Older pre-Phase-8 records may omit it without being considered incomplete.
 
 ## DiagnosticsBundleBuilder / DiagnosticsExportService (extended)

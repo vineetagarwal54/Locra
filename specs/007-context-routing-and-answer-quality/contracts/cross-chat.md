@@ -33,7 +33,15 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 
 ## HybridRetriever scope resolution (extended)
 
-- When `crossChatMemoryEnabled` is true, the effective `conversationIds` passed into `HybridRetriever.search` **MUST** expand from `[currentConversationId]` to `[currentConversationId, ...otherLocalConversationIds.filter(id => !excludedFromCrossChat(id))]`, provided the current conversation itself is not excluded (spec FR-021/FR-022).
+- Cross-chat eligibility is independent of the same-chat long-context threshold.
+  In a new, short, or long chat, only explicit memory-seeking or
+  prior-conversation language may request expanded scope.
+- When `crossChatMemoryEnabled` is true and that intent is present, the effective
+  `conversationIds` passed into `HybridRetriever.search` **MUST** expand from
+  `[currentConversationId]` to eligible, non-excluded local conversations,
+  provided the current conversation itself is not excluded (spec FR-021/FR-022).
+- Ordinary independent questions and ordinary same-chat follow-ups **MUST NOT**
+  query other conversations even while the setting is enabled.
 - When `crossChatMemoryEnabled` is false, or the current conversation is excluded, scope **MUST** remain exactly `[currentConversationId]` — identical to pre-Phase-7 behavior (spec FR-023).
 - Scope filtering **MUST** happen before similarity/lexical scoring (spec FR-018) — unchanged principle, now applied across the expanded scope.
 - Cross-chat items **MUST** use the same relevance threshold, fusion, deduplication, and untrusted-source attribution as same-chat retrieval (spec FR-022).
@@ -51,3 +59,5 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 
 - A conversation with `excludedFromCrossChat = true` never contributes to another conversation's retrieval and never receives cross-chat content itself, in both directions, regardless of the global setting (spec FR-021, edge case).
 - Zero cross-chat items ever appear in diagnostics for any turn while the global setting is off (spec FR-025) — directly testable via the existing diagnostics export.
+- Diagnostics separately record whether expanded cross-chat scope was queried and
+  how many selected retrieval items came from another conversation.

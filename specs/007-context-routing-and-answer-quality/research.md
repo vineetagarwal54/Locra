@@ -8,16 +8,18 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 
 **Decision (two-tier, per spec FR-026b — prefer runtime-backed counting when safely available, else a calibrated estimator)**:
 1. **Iterative candidate selection/ranking** (the router evaluating many recent turns, facts, summary entries, and retrieved candidates while assembling context): use a conservative, deterministic, Qwen-calibrated character-to-token estimator with safety headroom — starting from the same `Math.ceil(length / 3)`-style ratio already used by `ContextWindow.estimateMessageTokens`, then recalibrated (see below). This is **not** "safely available" runtime counting: calling native `tokenize()` once per candidate, for every candidate, on every request, would add an async native round-trip to a loop that today is fast, synchronous, in-process JS, and would risk contention with the single-flight `DeviceResourcePolicy` if the native context isn't already resident for this request.
-2. **Final assembled-prompt verification**: once the router has selected its final source set for a request that is about to run inference anyway (i.e., the native context is being acquired for that same request's completion, not a separate resource lease taken solely for counting), call the real `tokenize()` on the fully assembled prompt as a safety-headroom check before generation starts. This is "safely available" runtime counting — one call, reusing a context acquisition the request needed regardless — and gives an exact reconciliation with `ContextWindow`'s hard trim (FR-027) instead of two independently-calibrated estimates that could drift apart.
+2. **Final assembled-prompt verification**: once selection is complete, format and tokenize the actual Qwen prompt on the inference context the request already needs. If over limit, remove eligible context, format/tokenize again, then shorten the current input from measured native excess if necessary. A small explicit pass cap guarantees termination; completion is called only after a final fitting measurement. This bounded repeated check is the reconciliation point with `ContextWindow` (FR-027).
 3. **Offline calibration**: use the real `tokenize()` call, run once during Phase 4 implementation (and revisited only through recorded evaluation) against a representative set of Locra transcripts, to tune the exact character-to-token ratio and per-mode token budgets used by tier 1's estimator — not as a per-request runtime call.
 
-**Rationale**: This directly satisfies FR-026b's ordering — real counting where it can be obtained essentially for free (tier 2), a calibrated deterministic estimate where a live native call would harm latency or single-flight safety (tier 1) — while resolving the Section 1 "two measurements aren't calibrated against each other" gap: tier 2's exact check is the reconciliation point between the router's own budget and `ContextWindow`'s hard trim, rather than hoping two separately-calibrated estimates happen to agree.
+**Rationale**: This satisfies FR-026b's ordering while closing the one-shot defect: native token density can differ materially for non-English, code-heavy, and identifier-heavy text, so any reduction must be remeasured rather than assumed to fit.
 
 **Alternatives considered**:
-- *Call `tokenize()` live per candidate during selection*: most accurate, but adds native round-trips to the hot routing path and couples routing latency to native context availability; rejected for tier 1, adopted only for the single final-prompt check (tier 2).
+- *Call `tokenize()` live per candidate during selection*: rejected for tier 1; bounded repeated calls are used only for final prompt reconciliation when an over-limit measurement requires reduction.
 - *Keep raw character counts everywhere*: simplest, but is exactly the problem being fixed (spec Problem/Goals §1) — character budgets don't track the real 4096-token Qwen context window, especially as content mixes short/long words, code, and non-Latin text.
 - *Adopt a third-party JS tokenizer library (e.g., a BPE tokenizer package)*: would need to exactly match Qwen's tokenizer to be worth the dependency; adds a new native/JS dependency for marginal accuracy gain over the two-tier approach above, and the spec explicitly prohibits adding a dependency solely for token counting (FR-026b).
-- *Never use real `tokenize()` at all*: rejected — it's already linked and safely usable for the one-call-per-request final check, so declining to use it there would leave FR-026b's "prefer runtime-backed counting when safely available" unmet without a real reason.
+- *Never use real `tokenize()` at all*: rejected — it is already linked and
+  safely usable for bounded final reconciliation, so declining to use it would
+  leave FR-026b unmet.
 
 ## 2. Conversational-reference classification heuristic
 
@@ -111,3 +113,29 @@ forwards the context id, text, and optional media paths to `llamaTokenize`;
 `detokenize` forwards the context id and token array to `llamaDetokenize`; and
 `stopCompletion` forwards the context id to `llamaStopCompletion`. No new
 dependency or network call is needed.
+
+## 10. Post-implementation correction decisions
+
+- **Visual gating**: pixel-detail words (`cost`, `count`, `total`, `number`,
+  `color`, and similar) are insufficient by themselves. Pixel routing requires a
+  new image, explicit visual language, a resolved ordinal/description, or a
+  uniquely strong stored-evidence match. This prevents stale image activation for
+  ordinary text questions after an image turn.
+- **Cross-chat eligibility**: current-chat length and cross-chat intent are
+  independent. Same-chat retrieval still uses the long-context threshold;
+  opted-in cross-chat scope may run from a new or short chat only for explicit
+  memory-seeking/prior-conversation language. Scope is filtered before scoring.
+- **Exact names**: likely proper names are extracted at any query position,
+  including multi-word names. Generic sentence-opening question and command words
+  are removed explicitly rather than discarding the first capitalized token.
+- **Embedding sequencing**: deterministic classification runs before any query
+  embedding. The approved runtime is invoked only for eligible same-chat or
+  cross-chat retrieval; inactive manifests, independent questions, and ordinary
+  follow-ups make zero embedding calls.
+- **Grounding input**: diagnostics combine selected conversation/retrieved context
+  with the current inference's fresh hidden visual evidence. The canonical
+  selected context and visible answer remain unchanged.
+- **Native stopping**: `QwenLlamaRuntime` is the sole loop-triggered
+  `stopCompletion()` owner. User cancellation is idempotent and queue-level
+  streaming does not issue a second native stop. Mocked acceptance is complete;
+  physical acceptance remains T034.

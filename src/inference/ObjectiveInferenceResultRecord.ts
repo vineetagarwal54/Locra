@@ -6,6 +6,8 @@ export const OBJECTIVE_INFERENCE_RESULT_RECORD_FIELDS = [
   'totalEndToEndLatencyMs',
   'generatedTokens',
   'promptTokens',
+  'estimatedPromptTokens',
+  'finalNativePromptTokens',
   'truncated',
   'looping',
   'timestamp',
@@ -27,6 +29,8 @@ export interface ObjectiveInferenceResultRecord {
   totalEndToEndLatencyMs: number;
   generatedTokens: number;
   promptTokens?: number;
+  estimatedPromptTokens?: number;
+  finalNativePromptTokens?: number;
   truncated: boolean;
   looping: boolean;
   timestamp: string;

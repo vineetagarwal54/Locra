@@ -270,14 +270,15 @@ describe('unified chat mixed-multimodal flow (T040)', () => {
     expect(messageById(conversation, t2.assistantMessageId)?.text).toBe(EVIDENCE_A);
     expect(messageById(conversation, t2.assistantMessageId)?.errorMessage).toBeNull();
 
-    // Pixel-dependent follow-ups re-run the correct original image, while
-    // non-visual text turns remain image-free.
+    // New images use their own originals. The descriptive "spout" follow-up
+    // reuses prior context rather than treating the generic word "color" as a
+    // reason to re-run pixels; unrelated text turns remain image-free.
     const requestFor = (assistantMessageId: string): InferenceRequest | undefined =>
       queue.submitted.find((request) => request.assistantMessageId === assistantMessageId);
     expect(requestFor(t2.assistantMessageId)?.imagePath).toBe(IMAGE_A);
     expect(requestFor(t4.assistantMessageId)?.imagePath).toBe(IMAGE_B);
     expect(requestFor(t1.assistantMessageId)?.imagePath).toBeNull();
-    expect(requestFor(t3.assistantMessageId)?.imagePath).toBe(IMAGE_A);
+    expect(requestFor(t3.assistantMessageId)?.imagePath).toBeNull();
     expect(requestFor(t5.assistantMessageId)?.imagePath).toBeNull();
 
   });

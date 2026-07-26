@@ -610,6 +610,37 @@ describe('ContextOrchestrator', () => {
     expect(result.context.mediaEvidence).toEqual([]);
   });
 
+  it.each([
+    'What is the cost of tuition?',
+    'Count the possible combinations.',
+    'What color should my website use?',
+    'What is the total population?',
+  ])('does not query or select a stale image for unrelated text "%s"', (question) => {
+    const getActiveImageEvidence = jest.fn(() => null);
+    const messages = [
+      ...completedTurn(1, 'What is in this image?', 'A receipt.', '/images/receipt.jpg'),
+      currentMessage(2, question),
+    ];
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence,
+        resolveReferencedImageEvidence: jest.fn(() => null),
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-2'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(getActiveImageEvidence).not.toHaveBeenCalled();
+    expect(result.imageSelection).toBeNull();
+    expect(result.context.mediaEvidence).toEqual([]);
+    expect(result.diagnostics?.classification).toEqual(expect.objectContaining({
+      isIndependentTextQuestion: true,
+      isPixelDependent: false,
+      isSameImageFollowUp: false,
+    }));
+  });
+
   it('keeps explicitly referenced evidence inside the configured budget', () => {
     const evidence = {
       id: 'evidence-1',
@@ -643,6 +674,91 @@ describe('ContextOrchestrator', () => {
 
     expect(result.context.mediaEvidence).toHaveLength(1);
     expect(result.context.mediaEvidence[0]?.sourcePath).toBe('asset-1');
+    expect(result.context.budget.usedUnits).toBeLessThanOrEqual(
+      result.context.budget.maximumUnits,
+    );
+  });
+
+  it('evicts recent turns before dropping large protected image evidence', () => {
+    const evidence = {
+      id: 'evidence-large',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-2',
+      image_asset_id: 'asset-large',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'large label',
+      visible_features_json: JSON.stringify(['feature '.repeat(200)]),
+      visible_text_json: JSON.stringify(['SERIAL ZX-418 '.repeat(100)]),
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-large',
+      created_at: 3,
+    };
+    const messages = [
+      ...completedTurn(1, 'Old question '.repeat(10), 'Old answer '.repeat(10)),
+      ...completedTurn(2, 'Inspect this image.', 'A label.', '/images/label.jpg'),
+      currentMessage(3, 'What kind of document is in the image?'),
+    ];
+    messages[2].attachments[0].imageAssetId = 'asset-large';
+    const result = new ContextOrchestrator(
+      compactPolicy({ maximumUnits: 140, recentExactTurnLimit: 4 }),
+      {
+        evidenceRepository: {
+          getActiveImageEvidence: () => evidence,
+          resolveReferencedImageEvidence: () => evidence,
+        },
+      },
+    ).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.context.mediaEvidence).toHaveLength(1);
+    expect(result.context.recentTurns).toHaveLength(0);
+    expect(result.context.budget.usedUnits).toBeLessThanOrEqual(
+      result.context.budget.maximumUnits,
+    );
+  });
+
+  it('preserves large explicitly referenced older-image evidence within the final budget', () => {
+    const evidence = {
+      id: 'evidence-older-large',
+      conversation_id: 'conversation-a',
+      source_message_id: 'user-1',
+      image_asset_id: 'asset-older',
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: 'receipt '.repeat(80),
+      visible_features_json: '[]',
+      visible_text_json: JSON.stringify(['TOTAL $12.99 '.repeat(100)]),
+      visible_condition: 'readable',
+      uncertainty_json: '[]',
+      source_revision: 'revision-older',
+      created_at: 1,
+    };
+    const messages = [
+      ...completedTurn(1, 'First image.', 'A receipt.', '/images/receipt.jpg'),
+      ...completedTurn(2, 'Second image.', 'A chair.', '/images/chair.jpg'),
+      currentMessage(3, 'What object is in the first image?'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-older';
+    messages[2].attachments[0].imageAssetId = 'asset-active';
+    const result = new ContextOrchestrator(
+      compactPolicy({ maximumUnits: 120, recentExactTurnLimit: 4 }),
+      {
+        evidenceRepository: {
+          getActiveImageEvidence: () => null,
+          resolveReferencedImageEvidence: () => evidence,
+        },
+      },
+    ).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.context.mediaEvidence[0]?.sourcePath).toBe('asset-older');
+    expect(result.context.budget.usedUnits).toBeLessThanOrEqual(
+      result.context.budget.maximumUnits,
+    );
   });
 
   it('defaults an ambiguous reference among three images to the active image', () => {
@@ -910,7 +1026,7 @@ describe('ContextOrchestrator', () => {
     const messages = Array.from({ length: 7 }, (_, index) =>
       completedTurn(index + 1, `Question ${index}`, `Answer ${index}`),
     ).flat();
-    messages.push(currentMessage(8, 'What did we mention earlier?'));
+    messages.push(currentMessage(8, 'What did I mention in another conversation?'));
     const result = new ContextOrchestrator(
       compactPolicy({ maximumUnits: 100, recentExactTurnLimit: 0 }),
       {
@@ -939,7 +1055,7 @@ describe('ContextOrchestrator', () => {
     const messages = Array.from({ length: 7 }, (_, index) =>
       completedTurn(index + 1, `Question ${index}`, `Answer ${index}`),
     ).flat();
-    messages.push(currentMessage(8, 'What did we mention earlier?'));
+    messages.push(currentMessage(8, 'What did I mention in another conversation?'));
     const result = new ContextOrchestrator(compactPolicy(), {
       retriever: { search },
       listLexicalCandidates: () => [],
@@ -960,6 +1076,140 @@ describe('ContextOrchestrator', () => {
       conversationIds: ['conversation-a', 'conversation-b'],
     }));
     expect(result.diagnostics?.crossChatActive).toBe(true);
+    expect(result.diagnostics?.crossChatQueried).toBe(true);
+    expect(result.diagnostics?.crossChatItemsSelected).toBe(0);
+  });
+
+  it.each([
+    ['new chat', []],
+    ['short chat', completedTurn(1, 'Hello.', 'Hi.')],
+  ])('queries eligible cross-chat scope from a %s', (_label, prior) => {
+    const crossChatItem: RetrievedItem = {
+      id: 'other-item',
+      sourceConversationId: 'conversation-b',
+      sourceMessageId: 'other-message',
+      imageAssetId: null,
+      timestamp: 10,
+      contentType: 'chunk',
+      text: 'The apartment address was 12 Main Street.',
+      score: 1,
+    };
+    const search = jest.fn(() => [crossChatItem]);
+    const messages = [
+      ...prior,
+      currentMessage(8, 'What address did I mention in my apartment chat?'),
+    ];
+    const result = new ContextOrchestrator(compactPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-8'),
+      {
+        diagnosticsEnabled: true,
+        crossChat: {
+          enabled: true,
+          currentConversationExcluded: false,
+          eligibleConversationIds: ['conversation-b'],
+        },
+      },
+    );
+
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({
+      conversationIds: ['conversation-a', 'conversation-b'],
+    }));
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      crossChatActive: true,
+      crossChatQueried: true,
+      crossChatItemsSelected: 1,
+    }));
+    expect(result.context.importantFacts[0]?.id).toContain('conversation-b');
+  });
+
+  it('does not query cross-chat scope for an ordinary question when globally enabled', () => {
+    const search = jest.fn((): RetrievedItem[] => []);
+    const result = new ContextOrchestrator(compactPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+    }).orchestrate(
+      createCanonicalConversationSnapshot(
+        conversation([currentMessage(1, 'What is the capital of France?')]),
+        'user-1',
+      ),
+      {
+        diagnosticsEnabled: true,
+        crossChat: {
+          enabled: true,
+          currentConversationExcluded: false,
+          eligibleConversationIds: ['conversation-b'],
+        },
+      },
+    );
+
+    expect(search).not.toHaveBeenCalled();
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      crossChatActive: false,
+      crossChatQueried: false,
+      crossChatItemsSelected: 0,
+    }));
+  });
+
+  it('stops cross-chat queries immediately when the global setting is disabled', () => {
+    const search = jest.fn((): RetrievedItem[] => []);
+    const orchestrator = new ContextOrchestrator(compactPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+    });
+    const snapshot = createCanonicalConversationSnapshot(
+      conversation([currentMessage(1, 'What did I say in another conversation?')]),
+      'user-1',
+    );
+
+    orchestrator.orchestrate(snapshot, {
+      crossChat: {
+        enabled: true,
+        currentConversationExcluded: false,
+        eligibleConversationIds: ['conversation-b'],
+      },
+    });
+    orchestrator.orchestrate(snapshot, {
+      crossChat: {
+        enabled: false,
+        currentConversationExcluded: false,
+        eligibleConversationIds: ['conversation-b'],
+      },
+    });
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      conversationIds: ['conversation-a', 'conversation-b'],
+    }));
+  });
+
+  it.each([
+    ['global setting off', false, false],
+    ['current conversation excluded', true, true],
+  ])('does not expand cross-chat scope when %s', (_label, enabled, excluded) => {
+    const search = jest.fn((): RetrievedItem[] => []);
+    const result = new ContextOrchestrator(compactPolicy(), {
+      retriever: { search },
+      listLexicalCandidates: () => [],
+    }).orchestrate(
+      createCanonicalConversationSnapshot(
+        conversation([currentMessage(1, 'What did I say in another conversation?')]),
+        'user-1',
+      ),
+      {
+        diagnosticsEnabled: true,
+        crossChat: {
+          enabled,
+          currentConversationExcluded: excluded,
+          eligibleConversationIds: ['conversation-b'],
+        },
+      },
+    );
+
+    expect(search).not.toHaveBeenCalled();
+    expect(result.diagnostics?.crossChatQueried).toBe(false);
   });
 
   it('resolves a uniquely matching evidence-backed image description', () => {

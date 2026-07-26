@@ -148,6 +148,95 @@ describe('HybridRetriever', () => {
     expect(result[0]?.sourceMessageId).toBe('message-exact');
   });
 
+  it.each([
+    ['first-position name', 'Accenture spending', 'Accenture spending was discussed.'],
+    ['first-position name', 'Microsoft revenue', 'Microsoft revenue increased.'],
+    ['first-position name', 'Qwen model details', 'Qwen model details are stored here.'],
+    ['multi-word name', 'Vineet apartment address', 'Vineet apartment address is Main Street.'],
+    ['multi-word name', 'Graduate Hills rent', 'Graduate Hills rent was $1,200.'],
+    ['identifier', 'AB123 status', 'Serial AB123 is active.'],
+  ])('retains an exact %s token at the start of "%s"', (_kind, query, text) => {
+    const exact: RetrievalCandidate = {
+      id: 'exact-name',
+      sourceConversationId: 'active',
+      sourceMessageId: 'message-exact-name',
+      imageAssetId: null,
+      timestamp: 1,
+      contentType: 'chunk',
+      text,
+    };
+    const retriever = new HybridRetriever(
+      { getCompatibleByScope: () => [candidate('semantic', 'active', 'semantic', [1, 0], 2)] },
+      { search: jest.fn(() => [{ ...exact, score: 0.1 }]) },
+    );
+
+    const result = retriever.search({
+      query,
+      queryVector: new Float32Array([1, 0]),
+      conversationIds: ['active'],
+      embeddingVersion: 'embedding-v1',
+      artifactHash: 'hash-1',
+      limit: 1,
+      lexicalCandidates: [exact],
+    });
+
+    expect(result[0]?.sourceMessageId).toBe('message-exact-name');
+  });
+
+  it.each(['What', 'When', 'Where', 'Explain', 'Find', 'Show', 'Tell', 'Compare'])(
+    'does not treat generic sentence-opening word "%s" as an exact-name guarantee',
+    (opener) => {
+      const generic: RetrievalCandidate = {
+        id: 'generic',
+        sourceConversationId: 'active',
+        sourceMessageId: 'message-generic',
+        imageAssetId: null,
+        timestamp: 1,
+        contentType: 'chunk',
+        text: `${opener} appears here but the requested subject does not.`,
+      };
+      const retriever = new HybridRetriever(
+        {
+          getCompatibleByScope: () => [
+            candidate('semantic', 'active', 'message-semantic', [1, 0], 2),
+          ],
+        },
+        { search: jest.fn(() => [{ ...generic, score: 1 }]) },
+      );
+
+      const result = retriever.search({
+        query: `${opener} the unrelated subject`,
+        queryVector: new Float32Array([1, 0]),
+        conversationIds: ['active'],
+        embeddingVersion: 'embedding-v1',
+        artifactHash: 'hash-1',
+        limit: 1,
+        lexicalCandidates: [generic],
+      });
+
+      expect(result[0]?.sourceMessageId).toBe('message-semantic');
+    },
+  );
+
+  it('does not query compatible embeddings when no query vector is supplied', () => {
+    const getCompatibleByScope = jest.fn(() => []);
+    const retriever = new HybridRetriever(
+      { getCompatibleByScope },
+      { search: jest.fn(() => []) },
+    );
+
+    retriever.search({
+      query: 'ordinary lexical request',
+      conversationIds: ['active'],
+      embeddingVersion: '',
+      artifactHash: '',
+      limit: 2,
+      lexicalCandidates: [],
+    });
+
+    expect(getCompatibleByScope).not.toHaveBeenCalled();
+  });
+
   it('deduplicates fused candidates by source message and keeps deterministic ordering', () => {
     const lexical: RetrievedItem = {
       id: 'lexical-copy',

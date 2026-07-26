@@ -16,6 +16,8 @@ describe('ObjectiveInferenceResultRecord', () => {
       'totalEndToEndLatencyMs',
       'generatedTokens',
       'promptTokens',
+      'estimatedPromptTokens',
+      'finalNativePromptTokens',
       'truncated',
       'looping',
       'timestamp',

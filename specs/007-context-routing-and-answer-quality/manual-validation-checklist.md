@@ -13,6 +13,9 @@ until every required result has been observed on hardware.
 - [ ] Confirm the linked `llama.rn` `stopCompletion()` call stops generation.
 - [ ] Confirm already-streamed text remains visible and persisted.
 - [ ] Confirm the inference queue releases and the next request runs normally.
+- [ ] Trigger loop stopping near a user cancellation and confirm exactly one
+  native stop, no double completion, no erroneous cancellation verdict, and no
+  queue state left in `cancelling`.
 - [ ] Record the device result before changing or approving any stopping threshold.
 
 ## Routing and image continuity (MV-001–MV-010, MV-012)
@@ -42,6 +45,12 @@ until every required result has been observed on hardware.
   stored evidence.
 - [ ] **MV-010:** Immediately after an image turn, ask an unrelated standalone
   question and confirm image evidence is neither queried nor selected.
+- [ ] After an image turn, ask `What is the cost of tuition?`, `Count the possible
+  combinations.`, `What color should my website use?`, and `What is the total
+  population?`; confirm all remain text-only and never re-run the image.
+- [ ] Confirm `Read the number in the image`, `How many objects are visible?`,
+  `What price is on the receipt?`, and `What color is the chair in the first
+  photo?` take the appropriate visual route.
 - [ ] **MV-012:** Submit identical text once by typing and once through voice
   transcription. Confirm classification and context diagnostics match.
 
@@ -52,24 +61,36 @@ until every required result has been observed on hardware.
   and sufficient detail respectively.
 - [ ] **MV-013:** The production embedding artifact is still separately gated.
   Until it is approved, confirm lexical fallback works and no semantic-runtime
-  claim is made. After separate approval, verify fused exact-plus-semantic
-  retrieval and failure/stale/backfill lexical fallback.
+  claim is made, and confirm independent/ordinary follow-up submissions make zero
+  embedding calls. After separate approval, verify eligible same-chat/cross-chat
+  requests embed, retry/regenerate parity, fused exact-plus-semantic retrieval,
+  and failure/stale/backfill lexical fallback.
 - [ ] **MV-014:** Confirm cross-chat memory is off by default. Enable it and verify
-  attributed local retrieval; exclude a conversation and confirm bilateral
-  isolation; disable the global setting and confirm the very next turn is
-  same-chat-only.
+  explicit memory-seeking retrieval from both a new chat and a short chat;
+  ordinary independent questions remain same-chat-only. Verify attributed local
+  retrieval, bilateral current/source exclusions, then disable globally and
+  confirm the very next turn makes no cross-chat query.
 - [ ] **MV-015:** Cancel and restart the app. Confirm partial text behavior, the
   cross-chat setting, per-chat exclusions, and deterministic routing survive as
   specified.
 - [ ] **MV-016:** Exercise Low, Medium, and High response modes near the model
   context limit. Confirm diagnostics' used/maximum token units agree with the
-  final prompt and protected current-turn/referenced-image evidence is retained.
+  estimated and final native prompt counts, protected current/referenced-image
+  evidence is retained, and `usedUnits` never exceeds `maximumUnits`. Include
+  token-dense code and non-English input; confirm any shortened question preserves
+  its beginning, end, visible marker, and image.
+
+- [ ] Query first-position and multi-word names (`Accenture spending`,
+  `Microsoft revenue`, `Vineet apartment address`, `Graduate Hills rent`) plus an
+  ID, price, and date; confirm exact lexical matches survive fusion. Confirm
+  generic openers such as `Find`, `Show`, and `Explain` are not protected alone.
 
 ## Grounding diagnostics (optional Phase 8)
 
 - [ ] Ask one answerable and one deliberately unsupported image/retrieval question.
   Confirm `supported`/`unsupported` appears only in developer diagnostics and does
-  not alter the visible response.
+  not alter the visible response. Repeat for a new image, active-image OCR
+  re-inference, and older-image re-inference so fresh hidden evidence is exercised.
 
 ## Offline and regression validation (MV-017–MV-018)
 
@@ -82,4 +103,3 @@ until every required result has been observed on hardware.
   checkpoint/recovery, durable images, and offline operation.
 - [ ] **T055:** Execute every phase in `quickstart.md` end to end and record all
   deviations plus a before/after comparison against the T001 baseline fixtures.
-

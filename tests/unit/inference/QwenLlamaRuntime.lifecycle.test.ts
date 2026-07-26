@@ -166,4 +166,74 @@ describe('QwenLlamaRuntime lifecycle', () => {
     expect(tokenizeMock.mock.invocationCallOrder[0])
       .toBeLessThan(completionMock.mock.invocationCallOrder[0] as number);
   });
+
+  it('formats and tokenizes again after removing history before completion', async () => {
+    const tokenize = jest.fn()
+      .mockResolvedValueOnce({
+        tokens: Array.from({ length: 5_000 }, (_, index) => index),
+        has_media: false,
+      })
+      .mockResolvedValueOnce({
+        tokens: Array.from({ length: 1_000 }, (_, index) => index),
+        has_media: false,
+      });
+    const context = makeContext({ tokenize });
+    const { runtime } = makeRuntime(context);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate(generateRequest([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'current question' },
+    ]));
+
+    expect(context.getFormattedChat).toHaveBeenCalledTimes(2);
+    expect(tokenize).toHaveBeenCalledTimes(2);
+    const completionMessages =
+      ((context.completion as jest.Mock).mock.calls[0][0] as QwenCompletionParams).messages;
+    expect(completionMessages.map((message) => message.content)).toEqual([
+      'system',
+      'current question',
+    ]);
+    expect(result.finalNativePromptTokens).toBe(1_000);
+    expect(result.estimatedPromptTokens).toBeGreaterThan(0);
+  });
+
+  it('passes image media paths to every native tokenization pass', async () => {
+    const getFormattedChat = jest.fn()
+      .mockResolvedValueOnce({ prompt: 'large image prompt', media_paths: ['/image.jpg'] })
+      .mockResolvedValueOnce({ prompt: 'reduced image prompt', media_paths: ['/image.jpg'] });
+    const tokenize = jest.fn()
+      .mockResolvedValueOnce({
+        tokens: Array.from({ length: 5_000 }, (_, index) => index),
+        has_media: true,
+      })
+      .mockResolvedValueOnce({
+        tokens: Array.from({ length: 1_000 }, (_, index) => index),
+        has_media: true,
+      });
+    const context = makeContext({ getFormattedChat, tokenize });
+    const { runtime } = makeRuntime(context);
+    await runtime.loadModel(load);
+
+    await runtime.generate(generateRequest([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'read this', mediaPath: '/image.jpg' },
+    ]));
+
+    expect(tokenize).toHaveBeenNthCalledWith(1, 'large image prompt', {
+      media_paths: ['/image.jpg'],
+    });
+    expect(tokenize).toHaveBeenNthCalledWith(2, 'reduced image prompt', {
+      media_paths: ['/image.jpg'],
+    });
+    const completionMessages =
+      ((context.completion as jest.Mock).mock.calls[0][0] as QwenCompletionParams).messages;
+    expect(completionMessages.at(-1)?.content).toEqual(expect.arrayContaining([
+      { type: 'image_url', image_url: { url: 'file:///image.jpg' } },
+    ]));
+  });
 });

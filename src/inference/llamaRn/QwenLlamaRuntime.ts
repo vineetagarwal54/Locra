@@ -16,8 +16,9 @@ import type { GenerationFinishReason } from '../../types/models';
 import { postProcessAnswer } from '../AnswerPostProcessor';
 import type { ModelRequestMessage } from '../ContextBuilder';
 import {
-  reconcileMessagesToNativeTokenCount,
+  reconcileMessagesWithNativeTokenizer,
   trimMessagesToContextWithReport,
+  type NativePromptReconciliation,
 } from '../ContextWindow';
 import {
   samplingProfileForRequestKind,
@@ -155,6 +156,8 @@ export interface QwenGenerateRequest {
 
 export interface QwenGenerateResult {
   text: string;
+  estimatedPromptTokens: number;
+  finalNativePromptTokens: number;
   promptTokens: number;
   generatedTokens: number;
   totalTokens: number;
@@ -330,9 +333,6 @@ export class QwenLlamaRuntime {
     // Convert BEFORE flipping to 'generating' so an unreadable image leaves the
     // runtime cleanly 'loaded'. Only the supplied messages are used.
     const bounded = trimMessagesToContextWithReport(request.messages, request.responseMode);
-    const initialMessages = convertToQwenMessages(bounded.messages, {
-      isReadableFile: this.deps.isReadableFile,
-    });
     this.status = 'generating';
     this.cancelRequested = false;
     this.error = null;
@@ -340,19 +340,40 @@ export class QwenLlamaRuntime {
       this.cancel();
     };
     request.signal.addEventListener('abort', onAbort);
-    const formatted = await context.getFormattedChat(initialMessages);
-    const tokenized = await context.tokenize(formatted.prompt, {
-      media_paths: formatted.media_paths,
+    let reconciled: NativePromptReconciliation;
+    try {
+      reconciled = await reconcileMessagesWithNativeTokenizer(
+        bounded.messages,
+        request.responseMode,
+        async (candidate) => {
+          const qwenMessages = convertToQwenMessages([...candidate], {
+            isReadableFile: this.deps.isReadableFile,
+          });
+          const formatted = await context.getFormattedChat(qwenMessages);
+          const tokenized = await context.tokenize(formatted.prompt, {
+            media_paths: formatted.media_paths,
+          });
+          return tokenized.tokens.length;
+        },
+      );
+    } catch (error) {
+      request.signal.removeEventListener('abort', onAbort);
+      if (this.cancelRequested || request.signal.aborted) {
+        this.status = 'loaded';
+        throw new QwenGenerationCancelledError();
+      }
+      this.status = 'errored';
+      this.error = toMessage(error);
+      throw new QwenGenerationError(toMessage(error));
+    }
+    const messages = convertToQwenMessages(reconciled.messages, {
+      isReadableFile: this.deps.isReadableFile,
     });
-    const reconciled = reconcileMessagesToNativeTokenCount(
-      bounded.messages,
-      request.responseMode,
-      tokenized.tokens.length,
-    );
-    const messages = reconciled.length === bounded.messages.length
-      ? initialMessages
-      : convertToQwenMessages(reconciled, { isReadableFile: this.deps.isReadableFile });
-    const inputShortenedWarning = bounded.inputShortenedWarning;
+    const inputShortenedWarning =
+      bounded.inputShortenedWarning ??
+      (reconciled.currentInputShortened
+        ? 'Your message was long, so Locra kept the beginning and end and trimmed the middle to fit.'
+        : null);
 
     if (request.signal.aborted) {
       this.status = 'loaded';
@@ -422,6 +443,8 @@ export class QwenLlamaRuntime {
         generationLimit,
         inputShortenedWarning,
         samplingProfile,
+        reconciled.estimatedPromptTokens,
+        reconciled.finalNativePromptTokens,
         loopStoppedText === null ? undefined : 'looping',
       );
     } catch (error) {
@@ -442,7 +465,7 @@ export class QwenLlamaRuntime {
   }
 
   cancel(): void {
-    if (this.status !== 'generating' && this.status !== 'cancelling') {
+    if (this.status !== 'generating') {
       return;
     }
     this.cancelRequested = true;
@@ -481,12 +504,15 @@ export class QwenLlamaRuntime {
     generationLimit: number,
     inputShortenedWarning: string | null,
     samplingProfile: SamplingProfile,
+    estimatedPromptTokens: number,
+    finalNativePromptTokens: number,
     forcedFinishReason?: GenerationFinishReason,
   ): QwenGenerateResult {
     const totalWallTimeMs = this.now() - startedAt;
     const timings = result.timings ?? {};
     const generatedTokens = result.tokens_predicted ?? timings.predicted_n ?? streamedTokenCount;
-    const promptTokens = result.tokens_evaluated ?? timings.prompt_n ?? 0;
+    const promptTokens =
+      result.tokens_evaluated ?? timings.prompt_n ?? finalNativePromptTokens;
     const firstTokenLatencyMs = firstTokenAt !== null ? firstTokenAt - startedAt : 0;
 
     let tokensPerSecond = timings.predicted_per_second ?? 0;
@@ -499,6 +525,8 @@ export class QwenLlamaRuntime {
 
     return {
       text,
+      estimatedPromptTokens,
+      finalNativePromptTokens,
       promptTokens,
       generatedTokens,
       totalTokens: promptTokens + generatedTokens,

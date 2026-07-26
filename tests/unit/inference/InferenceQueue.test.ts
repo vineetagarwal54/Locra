@@ -915,7 +915,7 @@ describe('InferenceQueue post-processing (FR-054)', () => {
     expect(state.finishReason).toBe('looping');
   });
 
-  it('stops a streaming cycle early without classifying it as user cancellation', async () => {
+  it('accepts the runtime-authoritative loop stop without classifying it as cancellation', async () => {
     const sentenceCycle =
       'The laptop is open. Its screen shows a dark editor. It sits on a wooden desk. ';
     const engine: InferenceEngineAdapter = {
@@ -924,11 +924,13 @@ describe('InferenceQueue post-processing (FR-054)', () => {
         if (generateRequest.kind === 'extraction') {
           return { response: validExtractionJson, tokenCount: 10 };
         }
-        onToken(sentenceCycle, 12);
-        onToken(sentenceCycle.repeat(2), 24);
-        onToken(sentenceCycle.repeat(3), 36);
-        expect(signal.aborted).toBe(true);
-        throw new Error('native completion stopped');
+        onToken(sentenceCycle.trim(), 12);
+        expect(signal.aborted).toBe(false);
+        return {
+          response: sentenceCycle.trim(),
+          tokenCount: 12,
+          finishReason: 'looping',
+        };
       },
     };
     const queue = makeQueue({ engine });

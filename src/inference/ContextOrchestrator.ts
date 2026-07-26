@@ -139,6 +139,10 @@ export interface ContextSelectionDiagnostics {
   readonly imageReferenceAmbiguous: boolean;
   readonly imageReferenceResolution: ImageReferenceResolution;
   readonly crossChatActive: boolean;
+  readonly crossChatQueried: boolean;
+  readonly crossChatItemsSelected: number;
+  readonly estimatedPromptTokens: number | null;
+  readonly finalNativePromptTokens: number | null;
   readonly groundingVerdict: 'supported' | 'unsupported' | null;
 }
 
@@ -326,23 +330,14 @@ export class ContextOrchestrator {
     const conversationTurns = conversationTurnsFromMessages(snapshot.priorMessages);
     const pureIndependent = classification.isIndependentTextQuestion
       && !hasImageContext
-      && !classification.isLongContextRetrievalRequest;
+      && !classification.isLongContextRetrievalRequest
+      && !classification.isCrossChatEligible;
     const includeRecentTurns = !pureIndependent && (
       classification.isTextFollowUp
       || hasImageContext
       || classification.isLongContextRetrievalRequest
+      || classification.isCrossChatEligible
     );
-    const selection = selectRecentTurns(
-      includeRecentTurns ? conversationTurns : [],
-      policy,
-      diagnosticsEnabled,
-    );
-    const olderTurns = conversationTurns.slice(
-      0,
-      conversationTurns.length - selection.turns.length,
-    );
-    const memory = rebuildDerivedMemory(snapshot, olderTurns);
-    let usedUnits = selection.usedUnits;
 
     const isActiveImageTurn = messageHasImage(snapshot.currentMessage);
     const imageResolution = hasImageContext
@@ -359,19 +354,33 @@ export class ContextOrchestrator {
           )
         : null);
     const selectedMemoryEvidence = imageResolution?.memoryEvidence ?? null;
-    const mediaEvidence =
+    const protectedMediaEvidence =
       imageResolution !== null && imageResolution.selection.decision !== 'use-evidence'
-        ? emptyMediaEvidenceSelection(usedUnits)
+        ? emptyMediaEvidenceSelection(0)
         : persistedEvidence !== null
-          ? selectProtectedEvidence(persistedEvidence, usedUnits, policy, diagnosticsEnabled)
+          ? selectProtectedEvidence(persistedEvidence, 0, policy, diagnosticsEnabled)
           : selectedMemoryEvidence !== null
             ? selectProtectedContextEvidence(
                 selectedMemoryEvidence,
-                usedUnits,
+                0,
                 policy,
                 diagnosticsEnabled,
               )
-            : selectMediaEvidenceWithinBudget(
+            : null;
+    let usedUnits = protectedMediaEvidence?.usedUnits ?? 0;
+    const selection = selectRecentTurns(
+      includeRecentTurns ? conversationTurns : [],
+      usedUnits,
+      policy,
+      diagnosticsEnabled,
+    );
+    usedUnits = selection.usedUnits;
+    const olderTurns = conversationTurns.slice(
+      0,
+      conversationTurns.length - selection.turns.length,
+    );
+    const memory = rebuildDerivedMemory(snapshot, olderTurns);
+    const mediaEvidence = protectedMediaEvidence ?? selectMediaEvidenceWithinBudget(
                 memory.mediaEvidence,
                 snapshot.currentMessage.text,
                 isActiveImageTurn,
@@ -382,16 +391,17 @@ export class ContextOrchestrator {
               );
     usedUnits = mediaEvidence.usedUnits;
 
-    const includeLongContext = !pureIndependent
+    const includeSameChatLongContext = !pureIndependent
       && classification.isLongContextRetrievalRequest;
+    const includeCrossChat = classification.isCrossChatEligible;
+    const includeRetrieval = includeSameChatLongContext || includeCrossChat;
     const retrievalConversationIds = resolveCrossChatConversationIds(
       snapshot.conversationId,
-      classification.isCrossChatEligible,
+      includeCrossChat,
       crossChat.currentConversationExcluded,
       crossChat.eligibleConversationIds,
     );
-    const crossChatActive = includeLongContext && retrievalConversationIds.length > 1;
-    const retrieval = includeLongContext
+    const retrieval = includeRetrieval
       ? this.retrieve(
           snapshot,
           retrievalConversationIds,
@@ -401,10 +411,11 @@ export class ContextOrchestrator {
       : skippedRetrieval(
           pureIndependent ? 'independent-question-hard-skip' : 'classification-not-long-context',
         );
-    const durableFacts = includeLongContext
+    const crossChatQueried = retrieval.queried && retrievalConversationIds.length > 1;
+    const durableFacts = includeSameChatLongContext
       ? this.sources.listDurableFacts?.(snapshot.conversationId) ?? memory.importantFacts
       : [];
-    const persistedSummary = includeLongContext
+    const persistedSummary = includeSameChatLongContext
       ? this.sources.getNewestReadySummary?.(snapshot.conversationId)
       : null;
 
@@ -438,11 +449,18 @@ export class ContextOrchestrator {
     usedUnits = importantFacts.usedUnits;
 
     const sameChatRetrieved = selectRetrievedWithinBudget(
-      retrieval.items,
+      retrieval.items.filter((item) => item.sourceConversationId === snapshot.conversationId),
       usedUnits,
       policy,
     );
     usedUnits = sameChatRetrieved.usedUnits;
+    const crossChatRetrieved = selectRetrievedWithinBudget(
+      retrieval.items.filter((item) => item.sourceConversationId !== snapshot.conversationId),
+      usedUnits,
+      policy,
+    );
+    usedUnits = crossChatRetrieved.usedUnits;
+    const crossChatItemsSelected = crossChatRetrieved.items.length;
 
     const budget: ContextBudgetMetadata = {
       policyId: policy.policyId,
@@ -457,6 +475,7 @@ export class ContextOrchestrator {
         mediaEvidence: mediaEvidence.items.map(cloneMediaEvidence),
         importantFacts: [
           ...sameChatRetrieved.items,
+          ...crossChatRetrieved.items,
           ...importantFacts.items.map(cloneMemoryFact),
         ],
         olderSummary: summaryEntries.summary === undefined
@@ -486,7 +505,8 @@ export class ContextOrchestrator {
         retrievalModeReason: retrieval.reason,
         retrievalQueried: retrieval.queried,
         retrievalCandidatesReturned: retrieval.items.length,
-        retrievalItemsSelected: sameChatRetrieved.items.length,
+        retrievalItemsSelected:
+          sameChatRetrieved.items.length + crossChatRetrieved.items.length,
         actualSources: {
           recentTurns: { queried: includeRecentTurns, selected: selection.turns.length },
           imageEvidence: {
@@ -499,14 +519,16 @@ export class ContextOrchestrator {
           },
           retrieval: {
             queried: retrieval.queried,
-            selected: sameChatRetrieved.items.length,
+            selected: sameChatRetrieved.items.length + crossChatRetrieved.items.length,
           },
           durableFacts: {
-            queried: includeLongContext && this.sources.listDurableFacts !== undefined,
+            queried:
+              includeSameChatLongContext && this.sources.listDurableFacts !== undefined,
             selected: importantFacts.items.length,
           },
           summary: {
-            queried: includeLongContext && this.sources.getNewestReadySummary !== undefined,
+            queried:
+              includeSameChatLongContext && this.sources.getNewestReadySummary !== undefined,
             selected: summaryEntries.summary === undefined
               ? summaryEntries.items.length
               : summaryEntries.summary === null ? 0 : 1,
@@ -516,7 +538,11 @@ export class ContextOrchestrator {
         imageDecision: imageSelection?.decision ?? 'not-applicable',
         imageReferenceAmbiguous: classification.imageReferenceAmbiguous,
         imageReferenceResolution: referenceResolution.resolution,
-        crossChatActive,
+        crossChatActive: crossChatQueried,
+        crossChatQueried,
+        crossChatItemsSelected,
+        estimatedPromptTokens: null,
+        finalNativePromptTokens: null,
         groundingVerdict: null,
       },
     };
@@ -956,6 +982,7 @@ export function formatSummaryEntry(entry: ContextSummaryEntry): string {
 
 function selectRecentTurns(
   turns: ReadonlyArray<ConversationTurn>,
+  initialUsedUnits: number,
   policy: ContextBudgetPolicy,
   collectDiagnostics: boolean,
 ): {
@@ -966,7 +993,7 @@ function selectRecentTurns(
 } {
   const selected: CanonicalContextTurn[] = [];
   const selectedDiagnostics: RecentTurnDiagnostic[] = [];
-  let usedUnits = 0;
+  let usedUnits = initialUsedUnits;
   const candidates = policy.recentExactTurnLimit === 0
     ? []
     : turns.slice(-policy.recentExactTurnLimit);
@@ -1039,9 +1066,13 @@ function selectProtectedEvidence(
   usedUnits: number;
   candidates: RankedCandidateDiagnostic[];
 } {
-  const item = visualEvidenceRowToContext(row);
+  const item = fitProtectedEvidenceToBudget(
+    visualEvidenceRowToContext(row),
+    Math.max(0, policy.maximumUnits - initialUsedUnits),
+    policy,
+  );
   const cost = policy.measure(formatMediaEvidence(item)) + policyOverhead(policy);
-  const usedUnits = initialUsedUnits + cost;
+  const usedUnits = Math.min(policy.maximumUnits, initialUsedUnits + cost);
   return {
     items: [item],
     usedUnits,
@@ -1064,20 +1095,72 @@ function selectProtectedContextEvidence(
   usedUnits: number;
   candidates: RankedCandidateDiagnostic[];
 } {
-  const cost = policy.measure(formatMediaEvidence(item)) + policyOverhead(policy);
+  const fitted = fitProtectedEvidenceToBudget(
+    item,
+    Math.max(0, policy.maximumUnits - initialUsedUnits),
+    policy,
+  );
+  const cost = policy.measure(formatMediaEvidence(fitted)) + policyOverhead(policy);
   return {
-    items: [item],
-    usedUnits: initialUsedUnits + cost,
+    items: [fitted],
+    usedUnits: Math.min(policy.maximumUnits, initialUsedUnits + cost),
     candidates: collectDiagnostics
       ? [{
-          stableId: item.id,
+          stableId: fitted.id,
           relevance: 1,
-          createdAt: item.createdAt,
+          createdAt: fitted.createdAt,
           selected: true,
           exclusionReason: null,
-          preview: truncatePreview(formatMediaEvidence(item)),
+          preview: truncatePreview(formatMediaEvidence(fitted)),
         }]
       : [],
+  };
+}
+
+function fitProtectedEvidenceToBudget(
+  item: ContextMediaEvidence,
+  availableUnits: number,
+  policy: ContextBudgetPolicy,
+): ContextMediaEvidence {
+  const fullCost = policy.measure(formatMediaEvidence(item)) + policyOverhead(policy);
+  if (fullCost <= availableUnits) {
+    return cloneMediaEvidence(item);
+  }
+
+  const formatted = formatMediaEvidence(item);
+  const marker = '\n[… protected evidence shortened …]\n';
+  let low = 0;
+  let high = formatted.length;
+  let best = '';
+  while (low <= high) {
+    const keep = Math.floor((low + high) / 2);
+    const head = Math.ceil(keep / 2);
+    const tail = keep - head;
+    const compacted = keep >= formatted.length
+      ? formatted
+      : `${formatted.slice(0, head)}${marker}${formatted.slice(formatted.length - tail)}`;
+    const candidate = {
+      ...item,
+      summary: compacted,
+      facts: [],
+      extractedText: [],
+      uncertainty: [],
+    };
+    const cost = policy.measure(formatMediaEvidence(candidate)) + policyOverhead(policy);
+    if (cost <= availableUnits) {
+      best = compacted;
+      low = keep + 1;
+    } else {
+      high = keep - 1;
+    }
+  }
+
+  return {
+    ...item,
+    summary: best,
+    facts: [],
+    extractedText: [],
+    uncertainty: [],
   };
 }
 

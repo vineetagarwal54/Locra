@@ -43,12 +43,22 @@ export class HybridRetriever {
   }
 
   searchWithDiagnostics(input: HybridSearchInput): HybridSearchResult {
+    if (input.queryVector === undefined) {
+      return {
+        items: this.lexicalFallback.search({
+          query: input.query,
+          candidates: input.lexicalCandidates,
+          limit: input.limit,
+        }),
+        mode: 'lexical-fallback',
+      };
+    }
     const candidates = this.embeddings.getCompatibleByScope(
       input.conversationIds,
       input.embeddingVersion,
       input.artifactHash,
     );
-    if (candidates.length === 0 || input.queryVector === undefined) {
+    if (candidates.length === 0) {
       return {
         items: this.lexicalFallback.search({
           query: input.query,
@@ -147,11 +157,18 @@ function exactMatchTokens(query: string): string[] {
   const numeric = query.match(
     /(?:[$€£]\s?\d+(?:[.,]\d+)*|\b\d{1,4}(?:[-/.]\d{1,2}){1,2}\b|\b\d+(?:[.,]\d+)*\b)/g,
   ) ?? [];
-  const identifiers = query.match(/\b(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)+\b/g)
+  const identifiers = query.match(/\b(?=[A-Z0-9-]*[A-Z])(?=[A-Z0-9-]*\d)[A-Z0-9]+(?:-[A-Z0-9]+)*\b/g)
     ?? [];
-  const properNouns = query.match(/\b[A-Z][a-z]{2,}\b/g)?.filter(
-    (_token, index) => index > 0,
-  ) ?? [];
+  const genericOpeners = new Set([
+    'what', 'when', 'where', 'why', 'who', 'how',
+    'explain', 'find', 'show', 'tell', 'compare',
+    'define', 'summarize', 'convert', 'count', 'read',
+  ]);
+  const properNouns = (query.match(/\b[A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*)*/g) ?? [])
+    .map((name) => name.split(/\s+/).filter(
+      (word, index) => index > 0 || !genericOpeners.has(word.toLowerCase()),
+    ).join(' '))
+    .filter((name) => name.length >= 3 && !genericOpeners.has(name.toLowerCase()));
   return [...new Set([...numeric, ...identifiers, ...properNouns])];
 }
 

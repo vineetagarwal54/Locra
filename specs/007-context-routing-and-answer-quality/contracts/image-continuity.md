@@ -24,6 +24,10 @@ export function evaluateImageEvidenceAvailability(
 
 - **MUST** be invoked by `ContextOrchestrator` for every request where `isNewImageQuestion || isSameImageFollowUp || isOlderImageReference || isPixelDependent` is true (spec FR-007). Today this function exists and is unit-tested but is never called from the orchestrator — this contract closes that gap.
 - **MUST NOT** change its existing decision logic; only its caller and the population of `pixelDependent` change.
+- Generic detail vocabulary alone never sets `pixelDependent`; a deterministic
+  visual anchor is required. Consequently, unrelated tuition/population/website
+  color/counting questions after an image turn do not query or select the stale
+  active image.
 
 ## "Use original image" re-inference (new behavior)
 

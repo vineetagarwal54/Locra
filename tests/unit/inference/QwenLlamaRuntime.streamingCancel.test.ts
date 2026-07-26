@@ -289,7 +289,8 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     await Promise.resolve();
 
     controller.abort();
-    expect(context.stopCompletion).toHaveBeenCalled();
+    runtime.cancel();
+    expect(context.stopCompletion).toHaveBeenCalledTimes(1);
     deferred.resolve({ content: 'partial' });
 
     await rejection;

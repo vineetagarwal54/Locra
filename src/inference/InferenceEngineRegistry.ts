@@ -84,6 +84,8 @@ export const inferenceEngineAdapter: InferenceEngineAdapter = {
         response,
         tokenCount: handle.getGeneratedTokenCount(),
         promptTokenCount: handle.getPromptTokenCount(),
+        estimatedPromptTokenCount: handle.getEstimatedPromptTokenCount?.() ?? undefined,
+        finalNativePromptTokenCount: handle.getFinalNativePromptTokenCount?.() ?? undefined,
         totalTokenCount: handle.getTotalTokenCount(),
         pinnedExtraction: null,
         finishReason: handle.getFinishReason?.() ?? null,

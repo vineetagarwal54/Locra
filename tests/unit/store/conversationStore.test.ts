@@ -20,6 +20,9 @@ jest.mock('../../../src/store/historyStore', () => ({
 }));
 
 import {
+  diagnosticsTraceStore,
+} from '../../../src/diagnostics/DiagnosticsTraceStore';
+import {
   ContextOrchestrator,
   TokenContextBudgetPolicy,
 } from '../../../src/inference/ContextOrchestrator';
@@ -167,6 +170,120 @@ function makeStore() {
 }
 
 describe('conversationStore', () => {
+  it.each([
+    ['independent question', 'What is the capital of France?', []],
+    [
+      'ordinary short follow-up',
+      'Why is that?',
+      [
+        {
+          id: 'user-prior',
+          role: 'user' as const,
+          text: 'Explain gravity.',
+          attachments: [],
+          status: 'completed' as const,
+          errorMessage: null,
+          createdAt: 1,
+        },
+        {
+          id: 'assistant-prior',
+          role: 'assistant' as const,
+          text: 'Gravity attracts mass.',
+          attachments: [],
+          status: 'completed' as const,
+          errorMessage: null,
+          createdAt: 2,
+        },
+      ],
+    ],
+  ])('does not generate an embedding for an %s', async (_label, question, priorMessages) => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    history.save({
+      id: 'conversation-a',
+      createdAt: 0,
+      updatedAt: 2,
+      messages: priorMessages,
+      status: 'completed',
+      errorMessage: null,
+      metrics: null,
+      flagged: false,
+      flagNote: null,
+      contextMemory: null,
+      responseMode: 'Low',
+    });
+    const embed = jest.fn(async () => [new Float32Array([1, 0])]);
+    const ids = ['request', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      embeddingService: { embed },
+      isEmbeddingRuntimeActive: () => true,
+      now: () => 30,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+
+    await store.submit('conversation-a', { question, imagePath: null });
+
+    expect(embed).not.toHaveBeenCalled();
+  });
+
+  it('generates an embedding for an eligible new-chat cross-chat request', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const embed = jest.fn(async () => [new Float32Array([1, 0])]);
+    const ids = ['conversation-a', 'request', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      embeddingService: { embed },
+      isEmbeddingRuntimeActive: () => true,
+      getCrossChatOptions: () => ({
+        enabled: true,
+        currentConversationExcluded: false,
+        eligibleConversationIds: ['conversation-b'],
+      }),
+      now: () => 30,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+
+    await store.submit('new', {
+      question: 'What address did I mention in my apartment chat?',
+      imagePath: null,
+    });
+
+    expect(embed).toHaveBeenCalledWith([
+      'What address did I mention in my apartment chat?',
+    ]);
+  });
+
+  it('makes zero embedding calls while the approved runtime gate is inactive', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const embed = jest.fn(async () => [new Float32Array([1, 0])]);
+    const ids = ['conversation-a', 'request', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      embeddingService: { embed },
+      isEmbeddingRuntimeActive: () => false,
+      getCrossChatOptions: () => ({
+        enabled: true,
+        currentConversationExcluded: false,
+        eligibleConversationIds: ['conversation-b'],
+      }),
+      now: () => 30,
+      createId: () => ids.shift() ?? 'fallback',
+    });
+
+    await store.submit('new', {
+      question: 'What did I previously say in another conversation?',
+      imagePath: null,
+    });
+
+    expect(embed).not.toHaveBeenCalled();
+  });
+
   it('passes an active query embedding to retrieval and degrades embedding errors', async () => {
     const queue = new FakeInferenceQueue();
     const history = new FakeHistoryStore();
@@ -237,6 +354,85 @@ describe('conversationStore', () => {
       imagePath: null,
     })).resolves.toBeDefined();
   });
+
+  it.each([
+    ['retry', 'failed', 'retryFailedMessage'],
+    ['regenerate', 'completed', 'regenerateResponse'],
+  ] as const)(
+    'uses the same classification-before-embedding flow for %s',
+    async (_label, assistantStatus, method) => {
+      const queue = new FakeInferenceQueue();
+      const history = new FakeHistoryStore();
+      const priorMessages = Array.from({ length: 7 }, (_, index) => [
+        {
+          id: `user-prior-${index}`,
+          role: 'user' as const,
+          text: `Question ${index}`,
+          attachments: [],
+          status: 'completed' as const,
+          errorMessage: null,
+          createdAt: index * 2,
+        },
+        {
+          id: `assistant-prior-${index}`,
+          role: 'assistant' as const,
+          text: `Answer ${index}`,
+          attachments: [],
+          status: 'completed' as const,
+          errorMessage: null,
+          createdAt: index * 2 + 1,
+        },
+      ]).flat();
+      history.save({
+        id: 'conversation-a',
+        createdAt: 0,
+        updatedAt: 30,
+        messages: [
+          ...priorMessages,
+          {
+            id: 'user-target',
+            role: 'user',
+            text: 'What did I mention earlier in this conversation?',
+            attachments: [],
+            status: 'completed',
+            errorMessage: null,
+            createdAt: 20,
+          },
+          {
+            id: 'assistant-target',
+            role: 'assistant',
+            text: assistantStatus === 'completed' ? 'Prior response.' : '',
+            attachments: [],
+            status: assistantStatus,
+            errorMessage: assistantStatus === 'failed' ? 'failed' : null,
+            createdAt: 21,
+          },
+        ],
+        status: assistantStatus === 'failed' ? 'errored' : 'completed',
+        errorMessage: null,
+        metrics: null,
+        flagged: false,
+        flagNote: null,
+        contextMemory: null,
+        responseMode: 'Low',
+      });
+      const embed = jest.fn(async () => [new Float32Array([1, 0])]);
+      const store = createConversationStore({
+        inferenceQueue: queue,
+        historyStore: history,
+        embeddingService: { embed },
+        isEmbeddingRuntimeActive: () => true,
+        now: () => 40,
+        createId: () => 'replacement',
+      });
+
+      await store[method]('conversation-a', 'assistant-target');
+
+      expect(embed).toHaveBeenCalledWith([
+        'What did I mention earlier in this conversation?',
+      ]);
+    },
+  );
 
   it('round-trips drafts independently and startNewConversation only resets the new draft', () => {
     const { store } = makeStore();
@@ -427,6 +623,45 @@ describe('conversationStore', () => {
         extractedText: ['Order A-184'],
       }),
     );
+  });
+
+  it('grounds a new-image answer from fresh hidden evidence without changing visible text', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const { store, queue, history } = makeStore();
+    const submitted = await store.submit('new', {
+      question: 'What price is on this receipt?',
+      imagePath: '/capture/receipt.jpg',
+    });
+    const answer = 'The receipt total is $12.99.';
+
+    queue.emit({
+      ...makeInferenceState('completed', answer),
+      hiddenEvidence: {
+        version: 'hidden-evidence-v1',
+        imagePath: '/capture/receipt.jpg',
+        sourceQuestion: 'What price is on this receipt?',
+        subjectObject: 'printed receipt',
+        visibleFeatures: [],
+        visibleText: ['TOTAL $12.99'],
+        visibleCondition: 'readable',
+        uncertainty: [],
+        createdAt: '2026-07-26T00:00:00.000Z',
+      },
+    });
+
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      summary: expect.objectContaining({
+        contextSelection: expect.objectContaining({
+          groundingVerdict: 'supported',
+        }),
+      }),
+    }));
+    expect(
+      history.get(submitted.conversationId)?.messages.find(
+        (message) => message.id === submitted.assistantMessageId,
+      )?.text,
+    ).toBe(answer);
+    append.mockRestore();
   });
 
   it('rejects a submit elsewhere while preserving that conversation draft and messages', async () => {

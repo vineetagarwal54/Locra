@@ -19,6 +19,10 @@ export interface InferenceEngineHandle {
   getGeneratedTokenCount(): number;
   /** Prompt tokens consumed by the current/last generation. */
   getPromptTokenCount(): number;
+  /** Deterministic estimator count before native reconciliation, when available. */
+  getEstimatedPromptTokenCount?(): number | null;
+  /** Final formatted native count proven to fit before completion, when available. */
+  getFinalNativePromptTokenCount?(): number | null;
   /** Prompt + generated tokens consumed by the current/last generation. */
   getTotalTokenCount(): number;
   /** Why the last generation stopped, or null before any generation. */
@@ -47,6 +51,8 @@ export interface EngineGenerateResult {
   response: string;
   tokenCount: number;
   promptTokenCount?: number;
+  estimatedPromptTokenCount?: number;
+  finalNativePromptTokenCount?: number;
   totalTokenCount?: number;
   pinnedExtraction?: string | null;
   hiddenEvidence?: InferenceState['hiddenEvidence'];

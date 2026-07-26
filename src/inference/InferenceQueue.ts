@@ -134,7 +134,6 @@ interface ActiveRequest {
   readonly controller: AbortController;
   readonly trace: InferenceTrace | null;
   cancelled: boolean;
-  loopingStopped: boolean;
 }
 
 interface LifecycleGate<T> {
@@ -213,7 +212,7 @@ export class InferenceQueue implements IInferenceQueue {
     const traceEnabled = this.deps.isTraceEnabled?.() ?? isDevelopmentInferenceTraceEnabled();
     const trace = traceEnabled ? this.stampTraceAttribution(createInferenceTrace(), lifecycleRequest) : null;
     const active: ActiveRequest = {
-      controller: new AbortController(), trace, cancelled: false, loopingStopped: false,
+      controller: new AbortController(), trace, cancelled: false,
     };
     this.active = active;
     const lifecycleGates = createLifecycleGates();
@@ -314,7 +313,7 @@ export class InferenceQueue implements IInferenceQueue {
         hiddenEvidence: result.hiddenEvidence ?? null,
         objectiveResult: this.buildObjectiveResult(
           processedAnswer.text,
-          processedAnswer.verdict,
+          finishReason === 'looping' ? 'looping' : processedAnswer.verdict,
           result,
           recorder,
           responseMode,
@@ -592,23 +591,10 @@ export class InferenceQueue implements IInferenceQueue {
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 
-    let lastStreamedResponse = '';
-    let lastGeneratedTokenCount = 0;
     const onToken = (cumulative: string, generatedTokenCount?: number): void => {
       if (active.cancelled) return;
-      lastStreamedResponse = cumulative;
-      lastGeneratedTokenCount = generatedTokenCount ?? lastGeneratedTokenCount;
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
-      if (cumulative.length >= 200 && /[.!?…]\s*$/.test(cumulative)) {
-        const streamedQuality = postProcessAnswer(cumulative);
-        if (streamedQuality.verdict === 'looping') {
-          active.loopingStopped = true;
-          this.setState({ response: streamedQuality.text });
-          active.controller.abort();
-          return;
-        }
-      }
       this.lifecycleActor.send({
         type: 'TOKEN',
         response: cumulative,
@@ -617,24 +603,11 @@ export class InferenceQueue implements IInferenceQueue {
       this.setState({ response: cumulative });
     };
 
-    let result: EngineGenerateResult;
-    try {
-      result = await this.deps.engine.generate(
-        generateRequest,
-        onToken,
-        active.controller.signal,
-      );
-    } catch (error) {
-      if (!active.loopingStopped) {
-        throw error;
-      }
-      result = {
-        response: lastStreamedResponse,
-        tokenCount: lastGeneratedTokenCount,
-        finishReason: 'looping',
-        samplingProfile: samplingProfileForRequestKind(generateRequest.kind),
-      };
-    }
+    const result = await this.deps.engine.generate(
+      generateRequest,
+      onToken,
+      active.controller.signal,
+    );
     this.recordVisibleTraceStage(active, stage, generateRequest, result);
 
     const originalQuestion = generateRequest.originalQuestion ?? '';
@@ -704,6 +677,12 @@ export class InferenceQueue implements IInferenceQueue {
     };
     if (result.promptTokenCount !== undefined) {
       record.promptTokens = result.promptTokenCount;
+    }
+    if (result.estimatedPromptTokenCount !== undefined) {
+      record.estimatedPromptTokens = result.estimatedPromptTokenCount;
+    }
+    if (result.finalNativePromptTokenCount !== undefined) {
+      record.finalNativePromptTokens = result.finalNativePromptTokenCount;
     }
     return record;
   }
@@ -843,7 +822,7 @@ function resolveCompletionNotice(
   const answerNotice =
     finishReason === 'length' || verdict === 'truncated'
       ? TRUNCATED_ANSWER_NOTICE
-      : verdict === 'looping'
+      : finishReason === 'looping' || verdict === 'looping'
         ? LOOPING_ANSWER_NOTICE
         : null;
   return [inputShortenedWarning, answerNotice].filter((notice) => notice !== null).join(' ') || null;

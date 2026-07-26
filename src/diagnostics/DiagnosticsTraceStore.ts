@@ -58,6 +58,10 @@ export interface ProductionDiagnosticTurnSummary {
     readonly imageReferenceAmbiguous: boolean;
     readonly imageReferenceResolution: ContextSelectionDiagnostics['imageReferenceResolution'];
     readonly crossChatActive: boolean;
+    readonly crossChatQueried: boolean;
+    readonly crossChatItemsSelected: number;
+    readonly estimatedPromptTokens: number | null;
+    readonly finalNativePromptTokens: number | null;
     readonly groundingVerdict: ContextSelectionDiagnostics['groundingVerdict'];
   };
   readonly targetTokenCount: number;

@@ -32,6 +32,7 @@ import {
 } from '../inference/InferenceService';
 import { isDevelopmentInferenceTraceEnabled } from '../inference/InferenceTrace';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
+import { classifyRequest } from '../inference/RequestClassifier';
 import {
   DEFAULT_RESPONSE_MODE,
   getResponseModeConfig,
@@ -235,14 +236,23 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointAt: 0,
       seedText: '',
     };
-    const queryVector = await this.resolveQueryVector(durableRequest.question);
+    const snapshot = createCanonicalConversationSnapshot(
+      updatedConversation,
+      originatingUserMessageId,
+    );
+    const crossChat = this.dependencies.getCrossChatOptions(resolvedConversationId);
+    const queryVector = await this.resolveEligibleQueryVector(
+      snapshot,
+      effectiveResponseMode,
+      crossChat,
+    );
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
-      createCanonicalConversationSnapshot(updatedConversation, originatingUserMessageId),
+      snapshot,
       {
         responseMode: effectiveResponseMode,
         diagnosticsEnabled: true,
         queryVector,
-        crossChat: this.dependencies.getCrossChatOptions(resolvedConversationId),
+        crossChat,
       },
     );
     const inferenceRequest = this.applyImageSelection(
@@ -310,7 +320,7 @@ export class ConversationStore implements IConversationStore {
     // A retry is a fresh, independent attempt: it starts from EMPTY streaming and
     // checkpoint text (seedText '') so it can never inherit or resurrect the prior
     // attempt's partial output if this one produces less (or errors early).
-    this.launchLinkedAttempt({
+    await this.launchLinkedAttempt({
       conversationId,
       conversation,
       userMessageId: userMessage.id,
@@ -344,7 +354,7 @@ export class ConversationStore implements IConversationStore {
       throw new Error(`Assistant message ${assistantMessageId} cannot be regenerated.`);
     }
 
-    this.launchLinkedAttempt({
+    await this.launchLinkedAttempt({
       conversationId,
       conversation,
       userMessageId: userMessage.id,
@@ -382,7 +392,7 @@ export class ConversationStore implements IConversationStore {
       throw new Error(`Assistant message ${assistantMessageId} cannot be continued.`);
     }
 
-    this.launchLinkedAttempt({
+    await this.launchLinkedAttempt({
       conversationId,
       conversation,
       userMessageId: userMessage.id,
@@ -400,14 +410,14 @@ export class ConversationStore implements IConversationStore {
    * starts the queue. The new attempt supersedes the prior active attempt for
    * that user message while every prior attempt is preserved in history.
    */
-  private launchLinkedAttempt(input: {
+  private async launchLinkedAttempt(input: {
     conversationId: string;
     conversation: Conversation;
     userMessageId: string;
     question: string;
     imagePath: string | null;
     seedText: string;
-  }): void {
+  }): Promise<void> {
     const now = this.dependencies.now();
     const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
     const requestId = this.dependencies.createId('request');
@@ -442,12 +452,23 @@ export class ConversationStore implements IConversationStore {
       errorMessage: null,
       messages,
     };
+    const snapshot = createCanonicalConversationSnapshot(
+      updatedConversationWithoutMemory,
+      input.userMessageId,
+    );
+    const crossChat = this.dependencies.getCrossChatOptions(input.conversationId);
+    const queryVector = await this.resolveEligibleQueryVector(
+      snapshot,
+      activeGeneration.responseMode,
+      crossChat,
+    );
     const orchestration = this.dependencies.contextOrchestrator.orchestrate(
-      createCanonicalConversationSnapshot(updatedConversationWithoutMemory, input.userMessageId),
+      snapshot,
       {
         responseMode: activeGeneration.responseMode,
         diagnosticsEnabled: true,
-        crossChat: this.dependencies.getCrossChatOptions(input.conversationId),
+        queryVector,
+        crossChat,
       },
     );
     activeGeneration.generationTargetTokens = orchestration.diagnostics === undefined
@@ -690,10 +711,20 @@ export class ConversationStore implements IConversationStore {
     const context = activeGeneration.contextDiagnostics;
     const groundingVerdict = activeGeneration.selectedContext === undefined
       ? null
-      : assessGrounding(state.response, activeGeneration.selectedContext);
+      : assessGrounding(
+          state.response,
+          activeGeneration.selectedContext,
+          state.hiddenEvidence,
+        );
     const effectiveContext = context === undefined
       ? undefined
-      : { ...context, groundingVerdict };
+      : {
+          ...context,
+          groundingVerdict,
+          estimatedPromptTokens: objective?.estimatedPromptTokens ?? null,
+          finalNativePromptTokens:
+            objective?.finalNativePromptTokens ?? objective?.promptTokens ?? null,
+        };
     const finishReason = resolveMessageFinishReason(
       state,
       state.status === 'completed'
@@ -734,6 +765,10 @@ export class ConversationStore implements IConversationStore {
         imageReferenceAmbiguous: effectiveContext?.imageReferenceAmbiguous ?? false,
         imageReferenceResolution: effectiveContext?.imageReferenceResolution ?? 'not-applicable',
         crossChatActive: effectiveContext?.crossChatActive ?? false,
+        crossChatQueried: effectiveContext?.crossChatQueried ?? false,
+        crossChatItemsSelected: effectiveContext?.crossChatItemsSelected ?? 0,
+        estimatedPromptTokens: effectiveContext?.estimatedPromptTokens ?? null,
+        finalNativePromptTokens: effectiveContext?.finalNativePromptTokens ?? null,
         groundingVerdict,
       },
       targetTokenCount: activeGeneration.generationTargetTokens ?? modeConfig.answerTargetTokens,
@@ -804,7 +839,25 @@ export class ConversationStore implements IConversationStore {
     };
   }
 
-  private async resolveQueryVector(text: string): Promise<Float32Array | undefined> {
+  private async resolveEligibleQueryVector(
+    snapshot: ReturnType<typeof createCanonicalConversationSnapshot>,
+    responseMode: ResponseMode,
+    crossChat: {
+      readonly enabled: boolean;
+      readonly currentConversationExcluded: boolean;
+      readonly eligibleConversationIds: readonly string[];
+    },
+  ): Promise<Float32Array | undefined> {
+    const classification = classifyRequest(snapshot, responseMode, {
+      enabled: crossChat.enabled,
+      conversationExcluded: crossChat.currentConversationExcluded,
+    });
+    if (
+      !classification.isLongContextRetrievalRequest
+      && !classification.isCrossChatEligible
+    ) {
+      return undefined;
+    }
     if (
       this.dependencies.embeddingService === undefined
       || this.dependencies.isEmbeddingRuntimeActive?.() !== true
@@ -812,7 +865,9 @@ export class ConversationStore implements IConversationStore {
       return undefined;
     }
     try {
-      return (await this.dependencies.embeddingService.embed([text]))[0];
+      return (await this.dependencies.embeddingService.embed([
+        snapshot.currentMessage.text,
+      ]))[0];
     } catch {
       return undefined;
     }

@@ -8,13 +8,17 @@ import { getResponseModeConfig, type ResponseMode } from './ResponseMode';
 const CONVERSATIONAL_REFERENCE_PATTERN =
   /\b(?:it|that|this|they|them|those|these|also|again|continue|earlier|before|previously|same|other|what about|and then|and if|does that|did i|did we|we discussed|i mentioned|you said|which one|first one|second one|third one|last one)\b/i;
 const IMAGE_REFERENCE_PATTERN =
-  /\b(?:image|photo|picture|screenshot|label|receipt|document|shown|visible)\b/i;
+  /\b(?:image|photo|picture|screenshot|label|receipt|document|shown|visible|visual|on[- ]screen)\b/i;
 const PIXEL_DEPENDENT_PATTERN =
   /\b(?:read|says|written|price|cost|total|expiry|expire|count|how many|exact|small print|fine print|zoom|pixel|color|colour)\b/i;
 const PIXEL_DETAIL_PATTERN =
   /\b(?:text|word|letter|number|serial|code|date)\b/i;
 const LONG_CONTEXT_REFERENCE_PATTERN =
   /\b(?:earlier|before|previously|remember|recall|mentioned|discussed|said|told|stored|what did i|what did we|did we)\b/i;
+const CROSS_CHAT_REFERENCE_PATTERN =
+  /\b(?:another (?:chat|conversation)|other (?:chat|conversation)|previous(?:ly)?|before|remember|recall|did i (?:say|mention|discuss)|what did i (?:say|mention|discuss)|i (?:said|mentioned|discussed)|my [a-z0-9-]+ (?:chat|conversation))\b/i;
+const CURRENT_CHAT_ONLY_PATTERN =
+  /\b(?:this|current|same) (?:chat|conversation)\b/i;
 const ORDINAL_IMAGE_PATTERN =
   /\b(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)\s+(?:image|photo|picture|screenshot)\b/i;
 const SHORT_DEPENDENT_PATTERN =
@@ -53,42 +57,51 @@ export function classifyRequest(
     (attachment) => attachment.kind === 'image',
   );
   const hasImageReference = IMAGE_REFERENCE_PATTERN.test(text);
-  const isPixelDependent =
-    PIXEL_DEPENDENT_PATTERN.test(text) ||
-    (PIXEL_DETAIL_PATTERN.test(text) && (currentHasImage || hasImageReference));
   const ordinalTarget = resolveOrdinalTarget(text, priorImages);
   const referencesStoredImageEvidence = hasStoredImageEvidenceOverlap(snapshot, text);
+  const referencesImageAssociatedTurn = hasImageAssociatedTurnOverlap(snapshot, text);
+  const hasDirectVisualAnchor =
+    currentHasImage ||
+    hasImageReference ||
+    ordinalTarget !== null;
+  const isPixelDependent =
+    hasDirectVisualAnchor &&
+    (PIXEL_DEPENDENT_PATTERN.test(text) || PIXEL_DETAIL_PATTERN.test(text));
   const referencesOlderImage =
     ordinalTarget !== null && ordinalTarget.id !== priorImages[priorImages.length - 1]?.id;
   const imageReferenceAmbiguous =
     !currentHasImage &&
     priorImages.length >= 2 &&
-    hasImageReference &&
+    (hasImageReference || referencesStoredImageEvidence) &&
     ordinalTarget === null;
   const isOlderImageReference = referencesOlderImage && !imageReferenceAmbiguous;
   const isSameImageFollowUp =
     !currentHasImage &&
     priorImages.length > 0 &&
     !isOlderImageReference &&
-    (imageReferenceAmbiguous || hasImageReference || isPixelDependent || referencesStoredImageEvidence);
+    (imageReferenceAmbiguous || hasImageReference || referencesStoredImageEvidence);
   const completedTurnCount = countCompletedTurns(snapshot.priorMessages);
   const isLongContextRetrievalRequest =
     completedTurnCount > getResponseModeConfig(responseMode).recentExactTurns &&
     LONG_CONTEXT_REFERENCE_PATTERN.test(text);
+  const requestsPriorConversationMemory =
+    CROSS_CHAT_REFERENCE_PATTERN.test(text) &&
+    !CURRENT_CHAT_ONLY_PATTERN.test(text);
+  const isCrossChatEligible =
+    crossChatSettings.enabled &&
+    !crossChatSettings.conversationExcluded &&
+    requestsPriorConversationMemory;
   const hasConversationalReference =
     CONVERSATIONAL_REFERENCE_PATTERN.test(text) ||
     isSameImageFollowUp ||
     isOlderImageReference ||
-    isLongContextRetrievalRequest;
+    isLongContextRetrievalRequest ||
+    isCrossChatEligible ||
+    referencesImageAssociatedTurn;
   const isTextFollowUp =
     hasConversationalReference ||
     (!currentHasImage && SHORT_DEPENDENT_PATTERN.test(text));
   const isIndependentTextQuestion = !isTextFollowUp;
-  const isCrossChatEligible =
-    crossChatSettings.enabled &&
-    !crossChatSettings.conversationExcluded &&
-    isLongContextRetrievalRequest;
-
   return {
     isIndependentTextQuestion,
     isTextFollowUp,
@@ -108,24 +121,52 @@ function hasStoredImageEvidenceOverlap(
   text: string,
 ): boolean {
   const queryTokens = meaningfulTokens(text);
-  if (queryTokens.size < 2) return false;
+  if (queryTokens.size === 0) return false;
   return (snapshot.contextMemory?.mediaEvidence ?? []).some((evidence) => {
     const evidenceTokens = meaningfulTokens([
       evidence.summary,
       ...evidence.facts,
       ...evidence.extractedText,
     ].join(' '));
-    let overlap = 0;
-    for (const token of queryTokens) {
-      if (evidenceTokens.has(token)) overlap += 1;
-    }
-    return overlap >= 2;
+    return hasTokenOverlap(queryTokens, evidenceTokens);
   });
+}
+
+function hasImageAssociatedTurnOverlap(
+  snapshot: CanonicalConversationSnapshot,
+  text: string,
+): boolean {
+  const queryTokens = meaningfulTokens(text);
+  if (queryTokens.size === 0) return false;
+  const imageIndexes = snapshot.priorMessages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) =>
+      message.attachments.some((attachment) => attachment.kind === 'image'),
+    );
+  return imageIndexes.some((current, imageIndex) => {
+    const nextIndex = imageIndexes[imageIndex + 1]?.index ?? snapshot.priorMessages.length;
+    const associatedTokens = meaningfulTokens(
+      snapshot.priorMessages
+        .slice(current.index, nextIndex)
+        .map((message) => message.text)
+        .join(' '),
+    );
+    return hasTokenOverlap(queryTokens, associatedTokens);
+  });
+}
+
+function hasTokenOverlap(left: Set<string>, right: Set<string>): boolean {
+  for (const token of left) {
+    if (right.has(token)) return true;
+  }
+  return false;
 }
 
 function meaningfulTokens(text: string): Set<string> {
   const stopWords = new Set([
     'the', 'this', 'that', 'what', 'was', 'were', 'is', 'are', 'on', 'in', 'of', 'a', 'an',
+    'read', 'price', 'cost', 'total', 'count', 'number', 'color', 'colour', 'code',
+    'image', 'photo', 'picture', 'visible', 'shown',
   ]);
   return new Set(
     (text.toLowerCase().match(/[a-z0-9]+/g) ?? [])

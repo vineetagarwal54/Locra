@@ -9,6 +9,7 @@ export const CONTEXT_SAFETY_TOKENS = 128;
 export const MESSAGE_OVERHEAD_TOKENS = 6;
 export const IMAGE_RESERVE_TOKENS = 768;
 export const SYSTEM_INSTRUCTION_RESERVE_TOKENS = 256;
+export const MAX_NATIVE_RECONCILIATION_PASSES = 4;
 
 export interface ContextCapacityBuckets {
   readonly systemInstructions: number;
@@ -61,14 +62,92 @@ export interface BoundedInput {
   readonly inputShortenedWarning: string | null;
 }
 
+export interface NativePromptReconciliation {
+  readonly messages: ModelRequestMessage[];
+  readonly estimatedPromptTokens: number;
+  readonly finalNativePromptTokens: number;
+  readonly passes: number;
+  readonly currentInputShortened: boolean;
+}
+
+export class NativePromptLimitError extends Error {
+  constructor() {
+    super('The formatted prompt could not be reconciled safely to the Qwen context limit.');
+    this.name = 'NativePromptLimitError';
+  }
+}
+
+/**
+ * Repeatedly measures the actual formatted Qwen prompt. Each pass either proves
+ * the prompt fits, removes eligible history, or shortens the current request
+ * using the measured native excess. The explicit pass cap guarantees termination.
+ */
+export async function reconcileMessagesWithNativeTokenizer(
+  messages: ReadonlyArray<ModelRequestMessage>,
+  responseMode: ResponseMode,
+  measureNativePrompt: (
+    candidate: ReadonlyArray<ModelRequestMessage>,
+  ) => Promise<number>,
+): Promise<NativePromptReconciliation> {
+  const maximumInputTokens = maximumNativeInputTokens(responseMode);
+  const estimatedPromptTokens = messages.reduce(
+    (total, message) => total + estimateMessageTokens(message),
+    0,
+  );
+  let selected = messages.map(cloneMessage);
+  let currentInputShortened = false;
+
+  for (let pass = 1; pass <= MAX_NATIVE_RECONCILIATION_PASSES; pass += 1) {
+    const nativeTokens = await measureNativePrompt(selected);
+    if (nativeTokens <= maximumInputTokens) {
+      return {
+        messages: selected,
+        estimatedPromptTokens,
+        finalNativePromptTokens: nativeTokens,
+        passes: pass,
+        currentInputShortened,
+      };
+    }
+    if (pass === MAX_NATIVE_RECONCILIATION_PASSES) {
+      throw new NativePromptLimitError();
+    }
+
+    const reducedHistory = reconcileMessagesToNativeTokenCount(
+      selected,
+      responseMode,
+      nativeTokens,
+    );
+    if (reducedHistory.length < selected.length) {
+      selected = reducedHistory;
+      continue;
+    }
+
+    const current = selected.at(-1);
+    if (current === undefined) {
+      throw new NativePromptLimitError();
+    }
+    const measuredExcess = nativeTokens - maximumInputTokens;
+    const targetTokens = Math.max(
+      1,
+      estimateMessageTokens(current) - measuredExcess - MESSAGE_OVERHEAD_TOKENS,
+    );
+    const capped = capMessageToTokenBudget(current, targetTokens);
+    if (!capped.shortened || capped.message.content === current.content) {
+      throw new NativePromptLimitError();
+    }
+    selected = [...selected.slice(0, -1), capped.message];
+    currentInputShortened = true;
+  }
+
+  throw new NativePromptLimitError();
+}
+
 export function reconcileMessagesToNativeTokenCount(
   messages: ReadonlyArray<ModelRequestMessage>,
   responseMode: ResponseMode,
   nativeTokenCount: number,
 ): ModelRequestMessage[] {
-  const maximumInputTokens = QWEN_CONTEXT_TOKEN_LIMIT
-    - getResponseGenerationLimit(responseMode)
-    - CONTEXT_SAFETY_TOKENS;
+  const maximumInputTokens = maximumNativeInputTokens(responseMode);
   if (nativeTokenCount <= maximumInputTokens || messages.length < 3) {
     return messages.map(cloneMessage);
   }
@@ -189,9 +268,10 @@ function capMessageToTokenBudget(
   const content = message.content;
   const markerUnits = INPUT_SHORTENED_MARKER.length;
   if (maximumCodeUnits <= markerUnits) {
-    // Not even room for head + marker + tail: fall back to a safe head slice.
+    const head = sliceHeadOnSurrogateBoundary(content, content.length > 0 ? 1 : 0);
+    const tail = sliceTailOnSurrogateBoundary(content, content.length > 1 ? 1 : 0);
     return {
-      message: { ...message, content: sliceHeadOnSurrogateBoundary(content, maximumCodeUnits) },
+      message: { ...message, content: `${head}${INPUT_SHORTENED_MARKER}${tail}` },
       shortened: true,
     };
   }
@@ -205,6 +285,12 @@ function capMessageToTokenBudget(
     message: { ...message, content: `${head}${INPUT_SHORTENED_MARKER}${tail}` },
     shortened: true,
   };
+}
+
+function maximumNativeInputTokens(responseMode: ResponseMode): number {
+  return QWEN_CONTEXT_TOKEN_LIMIT
+    - getResponseGenerationLimit(responseMode)
+    - CONTEXT_SAFETY_TOKENS;
 }
 
 /** Slices the first `units` code units without splitting a trailing surrogate pair. */

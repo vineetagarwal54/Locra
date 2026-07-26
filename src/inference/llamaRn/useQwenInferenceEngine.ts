@@ -25,6 +25,8 @@ interface EngineState {
   error: string | null;
   generatedTokens: number;
   promptTokens: number;
+  estimatedPromptTokens: number;
+  finalNativePromptTokens: number;
   totalTokens: number;
   finishReason: GenerationFinishReason | null;
   inputShortenedWarning: string | null;
@@ -38,6 +40,8 @@ const INITIAL_ENGINE_STATE: EngineState = {
   error: null,
   generatedTokens: 0,
   promptTokens: 0,
+  estimatedPromptTokens: 0,
+  finalNativePromptTokens: 0,
   totalTokens: 0,
   finishReason: null,
   inputShortenedWarning: null,
@@ -106,6 +110,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
           generating: true,
           error: null,
           generatedTokens: 0,
+          estimatedPromptTokens: 0,
+          finalNativePromptTokens: 0,
           finishReason: null,
           inputShortenedWarning: null,
         });
@@ -127,6 +133,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             generating: false,
             generatedTokens: result.generatedTokens,
             promptTokens: result.promptTokens,
+            estimatedPromptTokens: result.estimatedPromptTokens,
+            finalNativePromptTokens: result.finalNativePromptTokens,
             totalTokens: result.totalTokens,
             finishReason: result.finishReason,
             inputShortenedWarning: result.inputShortenedWarning,
@@ -148,13 +156,14 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
       },
       cancel: (): void => {
         abortRef.current?.abort();
-        runtimeRef.current?.cancel();
       },
       getResponse: (): string => stateRef.current.response,
       isGenerating: (): boolean => stateRef.current.generating,
       isReady: (): boolean => runtimeRef.current?.getStatus() === 'loaded',
       getGeneratedTokenCount: (): number => stateRef.current.generatedTokens,
       getPromptTokenCount: (): number => stateRef.current.promptTokens,
+      getEstimatedPromptTokenCount: (): number => stateRef.current.estimatedPromptTokens,
+      getFinalNativePromptTokenCount: (): number => stateRef.current.finalNativePromptTokens,
       getTotalTokenCount: (): number => stateRef.current.totalTokens,
       getFinishReason: (): GenerationFinishReason | null => stateRef.current.finishReason,
       getInputShortenedWarning: (): string | null => stateRef.current.inputShortenedWarning,

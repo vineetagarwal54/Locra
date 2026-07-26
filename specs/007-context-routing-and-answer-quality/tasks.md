@@ -105,7 +105,10 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **Serves**: US1, US3, US6 (no dedicated user story of its own; a cross-cutting requirement, Section 8).
 
-**Goal**: Replace character-based context budgeting with the two-tier token measurement (calibrated estimate for selection, one real `tokenize()` check for final verification), reserve distinct capacity for system instructions / current input / image input / selected context / generated output, and fix the eviction order so a recent-turn floor is only ever protected for a request that has one.
+**Goal**: Replace character-based context budgeting with calibrated selection plus
+bounded repeated native prompt verification, reserve distinct capacity for system
+instructions / current input / image input / selected context / generated output,
+and apply the documented eviction order without an unconditional recent floor.
 
 **Independent Test**: Export diagnostics across Low/Medium/High modes and confirm budget units are token-denominated and bucketed; construct a near-limit conversation and confirm the router never selects a set that `ContextWindow`'s downstream trim would still need to cut; confirm the current request and active/referenced image evidence are never evicted, and that an independent question shows no recent-turn-floor entry at all.
 
@@ -113,7 +116,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 - [X] T024 [P] [US3] Write failing tests for the new token-based `ContextBudgetPolicy` implementation in `tests/unit/inference/TokenContextBudgetPolicy.test.ts`: `measure()` returns a calibrated (tier-1) token estimate (not `content.length`), per-mode budgets stay monotonic, output is deterministic.
 - [X] T025 [P] [US1] Write failing tests asserting the current request is never evicted, even under a deliberately tiny budget, and that an independent-question turn shows zero recent-turn-floor consumption (not a protected-but-empty floor).
-- [X] T026 [P] [US6] Write failing tests asserting active/referenced image evidence is never evicted and that the eviction order (cross-chat → same-chat retrieved → facts → summary → recent-turn floor, only for a request that has one) holds under budget pressure.
+- [X] T026 [P] [US6] Write failing tests asserting active/referenced image evidence is never evicted, large protected evidence first displaces lower-priority context, final `usedUnits <= maximumUnits`, and the eviction order (cross-chat → same-chat retrieved → facts → summary → recent-turn floor, only for a request that has one) holds under budget pressure.
 - [X] T027 [P] [US3] Write failing reconciliation tests asserting the router's `maximumUnits` (selected-context-pool bucket) for a given mode never exceeds what `ContextWindow`'s hard trim allows for that mode once the other four buckets are subtracted (spec FR-027, MV-016).
 - [X] T028 [P] [US3] Write failing tests for the five reserved-capacity buckets (spec FR-026a): buckets never sum above `QWEN_CONTEXT_TOKEN_LIMIT - CONTEXT_SAFETY_TOKENS`; the selected-context pool cannot be sized into headroom reserved for system instructions, current input, image input, or generated output.
 
@@ -121,7 +124,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 - [X] T029 [US3] Implement `TokenContextBudgetPolicy` (`policyId: 'token-estimate-budget-v1'`, tier-1 calibrated estimator) in `src/inference/ContextOrchestrator.ts`, replacing `CharacterContextBudgetPolicy` as the runtime default. `responseModeBudgetPolicy()` MUST preserve the concrete token policy and MUST NOT recreate `CharacterContextBudgetPolicy`; diagnostics MUST report the effective policy's `policyId`, not the constructor's stale base id. (make T024 pass)
 - [X] T030 [US6] Fix protected-source and eviction-order logic against the new token measurement: cross-chat → same-chat retrieved → facts → summary → recent-turn floor **only when a floor applies** to this request's classification; current request and protected image evidence are never reached. Update `selectProtectedEvidence` and `selectProtectedContextEvidence` (and equivalent protected-image paths) so referenced image evidence cannot be dropped incorrectly under the selected-context budget. (make T025, T026 pass)
-- [X] T031 [US3] Implement the tier-2 reconciliation: one real `tokenize()` call on the final assembled prompt (reusing the inference context acquisition for that request), replacing the previous "shared constant, hoped to agree" approach with an exact check against `ContextWindow`'s `QWEN_CONTEXT_TOKEN_LIMIT - generationLimit - CONTEXT_SAFETY_TOKENS`. (make T027 pass)
+- [X] T031 [US3] Implement bounded tier-2 reconciliation: format and tokenize the final Qwen prompt, evict eligible context and re-tokenize when over limit, then shorten the current request from its measured native excess (preserving head, tail, marker, and image media path) and perform a final fitting check. Use a small explicit pass cap and never call completion with an unverified over-limit prompt. (make T027 pass)
 - [X] T032 [US3] Implement the five reserved-capacity buckets (system instructions, current input, image input, selected-context pool, generated output) in `src/inference/ContextOrchestrator.ts`/`src/inference/ContextWindow.ts`, wiring existing constants (`IMAGE_RESERVE_TOKENS`, `getResponseGenerationLimit`) into the shared accounting. (make T028 pass)
 - [X] T033 [US3] Recalibrate the three response-mode budgets from characters to the selected-context-pool token bucket in `src/inference/ResponseMode.ts`, using the ratio from `research.md` §1 as the starting point (final numbers per spec Open Questions/evaluation harness).
 
@@ -137,11 +140,11 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **Independent Test**: Ask a short independent question in each mode → answer length trends short, not padded to the mode's soft target. Ask a genuinely detailed question → length is not artificially reduced. Trigger a known loop-prone prompt → generation stops noticeably earlier, partial text is preserved, and the answer is still cleaned up.
 
-No automated tests are added in this phase (spec Section 12 explicitly excludes generation-quality logic, loop-stop timing, and sampling parameter choices from the required test set); it is validated manually and via `src/evaluation` per the Checkpoint below.
+Generation quality remains outside the five required automated-test areas, but deterministic mocked correction tests cover stop ownership, finish-reason handling, partial-buffer preservation, and cancellation idempotence. Native acceptance remains manual.
 
-- [ ] T034 Re-verify `stopCompletion()`'s current call shape and behavior against the actually-linked `llama.rn` version; manually validate on a physical device that a mid-stream call stops generation and preserves already-streamed text, before any detection threshold is chosen (spec FR-036a, Constitution IX). (depends on T002)
+- [ ] T034 Re-verify `stopCompletion()` against the linked `llama.rn` version and validate on a physical device that it stops native completion, preserves and persists partial text, releases the resource lease, permits the next inference, and does not race/double-complete with user cancellation. Source/API verification and deterministic mocked coverage are complete; native hardware acceptance remains pending (spec FR-036a, Constitution IX). (depends on T002)
 - [X] T035 [US10] Implement `resolveGenerationTarget(mode, classification)` in `src/inference/GenerationTuning.ts` and wire it into the answer-generation call site: reduced soft target for independent/short-follow-up classifications; unchanged or unshortened target for long-context/detailed requests; hard generation limit never reduced below safe completion room.
-- [X] T036 [US10] Implement the streaming loop-detector hook at the existing checkpoint-throttle cadence in `src/inference/llamaRn/QwenLlamaRuntime.ts`, calling the verified `stopCompletion()` path on a confirmed loop, and preserving partial text via the existing Spec 006 checkpoint/interruption-recovery path (FR-A02). (depends on T034)
+- [X] T036 [US10] **Automated implementation complete; hardware acceptance pending under T034.** Implement the streaming loop detector in `src/inference/llamaRn/QwenLlamaRuntime.ts` as the single authoritative native loop-stop owner, make cancellation idempotent, return a completed `looping` result with cleaned partial text, and prevent queue-level duplicate stop/cancellation paths. Deterministic mocked tests pass; this checkbox does not claim physical-device acceptance. (hardware acceptance depends on T034)
 - [X] T037 [US10] Run the existing `postProcessAnswer` pass on the early-stopped buffer exactly as on a normal completion; extend `src/inference/AnswerPostProcessor.ts` only if early-stopping introduces a new truncation shape to handle (spec FR-031, "may improve, not required to stay unchanged"). (depends on T036)
 
 **Checkpoint**: Spec MV-011 passes manually; independent short-answer questions are concise; genuinely detailed answers are unaffected; loop-prone fixtures stop earlier without losing partial text.
@@ -158,13 +161,13 @@ No automated tests are added in this phase (spec Section 12 explicitly excludes 
 
 ### Tests for Retrieval Fusion ⚠️ (write first, must fail)
 
-- [X] T038 [P] [US3] Write failing tests extending `tests/unit/retrieval/HybridRetriever.test.ts`: RRF-fused ranking never drops a top lexical match, the exact-match guarantee (spec FR-019a) retains a verbatim number/price/date/identifier match regardless of RRF rank, dedup by source message keeps the higher fused score, deterministic tie-break holds, and lexical-only fallback triggers when there is no query vector, embeddings are stale/incompatible/still building, or the embedding call throws.
+- [X] T038 [P] [US3] Write failing tests extending `tests/unit/retrieval/HybridRetriever.test.ts`: RRF-fused ranking never drops a top lexical match; exact matching retains first-position and multi-word proper names plus numbers/prices/dates/IDs while filtering generic command/question openers; dedup/tie-break remain deterministic; and lexical fallback covers missing/inactive/failing embeddings with zero compatible-vector lookup when no query vector exists.
 
 ### Implementation for Retrieval Fusion
 
-- [X] T039 **⛔ GATED (embedding manifest)** [US3] Implement query-time embedding generation in `ContextOrchestrator`/`src/store/conversationStore.ts`: call `EmbeddingService.embed([currentRequestText])` under the `DeviceResourcePolicy` `'embedding'` lease when the embedding runtime is active, catching and degrading any error to lexical-fallback, and pass the result as `queryVector` into `HybridRetriever.search` (spec FR-015; ships inert/unreachable until the manifest is approved, same gate as Spec 006 T005).
+- [X] T039 **⛔ GATED (embedding manifest)** [US3] Run deterministic classification before query-vector generation. Call `EmbeddingService.embed([currentRequestText])` under its existing device-resource lease only for eligible same-chat long-context or explicit cross-chat-memory retrieval, with retry/regenerate parity and lexical fallback on error. Independent questions, ordinary non-retrieval follow-ups, continuations without retrieval classification, and an inactive manifest make zero embedding calls (spec FR-015; remains inert until approval).
 - [X] T040 **⛔ GATED (embedding manifest)** [US3] Implement RRF fusion (`k = 60`) in `src/retrieval/HybridRetriever.ts`, replacing "semantic overrides lexical" with combined-ranking fusion, dedup, and tie-break. (make T038's non-exact-match assertions pass)
-- [X] T041 **⛔ GATED (embedding manifest)** [US3] Implement the exact-match guarantee (spec FR-019a) as a small post-fusion step in `src/retrieval/HybridRetriever.ts`: retain any candidate with a verbatim number/price/date/identifier match before the per-request limit is applied. (depends on T040; make T038's exact-match assertions pass)
+- [X] T041 **⛔ GATED (embedding manifest)** [US3] Implement the exact-match guarantee (spec FR-019a) as a deterministic post-fusion step: retain proper and multi-word names even at query position zero, plus verbatim numbers/prices/dates/identifiers, while excluding generic sentence-opening commands before applying the limit. (depends on T040; make T038 pass)
 
 **Checkpoint**: Retrieval fusion and the exact-match guarantee are complete and tested but remain behind the pre-existing embedding-manifest approval gate; the app continues to serve lexical-only results until that approval lands.
 
@@ -181,13 +184,13 @@ No automated tests are added in this phase (spec Section 12 explicitly excludes 
 ### Tests for Cross-Chat Retrieval ⚠️ (write first, must fail)
 
 - [X] T042 [P] [US9] Write failing migration tests extending `tests/unit/persistence/Migrations.test.ts`: `SCHEMA_VERSION` 3→4 adds `excluded_from_cross_chat`, existing rows default to `0`, migration applies transactionally.
-- [X] T043 [P] [US9] Write failing tests in `tests/unit/retrieval/HybridRetriever.crossChat.test.ts`: scope unchanged when the setting is off; scope expands to non-excluded local conversations when on; an excluded conversation is isolated in both directions; scope-before-scoring is preserved; zero cross-chat queries run while disabled (not merely zero results).
+- [X] T043 [P] [US9] Write failing cross-chat tests covering new and short chats, explicit prior-conversation/memory language, ordinary independent questions, global off/immediate disable, bilateral current/source exclusions, scope-before-scoring, and accurate queried/selected diagnostics.
 
 ### Implementation for Cross-Chat Retrieval
 
 - [X] T044 [US9] Add the `excluded_from_cross_chat` migration entry in `src/persistence/sqlite/Migrations.ts` and `setCrossChatExcluded`/read exposure in `src/persistence/ConversationRepository.ts`. (make T042 pass)
 - [X] T045 [US9] Add `crossChatMemoryEnabled` (default `false`) to `src/store/settingsStore.ts`, mirroring the existing `defaultResponseMode` MMKV pattern.
-- [X] T046 [US9] Extend `HybridRetriever`/`ContextOrchestrator` scope resolution to expand `conversationIds` when cross-chat is enabled and the current conversation isn't excluded. (make T043 pass; depends on T040/T041's fusion-capable `HybridRetriever` existing, even while gated)
+- [X] T046 [US9] Extend scope resolution independently from same-chat long-context eligibility: explicit prior-conversation/memory requests may expand `conversationIds` in new or short chats when enabled and not excluded; ordinary questions never expand scope. Resolve eligible IDs before lexical/semantic scoring and record cross-chat queried/selected counts. (make T043 pass)
 - [X] T047 [US9] Add the global cross-chat settings-row toggle (`src/components/settings/CrossChatSettingRow.tsx`) and a per-conversation exclusion control, using existing `design/` tokens and shared settings components (spec Non-Goal: no new picker UX).
 - [X] T048 [US9] Replace the Phase 1 always-`false` `crossChatActive` diagnostics placeholder with real per-turn usage.
 
@@ -204,7 +207,7 @@ No automated tests are added in this phase (spec Section 12 explicitly excludes 
 **Independent Test**: Ask a pixel-dependent question with clear supporting evidence → `groundingVerdict: 'supported'`. Construct a case where the answer states a claim absent from the included evidence → `groundingVerdict: 'unsupported'` appears in diagnostics only, with no change to the visible answer.
 
 - [X] T049 **OPTIONAL — requires separate approval** [US10] If Phase 8 is separately approved, design the deterministic claim-extraction/comparison heuristic from `research.md` §7. A small deterministic pure-function test MAY be approved with that work, but no failing grounding test suite is mandatory under this feature's five required automated-test areas.
-- [X] T050 **OPTIONAL — requires separate approval** [US10] If approved, implement the heuristic in new `src/inference/GroundingAssessment.ts`, invoked only for turns that included image evidence or retrieved text, writing `groundingVerdict` to diagnostics only and never altering the visible answer. (spec FR-036)
+- [X] T050 **OPTIONAL — requires separate approval** [US10] If approved, implement the heuristic in new `src/inference/GroundingAssessment.ts` using selected conversation/retrieved context plus the current turn's fresh `hiddenEvidence` for new-image and re-inference turns. Fresh evidence is diagnostics-only, does not mutate canonical context, and never alters/retries/blocks the visible answer. (spec FR-036)
 
 **Checkpoint**: Grounding assessment is diagnostics-only and does not alter any visible answer; `quickstart.md` Phase 8 validation passes.
 
@@ -256,7 +259,7 @@ Unlike a typical spec where stories are independent from a foundational phase on
 - T009/T010/T011 (Phase 2 tests) run in parallel; implementation tasks T012→T013→T014→T015→T016→T017 are sequential (same file, layered wiring).
 - T018/T019/T020 (Phase 3 tests) run in parallel; T021→T022→T023 are sequential (same orchestrator file).
 - T024–T028 (Phase 4 tests) run in parallel; T029–T033 are largely sequential (same files/shared constant), though T032 (buckets) and T033 (recalibration) can overlap once T029/T031 land.
-- T035 and T036 (Phase 5) can run in parallel (different files) once T034 (verification) completes; T037 depends on T036.
+- T035 and T036 automated implementation are complete; T036's native acceptance remains dependent on the still-open physical-device T034, and T037 depends on the implemented T036 path.
 - T042/T043 (Phase 7 tests) run in parallel; T044/T045 run in parallel, T046 depends on both, T047/T048 run in parallel after T046.
 
 ---

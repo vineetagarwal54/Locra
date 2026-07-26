@@ -19,7 +19,13 @@ export function resolveGenerationTarget(
 ## Earlier in-stream loop stopping (new)
 
 - **MUST** run an incremental loop-detection check against the accumulating streamed buffer at the same throttle cadence already used for streaming checkpoints (Spec 006 FR-A02), reusing the detection logic already proven in `AnswerPostProcessor.collapseLoopingTail` (spec FR-033).
-- **MUST**, on confirming a loop mid-stream, call the existing `stopCompletion()` native method (already wired in `QwenLlamaRuntime.ts` for user cancellation) — no new native call is introduced. Before pinning any detection threshold, re-verify `stopCompletion()`'s current call shape and behavior against the actually-linked `llama.rn` version and manually validate on a physical device (spec FR-036a, Constitution IX) — no sampling/stopping constant is assumed from a prior version or from documentation for a different runtime.
+- **MUST** use `QwenLlamaRuntime` as the single authoritative owner of a
+  loop-triggered native `stopCompletion()` call. Queue streaming consumes the
+  runtime's completed `looping` result and does not issue a second abort. User
+  cancellation is idempotent and remains distinguishable from loop stopping.
+- Deterministic mocked implementation coverage is complete, but native acceptance
+  remains open under T034 until physical hardware proves stop, partial-text
+  persistence, lease release, next-inference readiness, and no cancellation race.
 - **MUST** preserve the partial text already streamed when a loop-triggered stop occurs, exactly as Spec 006's existing checkpointing/interruption-recovery behavior (FR-A02) already guarantees for user-initiated cancellation and failure — this is the same code path, not a new one.
 - **MUST** run the existing full post-processing pass (`postProcessAnswer`) on the resulting (now shorter) buffer exactly as it would on a normally completed answer, so the persisted/displayed text is still cleaned and verdict-tagged.
 

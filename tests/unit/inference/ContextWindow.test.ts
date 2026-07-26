@@ -4,7 +4,10 @@ import {
   estimateMessageTokens,
   getContextCapacityBuckets,
   INPUT_SHORTENED_MARKER,
+  MAX_NATIVE_RECONCILIATION_PASSES,
+  NativePromptLimitError,
   reconcileMessagesToNativeTokenCount,
+  reconcileMessagesWithNativeTokenizer,
   trimMessagesToContext,
   trimMessagesToContextWithReport,
 } from '../../../src/inference/ContextWindow';
@@ -51,6 +54,97 @@ describe('Qwen context window trimming', () => {
     expect(reconciled[0]).toEqual(messages[0]);
     expect(reconciled.at(-1)).toEqual(messages.at(-1));
     expect(reconciled.length).toBeLessThan(messages.length);
+  });
+
+  it('remeasures after history removal and accepts the verified second prompt', async () => {
+    const messages: ModelRequestMessage[] = [
+      { role: 'system', content: 'system instructions' },
+      { role: 'user', content: 'old question' },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'current request' },
+    ];
+    const measure = jest.fn()
+      .mockResolvedValueOnce(5_000)
+      .mockResolvedValueOnce(1_000);
+
+    const result = await reconcileMessagesWithNativeTokenizer(messages, 'Low', measure);
+
+    expect(measure).toHaveBeenCalledTimes(2);
+    expect(result.messages).toEqual([
+      messages[0],
+      messages[3],
+    ]);
+    expect(result.finalNativePromptTokens).toBe(1_000);
+  });
+
+  it.each([
+    ['token-dense text', 'ZX_418::'.repeat(2_000)],
+    ['non-English text', 'école 日本語 مرحبا '.repeat(1_000)],
+    ['code-heavy input', 'const value = map.get(key) ?? fallback;\n'.repeat(1_000)],
+  ])('shortens measured %s while preserving its beginning and end', async (_label, content) => {
+    const first = content.slice(0, 1);
+    const last = content.slice(-1);
+    const measure = jest.fn(async (candidate: ReadonlyArray<ModelRequestMessage>) =>
+      candidate.at(-1)?.content.includes(INPUT_SHORTENED_MARKER.trim()) === true
+        ? 1_000
+        : 8_000,
+    );
+
+    const result = await reconcileMessagesWithNativeTokenizer([
+      { role: 'system', content: 'system' },
+      { role: 'user', content },
+    ], 'Low', measure);
+    const shortened = result.messages.at(-1)?.content ?? '';
+
+    expect(shortened.startsWith(first)).toBe(true);
+    expect(shortened.endsWith(last)).toBe(true);
+    expect(shortened).toContain(INPUT_SHORTENED_MARKER.trim());
+    expect(result.currentInputShortened).toBe(true);
+  });
+
+  it('shortens the current question when system plus current input exceeds the native limit', async () => {
+    const question = `BEGIN ${'dense '.repeat(2_000)} END?`;
+    const measure = jest.fn(async (candidate: ReadonlyArray<ModelRequestMessage>) =>
+      candidate.at(-1)?.content.includes(INPUT_SHORTENED_MARKER.trim()) === true
+        ? 2_000
+        : 6_000,
+    );
+
+    const result = await reconcileMessagesWithNativeTokenizer([
+      { role: 'system', content: 'fixed system instructions' },
+      { role: 'user', content: question },
+    ], 'Medium', measure);
+
+    expect(result.messages[0]?.content).toBe('fixed system instructions');
+    expect(result.messages.at(-1)?.content).toMatch(/^B.*END\?$/s);
+    expect(result.currentInputShortened).toBe(true);
+  });
+
+  it('preserves an explicitly referenced image media path through reconciliation', async () => {
+    const seenPaths: Array<string | undefined> = [];
+    const measure = jest.fn(async (candidate: ReadonlyArray<ModelRequestMessage>) => {
+      seenPaths.push(candidate.at(-1)?.mediaPath);
+      return candidate.length > 2 ? 5_000 : 1_000;
+    });
+    const result = await reconcileMessagesWithNativeTokenizer([
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'old context' },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'user', content: 'read this image', mediaPath: '/image.jpg' },
+    ], 'Low', measure);
+
+    expect(seenPaths).toEqual(['/image.jpg', '/image.jpg']);
+    expect(result.messages.at(-1)?.mediaPath).toBe('/image.jpg');
+  });
+
+  it('terminates within the explicit pass bound instead of calling completion over limit', async () => {
+    const measure = jest.fn(async () => 20_000);
+
+    await expect(reconcileMessagesWithNativeTokenizer([
+      { role: 'system', content: 'system'.repeat(3_000) },
+      { role: 'user', content: 'question' },
+    ], 'Low', measure)).rejects.toBeInstanceOf(NativePromptLimitError);
+    expect(measure.mock.calls.length).toBeLessThanOrEqual(MAX_NATIVE_RECONCILIATION_PASSES);
   });
   it('drops oldest turns while preserving recent turns and the current question', () => {
     const messages: ModelRequestMessage[] = [

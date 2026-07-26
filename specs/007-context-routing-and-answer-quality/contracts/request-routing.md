@@ -28,6 +28,13 @@ export function classifyRequest(
 - **MUST** be synchronous, deterministic, and free of network/model calls (spec FR-002).
 - **MUST** default an ambiguous short reply (no explicit reference word, no independent clause) to `isTextFollowUp = true`, never `isIndependentTextQuestion = true` (spec edge case, conservative default).
 - **MUST NOT** treat length alone as dependency. Standalone imperatives and fragments such as `Define entropy`, `Java vs Kotlin?`, and `Convert 5 miles` are independent unless they contain a real conversational reference. Elliptical references such as `And then?`, `Why is that?`, and `The second one?` remain follow-ups.
+- **MUST NOT** use generic pixel-detail words alone to activate visual routing.
+  `cost`, `count`, `total`, `number`, `color`, and similar words require a new
+  image, explicit visual reference, resolved ordinal/description, or uniquely
+  strong stored-visual-evidence match before `isPixelDependent` may be true.
+- **MUST** classify same-chat long-context eligibility separately from cross-chat
+  eligibility. Opted-in cross-chat intent can be eligible in a new or short chat
+  only for explicit memory-seeking/prior-conversation language.
 - **MUST** allow multiple flags to be true simultaneously (e.g. `isOlderImageReference && isPixelDependent`); flags are independent booleans, not one exclusive enum, except `isIndependentTextQuestion`/`isTextFollowUp` which are mutually exclusive with each other.
 
 ## ContextOrchestrator (extended)
@@ -41,7 +48,9 @@ orchestrate(
 
 - **MUST** call `classifyRequest` first and gate all downstream source resolution on the result:
   - `isIndependentTextQuestion` (and no other classification independently requiring a source) → skip recent-turn inclusion beyond the bare current request, skip media-evidence resolution, skip same-chat/cross-chat retrieval, skip fact/summary resolution entirely (spec FR-003). This is a **hard skip**, not "resolve then discard" — the retriever, evidence repository, and fact/summary sources MUST NOT even be queried for a pure independent-question turn.
-  - `isTextFollowUp`, any image classification, or `isLongContextRetrievalRequest` → existing Spec 006 priority order applies (current request → recent turns → image evidence → same-chat retrieval → facts → summary), scoped to whichever sources the active classification combination actually requires.
+  - `isTextFollowUp`, any image classification, `isLongContextRetrievalRequest`,
+    or `isCrossChatEligible` → only the sources required by that classification
+    are considered. Cross-chat scope does not inherit the same-chat length gate.
 - **MUST** remain deterministic: identical `snapshot`, `options`, and settings state produce identical `RequestClassification` and identical selected/ordered context (spec FR-006).
 
 ## Invariants
