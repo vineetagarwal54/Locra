@@ -1,5 +1,6 @@
 import {
   buildAnswerPrompt,
+  buildVisualGroundingPolicy,
   wantsVisibleDetailList,
 } from '../../../src/inference/AnswerPrompt';
 import type {
@@ -66,5 +67,21 @@ describe('AnswerPrompt', () => {
     expect(prompt).toContain('Image evidence: worn cooking pan');
     expect(prompt).toContain('Condition: surface appears worn in the center');
     expect(prompt).toContain('coating material is not legible from the image');
+  });
+
+  it.each([
+    'Transcribe every readable line in the screenshot.',
+    'List the exact serial numbers shown on the labels.',
+    'How many objects are visible in the photo?',
+  ])('applies reusable exact-evidence discipline for "%s"', (question) => {
+    const policy = buildVisualGroundingPolicy(question);
+    expect(policy).toMatch(/only clearly supported values/i);
+    expect(policy).toMatch(/nearby object/i);
+    expect(policy).toMatch(/cannot be confirmed/i);
+    expect(policy).toMatch(/do not guess/i);
+  });
+
+  it('does not add exact-value extraction policy to general advice', () => {
+    expect(buildVisualGroundingPolicy('How should I maintain this pan?')).toBe('');
   });
 });

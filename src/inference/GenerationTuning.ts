@@ -26,6 +26,63 @@ export interface SamplingProfile {
   readonly topK: number;
 }
 
+export interface GenerationPlan {
+  readonly softTarget: number;
+  readonly effectiveHardLimit: number;
+  readonly samplingProfile: SamplingProfile;
+  readonly loopDetectionEligible: boolean;
+  readonly diagnosticsId:
+    | 'concise-text-v1'
+    | 'concise-image-identification-v1'
+    | 'bounded-visual-extraction-v1'
+    | 'detailed-v1'
+    | 'long-synthesis-v1';
+  readonly detailed: boolean;
+}
+
+export function createGenerationPlan(
+  mode: ResponseMode,
+  question: string,
+  classification: RequestClassification,
+  taskModality: 'text' | 'image',
+): GenerationPlan {
+  const config = getResponseModeConfig(mode);
+  const detailed = classification.requestsDetailedAnswer || hasDetailedRequestCue(question);
+  if (detailed) {
+    return plan(config.answerTargetTokens, config.generationLimit, 'detailed-v1', true);
+  }
+  if (classification.isLongContextRetrievalRequest || classification.isCrossChatEligible) {
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      'long-synthesis-v1',
+      true,
+    );
+  }
+  if (taskModality === 'image' && isVisualExtractionRequest(question, classification)) {
+    return plan(
+      Math.min(config.answerTargetTokens, mode === 'High' ? 320 : mode === 'Medium' ? 256 : 160),
+      Math.min(config.generationLimit, mode === 'High' ? 512 : mode === 'Medium' ? 384 : 256),
+      'bounded-visual-extraction-v1',
+      false,
+    );
+  }
+  if (taskModality === 'image') {
+    return plan(
+      Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128),
+      Math.min(config.generationLimit, mode === 'Low' ? 128 : 192),
+      'concise-image-identification-v1',
+      false,
+    );
+  }
+  return plan(
+    resolveGenerationTarget(mode, classification),
+    Math.min(config.generationLimit, mode === 'Low' ? 128 : mode === 'Medium' ? 160 : 192),
+    'concise-text-v1',
+    false,
+  );
+}
+
 export function resolveGenerationTarget(
   mode: ResponseMode,
   classification: RequestClassification,
@@ -47,6 +104,38 @@ export function resolveGenerationTarget(
     return Math.min(configuredTarget, mode === 'High' ? 256 : mode === 'Medium' ? 192 : 128);
   }
   return configuredTarget;
+}
+
+function plan(
+  softTarget: number,
+  effectiveHardLimit: number,
+  diagnosticsId: GenerationPlan['diagnosticsId'],
+  detailed: boolean,
+): GenerationPlan {
+  return {
+    softTarget,
+    effectiveHardLimit,
+    samplingProfile: QWEN_VISIBLE_SAMPLING_PROFILE,
+    loopDetectionEligible: true,
+    diagnosticsId,
+    detailed,
+  };
+}
+
+function hasDetailedRequestCue(question: string): boolean {
+  return /\b(?:step[- ]by[- ]step|comprehensive|in[- ]depth|detailed|thorough|explain all|cover all|include examples?|every (?:detail|item|step|option)|full (?:explanation|breakdown|comparison))\b/i
+    .test(question);
+}
+
+function isVisualExtractionRequest(
+  question: string,
+  classification: RequestClassification,
+): boolean {
+  return classification.isPixelDependent || (
+    /\b(?:read|transcribe|extract|list|count|how many|serial|code|date|price|total|label)\b/i
+      .test(question) &&
+    classification.hasVisualReference
+  );
 }
 
 /** Qwen's published visible VL sampling values, using llama.rn 0.12.5 names at the native boundary. */

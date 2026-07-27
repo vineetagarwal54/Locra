@@ -47,6 +47,7 @@ export interface ProductionDiagnosticTurnSummary {
     readonly budgetMaximumUnits: number;
     readonly budgetUsedUnits: number;
     readonly classification: ContextSelectionDiagnostics['classification'] | null;
+    readonly contextNeedProfile: ContextSelectionDiagnostics['contextNeedProfile'] | null;
     readonly retrievalMode: ContextSelectionDiagnostics['retrievalMode'];
     readonly retrievalModeReason: string;
     readonly retrievalQueried: boolean;
@@ -66,6 +67,7 @@ export interface ProductionDiagnosticTurnSummary {
   };
   readonly targetTokenCount: number;
   readonly generationLimit: number;
+  readonly generationPlanId: string;
   readonly samplingProfile: SamplingProfile;
   readonly imageSupplied: boolean;
   readonly modelId: string;

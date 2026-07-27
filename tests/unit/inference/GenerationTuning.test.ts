@@ -8,6 +8,7 @@ import {
   PIPELINE_VARIANT_IDS,
   QWEN_EXTRACTION_SAMPLING_PROFILE,
   QWEN_VISIBLE_SAMPLING_PROFILE,
+  createGenerationPlan,
   resolveGenerationTarget,
 } from '../../../src/inference/GenerationTuning';
 import type { RequestClassification } from '../../../src/inference/RequestClassifier';
@@ -25,6 +26,11 @@ function classification(overrides: Partial<RequestClassification>): RequestClass
     isCrossChatEligible: false,
     referencedImageId: null,
     imageReferenceAmbiguous: false,
+    hasVisualReference: false,
+    hasOrdinalImageReference: false,
+    hasDescriptiveImageReference: false,
+    isMultipleImageComparison: false,
+    requestsDetailedAnswer: false,
     ...overrides,
   };
 }
@@ -47,6 +53,51 @@ describe('generation tuning', () => {
       'Medium',
       classification({ isTextFollowUp: true, isSameImageFollowUp: true }),
     )).toBe(384);
+  });
+
+  it.each([
+    ['What is a mutex?', 192],
+    ['Give the short definition of a mutex.', 192],
+  ])('creates a concise independent plan for "%s"', (question, maximum) => {
+    const plan = createGenerationPlan(
+      'High',
+      question,
+      classification({ isIndependentTextQuestion: true }),
+      'text',
+    );
+    expect(plan.effectiveHardLimit).toBeLessThanOrEqual(maximum);
+    expect(plan.diagnosticsId).toBe('concise-text-v1');
+  });
+
+  it.each([
+    'Explain the entire process step by step and include examples.',
+    'Provide a comprehensive comparison of all the options.',
+  ])('preserves the mode hard limit for detailed wording: "%s"', (question) => {
+    const plan = createGenerationPlan(
+      'High',
+      question,
+      classification({ isIndependentTextQuestion: true, requestsDetailedAnswer: true }),
+      'text',
+    );
+    expect(plan.effectiveHardLimit).toBe(1024);
+    expect(plan.detailed).toBe(true);
+  });
+
+  it('gives extraction lists more room than identification without allowing an essay', () => {
+    const extraction = createGenerationPlan(
+      'High',
+      'List every readable line in these screenshots.',
+      classification({ isPixelDependent: true, hasVisualReference: true }),
+      'image',
+    );
+    const identification = createGenerationPlan(
+      'High',
+      'What is in this image?',
+      classification({ isNewImageQuestion: true, hasVisualReference: true }),
+      'image',
+    );
+    expect(extraction.effectiveHardLimit).toBeGreaterThan(identification.effectiveHardLimit);
+    expect(extraction.effectiveHardLimit).toBeLessThan(1024);
   });
   it('pins visible and structured sampling separately', () => {
     expect(QWEN_VISIBLE_SAMPLING_PROFILE).toEqual({

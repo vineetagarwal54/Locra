@@ -45,6 +45,10 @@ export interface EngineGenerateRequest {
   responseMode: import('./ResponseMode').ResponseMode;
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
   originalQuestion?: string;
+  /** Effective output cap selected for this task; passed to native `n_predict`. */
+  generationHardLimitTokens?: number;
+  generationPlanId?: string;
+  loopDetectionEligible?: boolean;
 }
 
 export interface EngineGenerateResult {

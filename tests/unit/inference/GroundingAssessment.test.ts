@@ -1,5 +1,6 @@
 import {
   assessGrounding,
+  createGroundingSourceSet,
   extractSpecificClaims,
 } from '../../../src/inference/GroundingAssessment';
 import type { HiddenVisualEvidence } from '../../../src/inference/OutputPipelineTypes';
@@ -88,6 +89,38 @@ describe('grounding assessment', () => {
       selected,
       freshEvidence(['SERIAL ZX-418']),
     )).toBe('supported');
+    expect(JSON.stringify(selected)).toBe(before);
+  });
+
+  it('preserves stored, fresh, same-chat, and cross-chat provenance in an immutable source set', () => {
+    const selected: CanonicalConversationContext = {
+      ...context('TOTAL $12.99'),
+      importantFacts: [
+        {
+          version: 'context-memory-fact-v1',
+          id: 'retrieved:current:item',
+          sourceMessageId: 'same-message',
+          text: 'Order ID AX-22',
+          createdAt: 1,
+        },
+        {
+          version: 'context-memory-fact-v1',
+          id: 'retrieved:other:item',
+          sourceMessageId: 'other-message',
+          text: '[Untrusted source: conversation other, message other-message] Date 2026-07-26',
+          createdAt: 1,
+        },
+      ],
+    };
+    const before = JSON.stringify(selected);
+    const sources = createGroundingSourceSet(selected, freshEvidence(['TOTAL $12.99']), 'current');
+
+    expect(sources.sources.map((source) => source.kind)).toEqual(expect.arrayContaining([
+      'stored-image-evidence',
+      'fresh-image-evidence',
+      'same-chat-retrieval',
+      'cross-chat-retrieval',
+    ]));
     expect(JSON.stringify(selected)).toBe(before);
   });
 });

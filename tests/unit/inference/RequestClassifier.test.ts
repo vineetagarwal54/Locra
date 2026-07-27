@@ -166,6 +166,23 @@ describe('classifyRequest', () => {
     }));
   });
 
+  it.each([
+    'What label should this form field use?',
+    'What object type should this API return?',
+  ])('does not treat overloaded visual nouns as image references: "%s"', (text) => {
+    const prior = [
+      message('image-1', 'Inspect this image.', {
+        imageAssetId: 'asset-1',
+        imagePath: '/unrelated.jpg',
+      }),
+      assistant('answer-1', 'An unrelated scene.', 2),
+    ];
+    const result = classifyRequest(snapshot(text, prior), 'Medium', CROSS_CHAT_OFF);
+    expect(result.hasVisualReference).toBe(false);
+    expect(result.isSameImageFollowUp).toBe(false);
+    expect(result.isPixelDependent).toBe(false);
+  });
+
   it('treats a uniquely associated object follow-up as text context, not pixel re-inference', () => {
     const prior = [
       message('image-1', 'What is this?', {
@@ -374,5 +391,41 @@ describe('classifyRequest', () => {
 
     expect(result.isLongContextRetrievalRequest).toBe(true);
     expect(result.isCrossChatEligible).toBe(false);
+  });
+
+  it.each([
+    'Compare the first and third photos.',
+    'What differs between these screenshots?',
+    'Contrast both pictures.',
+  ])('detects plural multi-image comparison intent for "%s"', (text) => {
+    const prior = [
+      message('image-1', 'One.', { imageAssetId: 'asset-1', imagePath: '/one.jpg' }),
+      assistant('answer-1', 'One.', 2),
+      message('image-2', 'Two.', { imageAssetId: 'asset-2', imagePath: '/two.jpg' }),
+      assistant('answer-2', 'Two.', 4),
+      message('image-3', 'Three.', { imageAssetId: 'asset-3', imagePath: '/three.jpg' }),
+      assistant('answer-3', 'Three.', 6),
+    ];
+    const result = classifyRequest(snapshot(text, prior), 'Medium', CROSS_CHAT_OFF);
+    expect(result.isMultipleImageComparison).toBe(true);
+    expect(result.hasVisualReference).toBe(true);
+  });
+
+  it.each([
+    'Compare these two algorithms.',
+    'Contrast the first and second proposals.',
+  ])('does not treat non-visual comparisons as image comparisons: "%s"', (text) => {
+    const result = classifyRequest(snapshot(text), 'Medium', CROSS_CHAT_OFF);
+    expect(result.isMultipleImageComparison).toBe(false);
+    expect(result.hasVisualReference).toBe(false);
+  });
+
+  it.each([
+    'Give a detailed explanation with examples.',
+    'Walk through the process step-by-step.',
+    'Provide a comprehensive comparison.',
+  ])('detects general detail requirements for "%s"', (text) => {
+    expect(classifyRequest(snapshot(text), 'Medium', CROSS_CHAT_OFF).requestsDetailedAnswer)
+      .toBe(true);
   });
 });

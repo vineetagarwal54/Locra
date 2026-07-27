@@ -22,10 +22,14 @@ import {
 import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
-  resolveGenerationTarget,
+  createGenerationPlan,
   samplingProfileForRequestKind,
+  type GenerationPlan,
 } from '../inference/GenerationTuning';
-import { assessGrounding } from '../inference/GroundingAssessment';
+import {
+  assessGroundingFromSources,
+  createGroundingSourceSet,
+} from '../inference/GroundingAssessment';
 import {
   applyImageSelectionToInferenceRequest,
   inferenceQueue,
@@ -116,6 +120,7 @@ interface ActiveGeneration {
   selectedContext?: CanonicalConversationContext;
   responseMode: ResponseMode;
   generationTargetTokens?: number;
+  generationPlan?: GenerationPlan;
   requestKind: DiagnosticRequestKind;
   imageSupplied: boolean;
   reinferenceImageAssetId?: string;
@@ -260,13 +265,25 @@ export class ConversationStore implements IConversationStore {
       this.createInferenceRequest(activeGeneration, durableRequest, requestId),
       orchestration.imageSelection,
     );
-    activeGeneration.generationTargetTokens = orchestration.diagnostics === undefined
-      ? getResponseModeConfig(effectiveResponseMode).answerTargetTokens
-      : resolveGenerationTarget(
-          effectiveResponseMode,
-          orchestration.diagnostics.classification,
-        );
+    const generationPlan = createGenerationPlan(
+      effectiveResponseMode,
+      durableRequest.question,
+      orchestration.diagnostics?.classification ??
+        classifyRequest(snapshot, effectiveResponseMode, {
+          enabled: crossChat.enabled,
+          conversationExcluded: crossChat.currentConversationExcluded,
+        }),
+      orchestration.contextNeedProfile.activeImageEvidence ||
+        orchestration.contextNeedProfile.olderImageEvidence
+        ? 'image'
+        : 'text',
+    );
+    activeGeneration.generationPlan = generationPlan;
+    activeGeneration.generationTargetTokens = generationPlan.softTarget;
     inferenceRequest.generationTargetTokens = activeGeneration.generationTargetTokens;
+    inferenceRequest.generationHardLimitTokens = generationPlan.effectiveHardLimit;
+    inferenceRequest.generationPlanId = generationPlan.diagnosticsId;
+    inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     activeGeneration.selectedContext = orchestration.context;
     const conversationWithMemory: Conversation = {
@@ -471,12 +488,21 @@ export class ConversationStore implements IConversationStore {
         crossChat,
       },
     );
-    activeGeneration.generationTargetTokens = orchestration.diagnostics === undefined
-      ? getResponseModeConfig(activeGeneration.responseMode).answerTargetTokens
-      : resolveGenerationTarget(
-          activeGeneration.responseMode,
-          orchestration.diagnostics.classification,
-        );
+    const generationPlan = createGenerationPlan(
+      activeGeneration.responseMode,
+      input.question,
+      orchestration.diagnostics?.classification ??
+        classifyRequest(snapshot, activeGeneration.responseMode, {
+          enabled: crossChat.enabled,
+          conversationExcluded: crossChat.currentConversationExcluded,
+        }),
+      orchestration.contextNeedProfile.activeImageEvidence ||
+        orchestration.contextNeedProfile.olderImageEvidence
+        ? 'image'
+        : 'text',
+    );
+    activeGeneration.generationPlan = generationPlan;
+    activeGeneration.generationTargetTokens = generationPlan.softTarget;
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     activeGeneration.selectedContext = orchestration.context;
     const updatedConversation: Conversation = {
@@ -711,10 +737,13 @@ export class ConversationStore implements IConversationStore {
     const context = activeGeneration.contextDiagnostics;
     const groundingVerdict = activeGeneration.selectedContext === undefined
       ? null
-      : assessGrounding(
+      : assessGroundingFromSources(
           state.response,
-          activeGeneration.selectedContext,
-          state.hiddenEvidence,
+          createGroundingSourceSet(
+            activeGeneration.selectedContext,
+            state.hiddenEvidence ?? null,
+            activeGeneration.conversationId,
+          ),
         );
     const effectiveContext = context === undefined
       ? undefined
@@ -754,6 +783,7 @@ export class ConversationStore implements IConversationStore {
         budgetMaximumUnits: effectiveContext?.budget.maximumUnits ?? modeConfig.contextBudgetUnits,
         budgetUsedUnits: effectiveContext?.budget.usedUnits ?? 0,
         classification: effectiveContext?.classification ?? null,
+        contextNeedProfile: effectiveContext?.contextNeedProfile ?? null,
         retrievalMode: effectiveContext?.retrievalMode ?? 'none',
         retrievalModeReason: effectiveContext?.retrievalModeReason ?? 'diagnostics-unavailable',
         retrievalQueried: effectiveContext?.retrievalQueried ?? false,
@@ -772,7 +802,10 @@ export class ConversationStore implements IConversationStore {
         groundingVerdict,
       },
       targetTokenCount: activeGeneration.generationTargetTokens ?? modeConfig.answerTargetTokens,
-      generationLimit: modeConfig.generationLimit,
+      generationLimit:
+        activeGeneration.generationPlan?.effectiveHardLimit ?? modeConfig.generationLimit,
+      generationPlanId:
+        activeGeneration.generationPlan?.diagnosticsId ?? 'response-mode-default-v1',
       samplingProfile:
         objective?.samplingProfile ?? samplingProfileForRequestKind(
           activeGeneration.requestKind === 'image' ? 'answer' : 'chat',
@@ -836,6 +869,9 @@ export class ConversationStore implements IConversationStore {
       question: request.question,
       imagePath: request.imagePath,
       generationTargetTokens: activeGeneration.generationTargetTokens,
+      generationHardLimitTokens: activeGeneration.generationPlan?.effectiveHardLimit,
+      generationPlanId: activeGeneration.generationPlan?.diagnosticsId,
+      loopDetectionEligible: activeGeneration.generationPlan?.loopDetectionEligible,
     };
   }
 

@@ -445,6 +445,7 @@ export class InferenceQueue implements IInferenceQueue {
         active,
         recorder,
         { kind: 'answer', originalQuestion: request.question },
+        request,
       );
     }
 
@@ -540,6 +541,7 @@ export class InferenceQueue implements IInferenceQueue {
         kind: 'answer',
         originalQuestion: request.question,
       },
+      request,
     );
 
     return {
@@ -576,6 +578,7 @@ export class InferenceQueue implements IInferenceQueue {
         kind: 'chat',
         originalQuestion: request.question,
       },
+      request,
     );
   }
 
@@ -584,10 +587,18 @@ export class InferenceQueue implements IInferenceQueue {
     responseMode: ResponseMode,
     active: ActiveRequest,
     recorder: InferenceMetricsRecorder,
-    requestPatch: Partial<EngineGenerateRequest> = {}
+    requestPatch: Partial<EngineGenerateRequest> = {},
+    inferenceRequest?: InferenceRequest,
   ): Promise<EngineGenerateResult> {
     recorder.markAnswerStart();
-    const generateRequest: EngineGenerateRequest = { messages, responseMode, ...requestPatch };
+    const generateRequest: EngineGenerateRequest = {
+      messages,
+      responseMode,
+      ...requestPatch,
+      generationHardLimitTokens: inferenceRequest?.generationHardLimitTokens,
+      generationPlanId: inferenceRequest?.generationPlanId,
+      loopDetectionEligible: inferenceRequest?.loopDetectionEligible,
+    };
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 

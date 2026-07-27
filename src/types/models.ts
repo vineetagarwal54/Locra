@@ -225,6 +225,9 @@ export interface InferenceRequest {
   imagePath: string | null;
   question: string;
   generationTargetTokens?: number;
+  generationHardLimitTokens?: number;
+  generationPlanId?: string;
+  loopDetectionEligible?: boolean;
 }
 
 export interface InferenceState {

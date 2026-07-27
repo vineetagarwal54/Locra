@@ -17,16 +17,28 @@ import type {
 } from '../types/models';
 
 import { assessAnswerQuality } from './AnswerPostProcessor';
+import {
+  allocateContextBudget,
+  type ContextCandidate,
+} from './ContextBudgetAllocator';
+import { rankContextCandidates } from './ContextCandidatePolicy';
+import {
+  deriveContextNeedProfile,
+  type ContextNeedProfile,
+} from './ContextNeedProfile';
 import { getContextCapacityBuckets } from './ContextWindow';
 import {
   evaluateImageEvidenceAvailability,
   type ImageEvidenceAvailability,
 } from './ImageEvidencePolicy';
 import {
+  resolveImageReferences,
   resolveDescriptiveImageReference,
+  type ImageReferenceResolutionResult,
   type ImageReferenceCandidate,
 } from './ImageReferenceResolver';
 import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
+import { composeMultiImageEvidence } from './MultiImageEvidenceComposer';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
 import {
   classifyRequest,
@@ -57,7 +69,11 @@ const TOKEN_STOP_WORDS = new Set([
   'are',
   'can',
   'could',
+  'choose',
+  'chose',
   'did',
+  'discuss',
+  'discussed',
   'does',
   'for',
   'from',
@@ -65,6 +81,8 @@ const TOKEN_STOP_WORDS = new Set([
   'image',
   'into',
   'more',
+  'mention',
+  'mentioned',
   'that',
   'the',
   'this',
@@ -88,6 +106,13 @@ export interface RankedCandidateDiagnostic {
   readonly preview: string;
   readonly fusionSources?: ReadonlyArray<'lexical' | 'semantic'>;
   readonly exactMatchGuaranteed?: boolean;
+  readonly sourceType?: ContextCandidate['sourceType'];
+  readonly tokenCost?: number;
+  readonly conversationId?: string;
+  readonly messageId?: string | null;
+  readonly imageAssetId?: string | null;
+  readonly protection?: ContextCandidate['protection'];
+  readonly crossChat?: boolean;
 }
 
 export type RetrievalMode = 'fused' | 'lexical-fallback' | 'none';
@@ -98,6 +123,7 @@ export type ImageReferenceResolution =
   | 'active-image'
   | 'explicit-ordinal'
   | 'unique-description'
+  | 'ambiguous-comparison'
   | 'ambiguous-active-fallback';
 
 export interface ProposedRoutingDiagnostic {
@@ -126,8 +152,10 @@ export interface ContextSelectionDiagnostics {
   readonly mediaEvidenceCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
   readonly factCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
   readonly summaryCandidates: ReadonlyArray<RankedCandidateDiagnostic>;
+  readonly candidateDiagnostics: ReadonlyArray<RankedCandidateDiagnostic>;
   readonly budget: ContextBudgetMetadata;
   readonly classification: RequestClassification;
+  readonly contextNeedProfile: ContextNeedProfile;
   readonly retrievalMode: RetrievalMode;
   readonly retrievalModeReason: string;
   readonly retrievalQueried: boolean;
@@ -245,6 +273,8 @@ export interface ContextOrchestrationResult {
   readonly context: CanonicalConversationContext;
   readonly memory: ConversationContextMemory;
   readonly imageSelection: ImageSelectionResult | null;
+  readonly imageSelections: readonly ImageSelectionResult[];
+  readonly contextNeedProfile: ContextNeedProfile;
   readonly diagnostics?: ContextSelectionDiagnostics;
 }
 
@@ -315,7 +345,12 @@ export class ContextOrchestrator {
       initialClassification,
     );
     const classification = referenceResolution.classification;
-    const hasImageContext = classification.isNewImageQuestion
+    const baseContextNeedProfile = deriveContextNeedProfile(
+      classification,
+      referenceResolution.imageReferences,
+    );
+    const hasImageContext = options.referencedImage !== undefined
+      || classification.isNewImageQuestion
       || classification.isSameImageFollowUp
       || classification.isOlderImageReference
       || classification.isPixelDependent;
@@ -327,20 +362,19 @@ export class ContextOrchestrator {
           snapshot.currentMessage.text,
           hasImageContext,
         );
+    const contextNeedProfile = applyPolicyLimits(baseContextNeedProfile, policy);
     const conversationTurns = conversationTurnsFromMessages(snapshot.priorMessages);
     const pureIndependent = classification.isIndependentTextQuestion
       && !hasImageContext
       && !classification.isLongContextRetrievalRequest
       && !classification.isCrossChatEligible;
-    const includeRecentTurns = !pureIndependent && (
-      classification.isTextFollowUp
-      || hasImageContext
-      || classification.isLongContextRetrievalRequest
-      || classification.isCrossChatEligible
-    );
+    const includeRecentTurns = contextNeedProfile.recentConversation;
 
     const isActiveImageTurn = messageHasImage(snapshot.currentMessage);
-    const imageResolution = hasImageContext
+    const multiImageResolution = contextNeedProfile.multipleImageEvidence
+      ? this.resolveMultiImageEvidence(snapshot, referenceResolution.imageReferences)
+      : null;
+    const imageResolution = hasImageContext && multiImageResolution === null
       ? this.resolveImageSelection(snapshot, classification, options)
       : null;
     const imageSelection = imageResolution === null ? null : imageResolution.selection;
@@ -354,7 +388,14 @@ export class ContextOrchestrator {
           )
         : null);
     const selectedMemoryEvidence = imageResolution?.memoryEvidence ?? null;
-    const protectedMediaEvidence =
+    const protectedMediaEvidence = multiImageResolution !== null
+      ? selectProtectedContextEvidenceSet(
+          multiImageResolution.evidence,
+          0,
+          policy,
+          diagnosticsEnabled,
+        )
+      :
       imageResolution !== null && imageResolution.selection.decision !== 'use-evidence'
         ? emptyMediaEvidenceSelection(0)
         : persistedEvidence !== null
@@ -369,7 +410,9 @@ export class ContextOrchestrator {
             : null;
     let usedUnits = protectedMediaEvidence?.usedUnits ?? 0;
     const selection = selectRecentTurns(
-      includeRecentTurns ? conversationTurns : [],
+      includeRecentTurns
+        ? conversationTurns.slice(-contextNeedProfile.limits.recentTurns)
+        : [],
       usedUnits,
       policy,
       diagnosticsEnabled,
@@ -391,9 +434,8 @@ export class ContextOrchestrator {
               );
     usedUnits = mediaEvidence.usedUnits;
 
-    const includeSameChatLongContext = !pureIndependent
-      && classification.isLongContextRetrievalRequest;
-    const includeCrossChat = classification.isCrossChatEligible;
+    const includeSameChatLongContext = contextNeedProfile.sameChatHistory;
+    const includeCrossChat = contextNeedProfile.crossChatHistory;
     const includeRetrieval = includeSameChatLongContext || includeCrossChat;
     const retrievalConversationIds = resolveCrossChatConversationIds(
       snapshot.conversationId,
@@ -419,47 +461,23 @@ export class ContextOrchestrator {
       ? this.sources.getNewestReadySummary?.(snapshot.conversationId)
       : null;
 
-    // Allocate from most protected to least protected. This produces the
-    // required pressure behavior without a destructive second pass:
-    // retrieved items lose room first, then facts, then summary; recent turns
-    // and referenced image evidence were already protected above.
-    const summaryEntries = persistedSummary === undefined
-      ? {
-          ...selectWithinBudget(
-            rankSummaryEntries(memory.rollingSummary?.entries ?? [], snapshot.currentMessage.text),
-            policy.maxSummaryEntries,
-            usedUnits,
-            policy,
-            formatSummaryEntry,
-            diagnosticsEnabled,
-          ),
-          summary: undefined,
-        }
-      : selectSummaryWithinBudget(persistedSummary, usedUnits, policy);
-    usedUnits = summaryEntries.usedUnits;
-
-    const importantFacts = selectWithinBudget(
-      rankFacts(durableFacts, snapshot.currentMessage.text),
-      policy.maxFactItems,
-      usedUnits,
+    const memorySelection = selectRequestAwareMemory({
+      query: snapshot.currentMessage.text,
+      currentConversationId: snapshot.conversationId,
+      retrieved: retrieval.items,
+      durableFacts,
+      persistedSummary,
+      summaryEntries: memory.rollingSummary?.entries ?? [],
+      initialUsedUnits: usedUnits,
       policy,
-      formatMemoryFact,
-      diagnosticsEnabled,
-    );
-    usedUnits = importantFacts.usedUnits;
-
-    const sameChatRetrieved = selectRetrievedWithinBudget(
-      retrieval.items.filter((item) => item.sourceConversationId === snapshot.conversationId),
-      usedUnits,
-      policy,
-    );
-    usedUnits = sameChatRetrieved.usedUnits;
-    const crossChatRetrieved = selectRetrievedWithinBudget(
-      retrieval.items.filter((item) => item.sourceConversationId !== snapshot.conversationId),
-      usedUnits,
-      policy,
-    );
-    usedUnits = crossChatRetrieved.usedUnits;
+      profile: contextNeedProfile,
+      collectDiagnostics: diagnosticsEnabled,
+    });
+    const summaryEntries = memorySelection.summary;
+    const importantFacts = memorySelection.facts;
+    const sameChatRetrieved = memorySelection.sameChatRetrieved;
+    const crossChatRetrieved = memorySelection.crossChatRetrieved;
+    usedUnits = memorySelection.usedUnits;
     const crossChatItemsSelected = crossChatRetrieved.items.length;
 
     const budget: ContextBudgetMetadata = {
@@ -485,6 +503,9 @@ export class ContextOrchestrator {
       },
       memory: cloneContextMemory(memory),
       imageSelection,
+      imageSelections: multiImageResolution?.selections ??
+        (imageSelection === null ? [] : [imageSelection]),
+      contextNeedProfile,
     };
 
     if (!diagnosticsEnabled) {
@@ -499,8 +520,10 @@ export class ContextOrchestrator {
         mediaEvidenceCandidates: mediaEvidence.candidates,
         factCandidates: importantFacts.candidates,
         summaryCandidates: summaryEntries.candidates,
+        candidateDiagnostics: memorySelection.candidates,
         budget,
         classification,
+        contextNeedProfile,
         retrievalMode: retrieval.mode,
         retrievalModeReason: retrieval.reason,
         retrievalQueried: retrieval.queried,
@@ -554,12 +577,48 @@ export class ContextOrchestrator {
   ): {
     classification: RequestClassification;
     resolution: ImageReferenceResolution;
+    imageReferences: ImageReferenceResolutionResult;
   } {
+    const candidates = mergeImageReferenceCandidates(
+      snapshotImageReferenceCandidates(snapshot),
+      this.sources.evidenceRepository?.listImageReferenceCandidates?.(
+        snapshot.conversationId,
+      ) ?? [],
+    );
+    const activeImageId = candidates.at(-1)?.imageAssetId ?? null;
     if (classification.isNewImageQuestion) {
-      return { classification, resolution: 'new-image' };
+      const attachment = snapshot.currentMessage.attachments.find(
+        (candidate) => candidate.kind === 'image',
+      );
+      const imageReferences: ImageReferenceResolutionResult = attachment === undefined
+        ? { kind: 'none', references: [], ambiguousCandidateIds: [] }
+        : {
+            kind: 'active',
+            references: [{
+              imageAssetId: attachment.imageAssetId ?? attachment.path,
+              sourceMessageId: snapshot.currentMessage.id,
+              localPath: attachment.path,
+              available: attachment.available !== false,
+            }],
+            ambiguousCandidateIds: [],
+          };
+      return { classification, resolution: 'new-image', imageReferences };
+    }
+    const resolved = resolveImageReferences(snapshot.currentMessage.text, candidates, {
+      activeImageId,
+      expectsMultiple: classification.isMultipleImageComparison,
+    });
+    if (classification.isMultipleImageComparison) {
+      return {
+        classification,
+        resolution: resolved.kind === 'multiple'
+          ? 'unique-description'
+          : 'ambiguous-comparison',
+        imageReferences: resolved,
+      };
     }
     if (classification.isOlderImageReference) {
-      return { classification, resolution: 'explicit-ordinal' };
+      return { classification, resolution: 'explicit-ordinal', imageReferences: resolved };
     }
     if (!classification.imageReferenceAmbiguous) {
       return {
@@ -567,23 +626,44 @@ export class ContextOrchestrator {
         resolution: classification.isSameImageFollowUp
           ? 'active-image'
           : 'not-applicable',
+        imageReferences: resolved.kind === 'none' && activeImageId !== null
+          && classification.isSameImageFollowUp
+          ? {
+              kind: 'active',
+              references: candidates
+                .filter((candidate) => candidate.imageAssetId === activeImageId)
+                .map((candidate) => ({
+                  imageAssetId: candidate.imageAssetId,
+                  sourceMessageId: candidate.sourceMessageId,
+                  localPath: candidate.localPath,
+                  available: candidate.available,
+                })),
+              ambiguousCandidateIds: [],
+            }
+          : resolved,
       };
     }
-
-    const candidates = mergeImageReferenceCandidates(
-      snapshotImageReferenceCandidates(snapshot),
-      this.sources.evidenceRepository?.listImageReferenceCandidates?.(
-        snapshot.conversationId,
-      ) ?? [],
-    );
     const match = resolveDescriptiveImageReference(
       snapshot.currentMessage.text,
       candidates,
     );
     if (match.kind !== 'unique') {
-      return { classification, resolution: 'ambiguous-active-fallback' };
+      const active = candidates.filter((candidate) => candidate.imageAssetId === activeImageId);
+      return {
+        classification,
+        resolution: 'ambiguous-active-fallback',
+        imageReferences: {
+          kind: active.length === 0 ? 'ambiguous' : 'active',
+          references: active.map((candidate) => ({
+            imageAssetId: candidate.imageAssetId,
+            sourceMessageId: candidate.sourceMessageId,
+            localPath: candidate.localPath,
+            available: candidate.available,
+          })),
+          ambiguousCandidateIds: resolved.ambiguousCandidateIds,
+        },
+      };
     }
-    const activeImageId = candidates[candidates.length - 1]?.imageAssetId ?? null;
     const isOlder = match.candidate.imageAssetId !== activeImageId;
     return {
       classification: {
@@ -594,6 +674,67 @@ export class ContextOrchestrator {
         imageReferenceAmbiguous: false,
       },
       resolution: 'unique-description',
+      imageReferences: {
+        kind: isOlder ? 'single' : 'active',
+        references: [{
+          imageAssetId: match.candidate.imageAssetId,
+          sourceMessageId: match.candidate.sourceMessageId,
+          localPath: match.candidate.localPath,
+          available: match.candidate.available,
+        }],
+        ambiguousCandidateIds: [],
+      },
+    };
+  }
+
+  private resolveMultiImageEvidence(
+    snapshot: CanonicalConversationSnapshot,
+    references: ImageReferenceResolutionResult,
+  ): { evidence: readonly ContextMediaEvidence[]; selections: readonly ImageSelectionResult[] } {
+    if (references.kind === 'ambiguous') {
+      return {
+        evidence: [{
+          version: 'context-media-evidence-v1',
+          id: `comparison-ambiguous:${snapshot.currentMessage.id}`,
+          sourceMessageId: snapshot.currentMessage.id,
+          modality: 'image',
+          sourcePath: '',
+          summary:
+            'Image comparison evidence is unavailable because the requested images were ambiguous. ' +
+            'Do not choose an image or imply that the images were inspected.',
+          facts: [],
+          extractedText: [],
+          uncertainty: ['The image references need clarification before comparison.'],
+          createdAt: snapshot.currentMessage.createdAt,
+        }],
+        selections: [],
+      };
+    }
+    const repository = this.sources.evidenceRepository;
+    const inputs = references.references.map((reference) => {
+      const row = repository?.resolveReferencedImageEvidence({
+        conversationId: snapshot.conversationId,
+        imageAssetId: reference.imageAssetId,
+      }) ?? null;
+      const memory = findMemoryEvidence(
+        snapshot.contextMemory?.mediaEvidence ?? [],
+        reference.imageAssetId,
+        reference.sourceMessageId,
+      );
+      return {
+        imageAssetId: reference.imageAssetId,
+        sourceMessageId: reference.sourceMessageId,
+        evidence: row === null ? memory : visualEvidenceRowToContext(row),
+      };
+    });
+    return {
+      evidence: composeMultiImageEvidence(inputs).items,
+      selections: references.references.map((reference) => ({
+        decision: reference.available ? 'use-evidence' : 'original-unavailable',
+        imageAssetId: reference.imageAssetId,
+        sourceMessageId: reference.sourceMessageId,
+        originalPath: null,
+      })),
     };
   }
 
@@ -1051,6 +1192,22 @@ function responseModeBudgetPolicy(
     : new CharacterContextBudgetPolicy(options);
 }
 
+function applyPolicyLimits(
+  profile: ContextNeedProfile,
+  policy: ContextBudgetPolicy,
+): ContextNeedProfile {
+  return {
+    ...profile,
+    limits: {
+      ...profile.limits,
+      recentTurns: Math.min(profile.limits.recentTurns, policy.recentExactTurnLimit),
+      imageItems: Math.min(profile.limits.imageItems, policy.maxMediaEvidenceItems),
+      facts: Math.min(profile.limits.facts, policy.maxFactItems),
+      summaries: Math.min(profile.limits.summaries, policy.maxSummaryEntries),
+    },
+  };
+}
+
 function responseModeLimit(mode: ResponseMode | undefined): number {
   const config = getResponseModeConfig(mode ?? 'Medium');
   return config.sameChatRetrievalLimit;
@@ -1115,6 +1272,48 @@ function selectProtectedContextEvidence(
         }]
       : [],
   };
+}
+
+function selectProtectedContextEvidenceSet(
+  items: readonly ContextMediaEvidence[],
+  initialUsedUnits: number,
+  policy: ContextBudgetPolicy,
+  collectDiagnostics: boolean,
+): {
+  items: ContextMediaEvidence[];
+  usedUnits: number;
+  candidates: RankedCandidateDiagnostic[];
+} {
+  const selected: ContextMediaEvidence[] = [];
+  const candidates: RankedCandidateDiagnostic[] = [];
+  let usedUnits = initialUsedUnits;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const remainingItems = items.length - index;
+    const fairShare = Math.floor(
+      Math.max(0, policy.maximumUnits - usedUnits) / remainingItems,
+    );
+    const fitted = fitProtectedEvidenceToBudget(
+      item,
+      fairShare,
+      policy,
+    );
+    const cost = policy.measure(formatMediaEvidence(fitted)) + policyOverhead(policy);
+    if (usedUnits + cost > policy.maximumUnits) break;
+    selected.push(fitted);
+    usedUnits += cost;
+    if (collectDiagnostics) {
+      candidates.push({
+        stableId: fitted.id,
+        relevance: 1,
+        createdAt: fitted.createdAt,
+        selected: true,
+        exclusionReason: null,
+        preview: truncatePreview(formatMediaEvidence(fitted)),
+      });
+    }
+  }
+  return { items: selected, usedUnits, candidates };
 }
 
 function fitProtectedEvidenceToBudget(
@@ -1193,52 +1392,251 @@ function parseStringArray(value: string): string[] {
   return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
 }
 
-function selectRetrievedWithinBudget(
-  retrieved: readonly RetrievedItem[],
-  initialUsedUnits: number,
-  policy: ContextBudgetPolicy,
-): { items: ContextMemoryFact[]; usedUnits: number } {
-  const items: ContextMemoryFact[] = [];
-  let usedUnits = initialUsedUnits;
-  for (const item of retrieved) {
-    const sourceKind = 'Untrusted source';
-    const text =
-      `[${sourceKind}: conversation ${item.sourceConversationId}, message ${item.sourceMessageId}] ` +
-      item.text;
-    const cost = policy.measure(text) + policyOverhead(policy);
-    if (usedUnits + cost > policy.maximumUnits) {
-      continue;
-    }
-    items.push({
-      version: 'context-memory-fact-v1',
-      id: `retrieved:${item.sourceConversationId}:${item.id}`,
-      sourceMessageId: item.sourceMessageId,
-      text,
-      createdAt: item.timestamp,
-    });
-    usedUnits += cost;
-  }
-  return { items, usedUnits };
+interface RequestAwareMemorySelectionInput {
+  readonly query: string;
+  readonly currentConversationId: string;
+  readonly retrieved: readonly RetrievedItem[];
+  readonly durableFacts: readonly ContextMemoryFact[];
+  readonly persistedSummary: string | null | undefined;
+  readonly summaryEntries: readonly ContextSummaryEntry[];
+  readonly initialUsedUnits: number;
+  readonly policy: ContextBudgetPolicy;
+  readonly profile: ContextNeedProfile;
+  readonly collectDiagnostics: boolean;
 }
 
-function selectSummaryWithinBudget(
-  summary: string | null,
-  initialUsedUnits: number,
-  policy: ContextBudgetPolicy,
-): {
-  items: ContextSummaryEntry[];
-  summary: string | null;
+function selectRequestAwareMemory(input: RequestAwareMemorySelectionInput): {
+  summary: {
+    items: ContextSummaryEntry[];
+    summary: string | null | undefined;
+    usedUnits: number;
+    candidates: RankedCandidateDiagnostic[];
+  };
+  facts: {
+    items: ContextMemoryFact[];
+    usedUnits: number;
+    candidates: RankedCandidateDiagnostic[];
+  };
+  sameChatRetrieved: { items: ContextMemoryFact[]; usedUnits: number };
+  crossChatRetrieved: { items: ContextMemoryFact[]; usedUnits: number };
   usedUnits: number;
   candidates: RankedCandidateDiagnostic[];
 } {
-  if (summary === null) {
-    return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
+  const queryTokens = tokenSet(input.query);
+  const byId = new Map<string, {
+    fact?: ContextMemoryFact;
+    retrieved?: RetrievedItem;
+    summaryEntry?: ContextSummaryEntry;
+    persistedSummary?: string;
+  }>();
+  const candidates: ContextCandidate[] = [];
+  for (const item of input.retrieved) {
+    const id = `retrieved:${item.sourceConversationId}:${item.id}`;
+    byId.set(id, { retrieved: item });
+    candidates.push(createPolicyCandidate(
+      id,
+      item.sourceConversationId === input.currentConversationId
+        ? 'same-chat-retrieval'
+        : 'cross-chat-retrieval',
+      item.text,
+      item.sourceConversationId,
+      item.sourceMessageId,
+      item.imageAssetId,
+      item.timestamp,
+      item.score,
+      input.policy,
+    ));
   }
-  const cost = policy.measure(summary) + policyOverhead(policy);
-  if (initialUsedUnits + cost > policy.maximumUnits) {
-    return { items: [], summary: null, usedUnits: initialUsedUnits, candidates: [] };
+  for (const fact of input.durableFacts) {
+    byId.set(fact.id, { fact });
+    candidates.push(createPolicyCandidate(
+      fact.id,
+      'durable-fact',
+      formatMemoryFact(fact),
+      input.currentConversationId,
+      fact.sourceMessageId,
+      null,
+      fact.createdAt,
+      lexicalOverlap(queryTokens, tokenSet(fact.text)),
+      input.policy,
+    ));
   }
-  return { items: [], summary, usedUnits: initialUsedUnits + cost, candidates: [] };
+  if (input.persistedSummary === undefined) {
+    for (const entry of input.summaryEntries) {
+      const id = `summary:${entry.sourceAssistantMessageId}`;
+      byId.set(id, { summaryEntry: entry });
+      candidates.push(createPolicyCandidate(
+        id,
+        'summary',
+        formatSummaryEntry(entry),
+        input.currentConversationId,
+        entry.sourceAssistantMessageId,
+        null,
+        entry.createdAt,
+        lexicalOverlap(queryTokens, tokenSet(entry.text)),
+        input.policy,
+      ));
+    }
+  } else if (input.persistedSummary !== null) {
+    const id = `summary:${input.currentConversationId}:persisted`;
+    byId.set(id, { persistedSummary: input.persistedSummary });
+    candidates.push(createPolicyCandidate(
+      id,
+      'summary',
+      input.persistedSummary,
+      input.currentConversationId,
+      null,
+      null,
+      0,
+      lexicalOverlap(queryTokens, tokenSet(input.persistedSummary)),
+      input.policy,
+    ));
+  }
+
+  const allocation = allocateContextBudget(
+    rankContextCandidates(candidates, input.profile),
+    input.profile,
+    Math.max(0, input.policy.maximumUnits - input.initialUsedUnits),
+  );
+  const selectedIds = new Set(allocation.selected.map((candidate) => candidate.id));
+  const selectedSummaryEntries: ContextSummaryEntry[] = [];
+  const selectedFacts: ContextMemoryFact[] = [];
+  const sameChatItems: ContextMemoryFact[] = [];
+  const crossChatItems: ContextMemoryFact[] = [];
+  let selectedPersistedSummary: string | null | undefined =
+    input.persistedSummary === undefined ? undefined : null;
+  for (const candidate of allocation.selected) {
+    const source = byId.get(candidate.id);
+    if (source?.fact !== undefined) selectedFacts.push(source.fact);
+    if (source?.summaryEntry !== undefined) selectedSummaryEntries.push(source.summaryEntry);
+    if (source?.persistedSummary !== undefined) {
+      selectedPersistedSummary = source.persistedSummary;
+    }
+    if (source?.retrieved !== undefined) {
+      const fact = retrievedItemToMemoryFact(source.retrieved);
+      if (source.retrieved.sourceConversationId === input.currentConversationId) {
+        sameChatItems.push(fact);
+      } else {
+        crossChatItems.push(fact);
+      }
+    }
+  }
+  const diagnostics = input.collectDiagnostics
+    ? candidates
+        .filter((candidate) => candidate.sourceType === 'durable-fact')
+        .map((candidate) => policyCandidateDiagnostic(
+          candidate,
+          selectedIds.has(candidate.id),
+          allocation.excluded.find((item) => item.candidateId === candidate.id)?.reason,
+        ))
+    : [];
+  const summaryDiagnostics = input.collectDiagnostics
+    ? candidates
+        .filter((candidate) => candidate.sourceType === 'summary')
+        .map((candidate) => policyCandidateDiagnostic(
+          candidate,
+          selectedIds.has(candidate.id),
+          allocation.excluded.find((item) => item.candidateId === candidate.id)?.reason,
+        ))
+    : [];
+  const usedUnits = input.initialUsedUnits + allocation.usedUnits;
+  const allDiagnostics = input.collectDiagnostics
+    ? candidates.map((candidate) => policyCandidateDiagnostic(
+        candidate,
+        selectedIds.has(candidate.id),
+        allocation.excluded.find((item) => item.candidateId === candidate.id)?.reason,
+      ))
+    : [];
+  return {
+    summary: {
+      items: selectedSummaryEntries,
+      summary: selectedPersistedSummary,
+      usedUnits,
+      candidates: summaryDiagnostics,
+    },
+    facts: { items: selectedFacts, usedUnits, candidates: diagnostics },
+    sameChatRetrieved: { items: sameChatItems, usedUnits },
+    crossChatRetrieved: { items: crossChatItems, usedUnits },
+    usedUnits,
+    candidates: allDiagnostics,
+  };
+}
+
+function createPolicyCandidate(
+  id: string,
+  sourceType: ContextCandidate['sourceType'],
+  content: string,
+  conversationId: string,
+  messageId: string | null,
+  imageAssetId: string | null,
+  recency: number,
+  relevance: number,
+  policy: ContextBudgetPolicy,
+): ContextCandidate {
+  const exactMatchSignals = exactSignals(content, relevance);
+  return {
+    id,
+    sourceType,
+    relevance,
+    exactMatchSignals,
+    recency,
+    costUnits: policy.measure(content) + policyOverhead(policy),
+    conversationId,
+    messageId,
+    imageAssetId,
+    protection: exactMatchSignals.length > 0 ? 'direct-answer' : 'normal',
+    crossChat: sourceType === 'cross-chat-retrieval',
+    content,
+  };
+}
+
+function exactSignals(content: string, relevance: number): string[] {
+  if (relevance <= 0) return [];
+  const exactValues = content.match(
+    /(?:[$€£]\s?\d+(?:[.,]\d+)*|\b\d{1,4}(?:[-/.]\d{1,2}){1,2}\b|\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b|\b\d+(?:[.,]\d+)*\b)/g,
+  ) ?? [];
+  return [...new Set(exactValues)];
+}
+
+function retrievedItemToMemoryFact(item: RetrievedItem): ContextMemoryFact {
+  return {
+    version: 'context-memory-fact-v1',
+    id: `retrieved:${item.sourceConversationId}:${item.id}`,
+    sourceMessageId: item.sourceMessageId,
+    text:
+      `[Untrusted source: conversation ${item.sourceConversationId}, ` +
+      `message ${item.sourceMessageId}] ${item.text}`,
+    createdAt: item.timestamp,
+  };
+}
+
+function policyCandidateDiagnostic(
+  candidate: ContextCandidate,
+  selected: boolean,
+  reason: 'ineligible' | 'source-limit' | 'budget' | undefined,
+): RankedCandidateDiagnostic {
+  return {
+    stableId: candidate.id,
+    relevance: candidate.relevance,
+    createdAt: candidate.recency,
+    selected,
+    exclusionReason: selected
+      ? null
+      : reason === 'budget'
+        ? 'budget'
+        : reason === 'source-limit'
+          ? 'item-cap'
+          : 'relevance',
+    preview: truncatePreview(candidate.content),
+    exactMatchGuaranteed: candidate.protection === 'direct-answer',
+    sourceType: candidate.sourceType,
+    tokenCost: candidate.costUnits,
+    conversationId: candidate.conversationId,
+    messageId: candidate.messageId,
+    imageAssetId: candidate.imageAssetId,
+    protection: candidate.protection,
+    crossChat: candidate.crossChat,
+  };
 }
 
 function rebuildDerivedMemory(
@@ -1410,26 +1808,6 @@ function selectMediaEvidenceWithinBudget(
           selection.items.length >= maximumItems ? 'item-cap' : 'relevance'),
     ),
   };
-}
-
-function rankFacts(
-  facts: ReadonlyArray<ContextMemoryFact>,
-  query: string,
-): RankedItem<ContextMemoryFact>[] {
-  return rankItems(facts, query, formatMemoryFact, (item) => item.createdAt, (item) => item.id);
-}
-
-function rankSummaryEntries(
-  entries: ReadonlyArray<ContextSummaryEntry>,
-  query: string,
-): RankedItem<ContextSummaryEntry>[] {
-  return rankItems(
-    entries,
-    query,
-    formatSummaryEntry,
-    (item) => item.createdAt,
-    (item) => item.sourceAssistantMessageId,
-  );
 }
 
 function rankItems<T>(

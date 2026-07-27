@@ -18,11 +18,31 @@ export function wantsVisibleDetailList(question: string): boolean {
 
 export function buildAnswerPrompt(request: UserFacingAnswerRequest): string {
   const evidence = request.hiddenEvidence;
+  const groundingPolicy = buildVisualGroundingPolicy(request.question);
   return [
     buildInstructionText(request.question),
+    groundingPolicy,
     `Question: ${request.question.trim()}`,
     evidence === undefined ? 'Image evidence: unavailable.' : formatCompactEvidence(evidence),
-  ].join('\n\n');
+  ].filter((section) => section !== '').join('\n\n');
+}
+
+export function buildVisualGroundingPolicy(question: string): string {
+  if (
+    !/\b(?:read|transcribe|extract|price|cost|total|count|how many|date|serial|code|label|number|text|exact|color|colour)\b/i
+      .test(question)
+  ) {
+    return '';
+  }
+  return [
+    'Exact visual evidence policy:',
+    '- Report only clearly supported values and attributes.',
+    '- Associate each value or label with the correct nearby object.',
+    '- Do not transfer values between objects or infer equality from proximity or similarity.',
+    '- Mark details as confirmed, uncertain, or unreadable.',
+    '- If a requested value cannot be confirmed, say so; do not guess.',
+    '- Stay focused on the requested extraction and omit unrelated generic advice.',
+  ].join('\n');
 }
 
 function buildInstructionText(question: string): string {
@@ -38,9 +58,7 @@ function buildInstructionText(question: string): string {
     'Answer naturally and directly.',
     'Use the image evidence only as grounding for visual claims.',
     'Add brief uncertainty only when the evidence is unclear.',
-    'For counts or object identification, if the evidence is unclear or incomplete, give a ' +
-      'cautious best estimate and say it is approximate rather than stating an exact count or a ' +
-      'certain identification you cannot verify.',
+    'For counts or object identification, distinguish confirmed details from uncertain ones.',
     'Give practical next steps when they help.',
   ].join('\n');
 }

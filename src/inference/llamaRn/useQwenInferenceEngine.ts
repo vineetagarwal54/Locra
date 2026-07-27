@@ -120,6 +120,9 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             messages: request.messages,
             responseMode: request.responseMode,
             kind: request.kind,
+            generationHardLimitTokens: request.generationHardLimitTokens,
+            generationPlanId: request.generationPlanId,
+            loopDetectionEligible: request.loopDetectionEligible,
             signal: controller.signal,
             onToken: (cumulativeText, generatedTokenCount) => {
               setState({

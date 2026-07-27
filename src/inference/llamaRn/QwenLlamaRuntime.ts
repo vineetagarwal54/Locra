@@ -152,6 +152,9 @@ export interface QwenGenerateRequest {
   onToken: (cumulativeText: string, generatedTokenCount?: number) => void;
   responseMode: ResponseMode;
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
+  generationHardLimitTokens?: number;
+  generationPlanId?: string;
+  loopDetectionEligible?: boolean;
 }
 
 export interface QwenGenerateResult {
@@ -227,6 +230,7 @@ export class QwenLlamaRuntime {
   private error: string | null = null;
   private loadPromise: Promise<void> | null = null;
   private cancelRequested = false;
+  private nativeStopRequested = false;
   private readonly config: QwenRuntimeConfig;
   private readonly now: () => number;
 
@@ -335,6 +339,7 @@ export class QwenLlamaRuntime {
     const bounded = trimMessagesToContextWithReport(request.messages, request.responseMode);
     this.status = 'generating';
     this.cancelRequested = false;
+    this.nativeStopRequested = false;
     this.error = null;
     const onAbort = (): void => {
       this.cancel();
@@ -388,7 +393,10 @@ export class QwenLlamaRuntime {
     let loopStoppedText: string | null = null;
     // Hard output cap handed to the native runtime. Reaching it means the answer
     // is length-truncated (finishReason === 'length'), never a natural stop.
-    const generationLimit = getResponseGenerationLimit(request.responseMode);
+    const generationLimit = Math.min(
+      getResponseGenerationLimit(request.responseMode),
+      request.generationHardLimitTokens ?? Number.POSITIVE_INFINITY,
+    );
     const samplingProfile = samplingProfileForRequestKind(request.kind);
 
     try {
@@ -408,6 +416,8 @@ export class QwenLlamaRuntime {
           streamedTokenCount += 1;
           const visible = stripControlTags(cumulativeRaw);
           if (
+            (request.loopDetectionEligible ??
+              (request.kind !== 'extraction' && request.kind !== 'extractionRetry')) &&
             loopStoppedText === null
             && streamedTokenCount % LOOP_CHECK_TOKEN_INTERVAL === 0
             && visible.length >= LOOP_CHECK_MINIMUM_CHARS
@@ -416,7 +426,7 @@ export class QwenLlamaRuntime {
             if (processed.verdict === 'looping') {
               loopStoppedText = processed.text;
               request.onToken(processed.text, streamedTokenCount);
-              void safe(() => Promise.resolve(context.stopCompletion()));
+              this.requestNativeStop(context);
               return;
             }
           }
@@ -472,8 +482,16 @@ export class QwenLlamaRuntime {
     this.status = 'cancelling';
     const context = this.context;
     if (context !== null) {
-      void safe(() => Promise.resolve(context.stopCompletion()));
+      this.requestNativeStop(context);
     }
+  }
+
+  private requestNativeStop(context: LlamaContextLike): void {
+    if (this.nativeStopRequested) {
+      return;
+    }
+    this.nativeStopRequested = true;
+    void safe(() => Promise.resolve(context.stopCompletion()));
   }
 
   /** Releases the projector before the context, leaving getStatus() === 'unloaded'. */

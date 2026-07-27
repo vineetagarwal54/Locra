@@ -148,8 +148,17 @@ function hasConversationContext(context: CanonicalConversationContext): boolean 
 function formatDerivedMemory(context: CanonicalConversationContext): string {
   const sections: string[] = [];
   if (context.mediaEvidence.length > 0) {
+    const comparisonInstruction = context.mediaEvidence.some(
+      (evidence) => /^Image [A-Z] evidence/.test(evidence.summary),
+    )
+      ? [
+          'Compare the labeled images without merging their evidence.',
+          'Compare only attributes supported for each image.',
+          'If one label says evidence is insufficient, state that the comparison is incomplete.',
+        ].join(' ')
+      : '';
     sections.push(
-      `Relevant prior media evidence:\n${context.mediaEvidence
+      `Relevant prior media evidence:\n${comparisonInstruction}\n${context.mediaEvidence
         .map(formatMediaEvidence)
         .join('\n\n')}`,
     );

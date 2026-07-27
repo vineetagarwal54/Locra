@@ -922,18 +922,26 @@ describe('conversationStore', () => {
     expect(recordCall).toBeDefined();
     const persisted = JSON.parse(String(recordCall?.[1])) as {
       trace: unknown;
-      summary: { responseMode: string; targetTokenCount: number; generationLimit: number };
+      summary: {
+        responseMode: string;
+        targetTokenCount: number;
+        generationLimit: number;
+        generationPlanId: string;
+      };
     };
     expect(persisted.trace).toBeNull();
     expect(persisted.summary).toEqual(expect.objectContaining({
-      responseMode: 'Medium', targetTokenCount: 384, generationLimit: 640,
+      responseMode: 'Medium',
+      targetTokenCount: 128,
+      generationLimit: 192,
+      generationPlanId: 'concise-image-identification-v1',
     }));
   });
 
   it.each([
-    ['Low', 96, 320, 1334],
-    ['Medium', 128, 640, 2334],
-    ['High', 160, 1024, 2674],
+    ['Low', 96, 128, 1334],
+    ['Medium', 128, 160, 2334],
+    ['High', 160, 192, 2674],
   ] as const)('records %s mode configuration in diagnostics', async (
     mode, targetTokenCount, generationLimit, budgetMaximumUnits,
   ) => {

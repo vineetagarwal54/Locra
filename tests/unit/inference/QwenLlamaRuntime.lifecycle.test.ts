@@ -167,6 +167,22 @@ describe('QwenLlamaRuntime lifecycle', () => {
       .toBeLessThan(completionMock.mock.invocationCallOrder[0] as number);
   });
 
+  it('passes the effective generation-plan hard limit to native n_predict', async () => {
+    const { runtime, context } = makeRuntime();
+    await runtime.loadModel(load);
+
+    await runtime.generate({
+      ...generateRequest([{ role: 'user', content: 'Brief answer.' }]),
+      generationHardLimitTokens: 144,
+      generationPlanId: 'concise-text-v1',
+    });
+
+    expect(context.completion).toHaveBeenCalledWith(
+      expect.objectContaining({ n_predict: 144 }),
+      expect.any(Function),
+    );
+  });
+
   it('formats and tokenizes again after removing history before completion', async () => {
     const tokenize = jest.fn()
       .mockResolvedValueOnce({

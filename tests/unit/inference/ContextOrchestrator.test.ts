@@ -138,7 +138,6 @@ describe('ContextOrchestrator', () => {
     );
 
     expect(result.context.recentTurns).toEqual([
-      { question: 'Question three', answer: 'Answer three' },
       { question: 'Question four', answer: 'Answer four' },
     ]);
     expect(result.memory.version).toBe('conversation-context-memory-v1');
@@ -146,6 +145,7 @@ describe('ContextOrchestrator', () => {
     expect(result.memory.rollingSummary?.entries.map((entry) => entry.sourceUserMessageId)).toEqual([
       'user-1',
       'user-2',
+      'user-3',
     ]);
     expect(result.context.olderSummary).toBeNull();
     expect(source.messages).toEqual(originalMessages);
@@ -399,9 +399,9 @@ describe('ContextOrchestrator', () => {
       ),
     );
 
-    expect(firstResult.memory.rollingSummary?.entries).toHaveLength(1);
-    expect(nextResult.memory.rollingSummary?.entries).toHaveLength(2);
-    expect(nextResult.memory.rollingSummary?.coveredThroughMessageId).toBe('assistant-2');
+    expect(firstResult.memory.rollingSummary?.entries).toHaveLength(2);
+    expect(nextResult.memory.rollingSummary?.entries).toHaveLength(3);
+    expect(nextResult.memory.rollingSummary?.coveredThroughMessageId).toBe('assistant-3');
   });
 
   it('omits diagnostics entirely when diagnosticsEnabled is false', () => {
@@ -430,9 +430,8 @@ describe('ContextOrchestrator', () => {
       { diagnosticsEnabled: true },
     );
 
-    expect(result.diagnostics?.recentTurnsConsidered).toBe(2);
+    expect(result.diagnostics?.recentTurnsConsidered).toBe(1);
     expect(result.diagnostics?.recentTurnsSelected).toEqual([
-      expect.objectContaining({ sourceUserMessageId: 'user-1', sourceAssistantMessageId: 'assistant-1' }),
       expect.objectContaining({ sourceUserMessageId: 'user-2', sourceAssistantMessageId: 'assistant-2' }),
     ]);
     expect(result.diagnostics?.recentTurnsSelected.every((turn) => turn.costUnits > 0)).toBe(true);
@@ -476,8 +475,8 @@ describe('ContextOrchestrator', () => {
   it('marks a candidate excluded for budget when the item cap has not been reached', () => {
     const messages = [
       ...completedTurn(1, 'Set the backup policy.', 'The backup schedule is nightly, with a thirty-day retention window.'),
-      ...completedTurn(2, 'Choose the theme.', 'The interface will use the light theme for readability across screens.'),
-      ...completedTurn(3, 'Pick an icon.', 'Use the existing icon.'),
+      ...completedTurn(2, 'Set backup storage.', 'Keep backup copies in encrypted local storage for the retention period.'),
+      ...completedTurn(3, 'Set backup verification.', 'Verify every backup nightly throughout the retention window.'),
       ...completedTurn(4, 'Pick a font.', 'Use the system font.'),
       ...completedTurn(5, 'Pick a radius.', 'Use eight pixels.'),
       ...completedTurn(6, 'Pick spacing.', 'Use standard spacing.'),
@@ -499,7 +498,7 @@ describe('ContextOrchestrator', () => {
     expect(excludedForBudget?.length).toBeGreaterThan(0);
   });
 
-  it('assembles persisted sources in fixed priority order with deterministic retrieval', () => {
+  it('assembles persisted sources by request-aware relevance with deterministic retrieval', () => {
     const retrieved: RetrievedItem[] = [
       {
         id: 'same-b', sourceConversationId: 'conversation-a', sourceMessageId: 'same-message-b',
@@ -542,17 +541,16 @@ describe('ContextOrchestrator', () => {
     );
 
     expect(first.context).toEqual(second.context);
-    expect(first.context.recentTurns).toHaveLength(2);
+    expect(first.context.recentTurns).toHaveLength(0);
     expect(first.context.importantFacts.map((fact) => fact.text)).toEqual([
-      '[Untrusted source: conversation conversation-a, message same-message-b] same chat B',
       '[Untrusted source: conversation conversation-a, message same-message-a] same chat A',
-      'durable fact',
+      '[Untrusted source: conversation conversation-a, message same-message-b] same chat B',
     ]);
     expect(search).toHaveBeenCalledTimes(2);
     for (const call of search.mock.calls) {
       expect(call[0]).toEqual(expect.objectContaining({ conversationIds: ['conversation-a'] }));
     }
-    expect(first.context.olderSummary).toBe('older range summary');
+    expect(first.context.olderSummary).toBeNull();
   });
 
   it('caps oversized exact context instead of exceeding the response-mode character budget', () => {
@@ -1020,7 +1018,7 @@ describe('ContextOrchestrator', () => {
       imageAssetId: null,
       timestamp: 1,
       contentType: 'chunk',
-      text: 'retrieved '.repeat(20),
+      text: 'conversation retrieved '.repeat(20),
       score: 1,
     }];
     const messages = Array.from({ length: 7 }, (_, index) =>
@@ -1036,17 +1034,17 @@ describe('ContextOrchestrator', () => {
           version: 'context-memory-fact-v1',
           id: 'fact',
           sourceMessageId: 'source-fact',
-          text: 'durable '.repeat(20),
+          text: 'conversation durable '.repeat(20),
           createdAt: 1,
         }],
-        getNewestReadySummary: () => 'summary',
+        getNewestReadySummary: () => 'conversation summary',
       },
     ).orchestrate(
       createCanonicalConversationSnapshot(conversation(messages), 'user-8'),
       { responseMode: 'Low' },
     );
 
-    expect(result.context.olderSummary).toBe('summary');
+    expect(result.context.olderSummary).toBe('conversation summary');
     expect(result.context.importantFacts).toEqual([]);
   });
 
@@ -1347,5 +1345,95 @@ describe('ContextOrchestrator', () => {
     expect(result.diagnostics?.imageReferenceResolution).toBe('ambiguous-active-fallback');
     expect(result.imageSelection?.imageAssetId).toBe('asset-chair-b');
     expect(resolveReferencedImageEvidence).not.toHaveBeenCalled();
+  });
+
+  it('composes separately labeled evidence for a resolved multi-image comparison', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect this.', 'A round object.', '/images/a.jpg'),
+      ...completedTurn(2, 'Inspect this.', 'A square object.', '/images/b.jpg'),
+      currentMessage(3, 'Compare the first and second images.'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-a';
+    messages[2].attachments[0].imageAssetId = 'asset-b';
+    const row = (imageAssetId: string) => ({
+      id: `evidence-${imageAssetId}`,
+      conversation_id: 'conversation-a',
+      source_message_id: imageAssetId === 'asset-a' ? 'user-1' : 'user-2',
+      image_asset_id: imageAssetId,
+      evidence_version: 'hidden-evidence-v1',
+      subject_object: imageAssetId === 'asset-a' ? 'round object' : 'square object',
+      visible_features_json: '[]',
+      visible_text_json: '[]',
+      visible_condition: 'visible',
+      uncertainty_json: '[]',
+      source_revision: `revision-${imageAssetId}`,
+      created_at: imageAssetId === 'asset-a' ? 1 : 2,
+    });
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => row('asset-b'),
+        resolveReferencedImageEvidence: (reference) =>
+          reference.imageAssetId === undefined ? null : row(reference.imageAssetId),
+        listImageReferenceCandidates: () => [
+          {
+            imageAssetId: 'asset-a', sourceMessageId: 'user-1',
+            localPath: '/images/a.jpg', available: true, createdAt: 1,
+            searchText: 'round object',
+          },
+          {
+            imageAssetId: 'asset-b', sourceMessageId: 'user-2',
+            localPath: '/images/b.jpg', available: true, createdAt: 2,
+            searchText: 'square object',
+          },
+        ],
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.contextNeedProfile.multipleImageEvidence).toBe(true);
+    expect(result.imageSelection).toBeNull();
+    expect(result.imageSelections).toHaveLength(2);
+    expect(result.context.mediaEvidence.map((item) => item.summary)).toEqual([
+      expect.stringContaining('Image A evidence'),
+      expect.stringContaining('Image B evidence'),
+    ]);
+  });
+
+  it('does not silently choose an image for an ambiguous multi-image comparison', () => {
+    const messages = [
+      ...completedTurn(1, 'Inspect this.', 'A wooden chair.', '/images/chair-a.jpg'),
+      ...completedTurn(2, 'Inspect this.', 'A metal chair.', '/images/chair-b.jpg'),
+      currentMessage(3, 'Compare the chair pictures.'),
+    ];
+    messages[0].attachments[0].imageAssetId = 'asset-chair-a';
+    messages[2].attachments[0].imageAssetId = 'asset-chair-b';
+    const result = new ContextOrchestrator(compactPolicy(), {
+      evidenceRepository: {
+        getActiveImageEvidence: () => null,
+        resolveReferencedImageEvidence: () => null,
+        listImageReferenceCandidates: () => [
+          {
+            imageAssetId: 'asset-chair-a', sourceMessageId: 'user-1',
+            localPath: '/images/chair-a.jpg', available: true, createdAt: 1,
+            searchText: 'wooden chair',
+          },
+          {
+            imageAssetId: 'asset-chair-b', sourceMessageId: 'user-2',
+            localPath: '/images/chair-b.jpg', available: true, createdAt: 2,
+            searchText: 'metal chair',
+          },
+        ],
+      },
+    }).orchestrate(
+      createCanonicalConversationSnapshot(conversation(messages), 'user-3'),
+      { diagnosticsEnabled: true },
+    );
+
+    expect(result.imageSelection).toBeNull();
+    expect(result.imageSelections).toEqual([]);
+    expect(result.diagnostics?.imageReferenceResolution).toBe('ambiguous-comparison');
+    expect(result.context.mediaEvidence[0]?.summary).toMatch(/images were ambiguous/i);
   });
 });

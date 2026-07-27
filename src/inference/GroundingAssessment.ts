@@ -1,6 +1,13 @@
 import type { CanonicalConversationContext } from '../types/models';
 
+import {
+  createGroundingSourceSet,
+  type GroundingSourceSet,
+} from './GroundingSourceSet';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
+
+export { createGroundingSourceSet };
+export type { GroundingSourceSet };
 
 export type GroundingVerdict = 'supported' | 'unsupported' | null;
 
@@ -9,25 +16,17 @@ export function assessGrounding(
   context: CanonicalConversationContext,
   freshEvidence: HiddenVisualEvidence | null = null,
 ): GroundingVerdict {
-  const evidence = [
-    ...context.mediaEvidence.flatMap((item) => [
-      item.summary,
-      ...item.facts,
-      ...item.extractedText,
-    ]),
-    ...context.importantFacts
-      .filter((fact) => fact.id.startsWith('retrieved:'))
-      .map((fact) => fact.text),
-    ...(freshEvidence === null
-      ? []
-      : [
-          freshEvidence.subjectObject,
-          ...freshEvidence.visibleFeatures,
-          ...freshEvidence.visibleText,
-          freshEvidence.visibleCondition,
-          ...freshEvidence.uncertainty,
-        ]),
-  ].join(' ').toLowerCase();
+  return assessGroundingFromSources(
+    answer,
+    createGroundingSourceSet(context, freshEvidence, inferCurrentConversationId(context)),
+  );
+}
+
+export function assessGroundingFromSources(
+  answer: string,
+  sourceSet: GroundingSourceSet,
+): GroundingVerdict {
+  const evidence = sourceSet.sources.map((source) => source.content).join(' ').toLowerCase();
   if (evidence.trim() === '') {
     return null;
   }
@@ -39,6 +38,11 @@ export function assessGrounding(
   return claims.every((claim) => evidence.includes(claim.toLowerCase()))
     ? 'supported'
     : 'unsupported';
+}
+
+function inferCurrentConversationId(context: CanonicalConversationContext): string | null {
+  const retrieved = context.importantFacts.find((fact) => fact.id.startsWith('retrieved:'));
+  return retrieved?.id.split(':')[1] ?? null;
 }
 
 export function extractSpecificClaims(text: string): string[] {
