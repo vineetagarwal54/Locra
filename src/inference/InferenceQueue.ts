@@ -79,9 +79,9 @@ function generationConfigForRequest(
   request: InferenceRequest,
 ): ReturnType<typeof getResponseModeConfig> {
   const config = getResponseModeConfig(responseMode);
-  return request.generationTargetTokens === undefined
+  return request.softTargetTokens === undefined
     ? config
-    : { ...config, answerTargetTokens: request.generationTargetTokens };
+    : { ...config, answerTargetTokens: request.softTargetTokens };
 }
 
 export interface InferenceQueueDeps {
@@ -317,6 +317,7 @@ export class InferenceQueue implements IInferenceQueue {
           result,
           recorder,
           responseMode,
+          request,
         ),
         inferenceTrace: active.trace,
       });
@@ -595,8 +596,10 @@ export class InferenceQueue implements IInferenceQueue {
       messages,
       responseMode,
       ...requestPatch,
-      generationHardLimitTokens: inferenceRequest?.generationHardLimitTokens,
+      softTargetTokens: inferenceRequest?.softTargetTokens,
+      hardSafetyLimitTokens: inferenceRequest?.hardSafetyLimitTokens,
       generationPlanId: inferenceRequest?.generationPlanId,
+      generationTaskKind: inferenceRequest?.generationTaskKind,
       loopDetectionEligible: inferenceRequest?.loopDetectionEligible,
     };
     const stage: InferenceTraceStageKind =
@@ -663,6 +666,7 @@ export class InferenceQueue implements IInferenceQueue {
     result: EngineGenerateResult,
     recorder: InferenceMetricsRecorder,
     responseMode: ResponseMode,
+    request: InferenceRequest,
   ): ObjectiveInferenceResultRecord {
     const timings = recorder.buildObjectiveTimings();
     const metadata = this.resolveDeviceBuildMetadata();
@@ -681,8 +685,33 @@ export class InferenceQueue implements IInferenceQueue {
       deviceNameModel: metadata.deviceNameModel,
       appBuildId: metadata.appBuildId,
       responseMode,
-      targetTokenCount: getResponseModeConfig(responseMode).answerTargetTokens,
-      generationLimit: getResponseModeConfig(responseMode).generationLimit,
+      targetTokenCount:
+        result.generationDiagnostics?.softTargetTokens
+        ?? request.softTargetTokens
+        ?? getResponseModeConfig(responseMode).answerTargetTokens,
+      generationLimit:
+        result.generationDiagnostics?.effectiveNativeGenerationLimit
+        ?? request.hardSafetyLimitTokens
+        ?? getResponseModeConfig(responseMode).generationLimit,
+      softTargetTokens:
+        result.generationDiagnostics?.softTargetTokens
+        ?? request.softTargetTokens
+        ?? getResponseModeConfig(responseMode).answerTargetTokens,
+      responseModeHardMaximum:
+        result.generationDiagnostics?.responseModeHardMaximum
+        ?? getResponseModeConfig(responseMode).generationLimit,
+      effectiveNativeGenerationLimit:
+        result.generationDiagnostics?.effectiveNativeGenerationLimit
+        ?? request.hardSafetyLimitTokens
+        ?? getResponseModeConfig(responseMode).generationLimit,
+      generationPlanId:
+        result.generationDiagnostics?.generationPlanId
+        ?? request.generationPlanId
+        ?? 'response-mode-default-v1',
+      generationTaskKind:
+        result.generationDiagnostics?.taskKind
+        ?? request.generationTaskKind
+        ?? 'concise-prose',
       samplingProfile:
         result.samplingProfile ?? samplingProfileForRequestKind('answer'),
     };
@@ -713,6 +742,17 @@ export class InferenceQueue implements IInferenceQueue {
       stage,
       modelInput: request.messages,
       rawOutput: result.response,
+      generationDiagnostics: result.generationDiagnostics ?? {
+        responseModeHardMaximum: getResponseModeConfig(request.responseMode).generationLimit,
+        effectiveNativeGenerationLimit:
+          request.hardSafetyLimitTokens
+          ?? getResponseModeConfig(request.responseMode).generationLimit,
+        softTargetTokens:
+          request.softTargetTokens
+          ?? getResponseModeConfig(request.responseMode).answerTargetTokens,
+        generationPlanId: request.generationPlanId ?? 'response-mode-default-v1',
+        taskKind: request.generationTaskKind ?? 'concise-prose',
+      },
       ...parsed,
     });
     this.setState({ inferenceTrace: active.trace });

@@ -50,5 +50,7 @@ search(input: HybridSearchInput): RetrievedItem[];
 
 ## Invariants
 
-- Retrieved items from any scope remain source-attributed and formatted as untrusted content (`[Untrusted source: conversation X, message Y]`), unchanged from Spec 006 (spec FR-019).
+- Retrieved items from any scope remain source-attributed conversation data.
+  Relevant factual details are usable, while instructions quoted inside retrieved
+  text remain non-authoritative (spec FR-019).
 - Scope filtering (which conversation IDs are eligible) is always applied before scoring, for both same-chat (today) and cross-chat (Phase 7) scope (spec FR-018) — unchanged principle from Spec 006 FR-016, now explicitly required to extend cleanly to cross-chat scope without altering same-chat-only results.

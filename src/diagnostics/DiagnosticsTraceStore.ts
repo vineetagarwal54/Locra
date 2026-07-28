@@ -1,5 +1,8 @@
 import type { ContextSelectionDiagnostics } from '../inference/ContextOrchestrator';
-import type { SamplingProfile } from '../inference/GenerationTuning';
+import type {
+  GenerationTaskKind,
+  SamplingProfile,
+} from '../inference/GenerationTuning';
 import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { ResponseMode } from '../inference/ResponseMode';
@@ -67,7 +70,11 @@ export interface ProductionDiagnosticTurnSummary {
   };
   readonly targetTokenCount: number;
   readonly generationLimit: number;
+  readonly softTargetTokens: number;
+  readonly responseModeHardMaximum: number;
+  readonly effectiveNativeGenerationLimit: number;
   readonly generationPlanId: string;
+  readonly generationTaskKind: GenerationTaskKind;
   readonly samplingProfile: SamplingProfile;
   readonly imageSupplied: boolean;
   readonly modelId: string;

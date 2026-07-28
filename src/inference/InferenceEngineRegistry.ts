@@ -91,6 +91,7 @@ export const inferenceEngineAdapter: InferenceEngineAdapter = {
         finishReason: handle.getFinishReason?.() ?? null,
         inputShortenedWarning: handle.getInputShortenedWarning?.() ?? null,
         samplingProfile: handle.getSamplingProfile?.() ?? null,
+        generationDiagnostics: handle.getGenerationDiagnostics?.() ?? null,
       };
     } finally {
       unsubscribe();

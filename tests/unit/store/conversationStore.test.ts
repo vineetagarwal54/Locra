@@ -55,6 +55,10 @@ class FakeInferenceQueue implements IInferenceQueue {
     assistantMessageId?: string;
     imagePath: string | null;
     question: string;
+    softTargetTokens?: number;
+    hardSafetyLimitTokens?: number;
+    generationPlanId?: string;
+    generationTaskKind?: string;
   }> = [];
   readonly submittedContexts: Array<CanonicalConversationContext | undefined> = [];
 
@@ -841,6 +845,11 @@ describe('conversationStore', () => {
     expect(submitted?.imagePath).toBeNull();
     expect(submitted?.question).toMatch(/continuing your own previous answer/i);
     expect(submitted?.question).toContain('Partial answer that was cut');
+    expect(submitted).toEqual(expect.objectContaining({
+      hardSafetyLimitTokens: 640,
+      generationTaskKind: 'continuation',
+      generationPlanId: 'continuation-v1',
+    }));
 
     // The completed continuation stitches seed + new text without repetition.
     queue.emit(makeInferenceState('completed', ' and here is the rest.'));
@@ -926,6 +935,9 @@ describe('conversationStore', () => {
         responseMode: string;
         targetTokenCount: number;
         generationLimit: number;
+        softTargetTokens: number;
+        responseModeHardMaximum: number;
+        effectiveNativeGenerationLimit: number;
         generationPlanId: string;
       };
     };
@@ -933,15 +945,18 @@ describe('conversationStore', () => {
     expect(persisted.summary).toEqual(expect.objectContaining({
       responseMode: 'Medium',
       targetTokenCount: 128,
-      generationLimit: 192,
-      generationPlanId: 'concise-image-identification-v1',
+      generationLimit: 640,
+      softTargetTokens: 128,
+      responseModeHardMaximum: 640,
+      effectiveNativeGenerationLimit: 640,
+      generationPlanId: 'visual-description-v2',
     }));
   });
 
   it.each([
-    ['Low', 96, 128, 1334],
-    ['Medium', 128, 160, 2334],
-    ['High', 160, 192, 2674],
+    ['Low', 96, 320, 1334],
+    ['Medium', 128, 640, 2334],
+    ['High', 160, 1024, 2674],
   ] as const)('records %s mode configuration in diagnostics', async (
     mode, targetTokenCount, generationLimit, budgetMaximumUnits,
   ) => {
@@ -960,11 +975,13 @@ describe('conversationStore', () => {
         responseMode: string;
         targetTokenCount: number;
         generationLimit: number;
+        effectiveNativeGenerationLimit: number;
         contextSelection: { budgetMaximumUnits: number };
       };
     };
     expect(persisted.summary).toEqual(expect.objectContaining({
       responseMode: mode, targetTokenCount, generationLimit,
+      effectiveNativeGenerationLimit: generationLimit,
     }));
     expect(persisted.summary.contextSelection.budgetMaximumUnits).toBe(budgetMaximumUnits);
   });

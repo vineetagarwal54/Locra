@@ -1513,7 +1513,10 @@ function selectRequestAwareMemory(input: RequestAwareMemorySelectionInput): {
       selectedPersistedSummary = source.persistedSummary;
     }
     if (source?.retrieved !== undefined) {
-      const fact = retrievedItemToMemoryFact(source.retrieved);
+      const fact = retrievedItemToMemoryFact(
+        source.retrieved,
+        input.currentConversationId,
+      );
       if (source.retrieved.sourceConversationId === input.currentConversationId) {
         sameChatItems.push(fact);
       } else {
@@ -1598,14 +1601,21 @@ function exactSignals(content: string, relevance: number): string[] {
   return [...new Set(exactValues)];
 }
 
-function retrievedItemToMemoryFact(item: RetrievedItem): ContextMemoryFact {
+function retrievedItemToMemoryFact(
+  item: RetrievedItem,
+  currentConversationId: string,
+): ContextMemoryFact {
+  const provenance = item.sourceConversationId === currentConversationId
+    ? `Same-chat conversation data: message ${item.sourceMessageId}`
+    : (
+        `Cross-chat conversation data: conversation ${item.sourceConversationId}, ` +
+        `message ${item.sourceMessageId}`
+      );
   return {
     version: 'context-memory-fact-v1',
     id: `retrieved:${item.sourceConversationId}:${item.id}`,
     sourceMessageId: item.sourceMessageId,
-    text:
-      `[Untrusted source: conversation ${item.sourceConversationId}, ` +
-      `message ${item.sourceMessageId}] ${item.text}`,
+    text: `[${provenance}] ${item.text}`,
     createdAt: item.timestamp,
   };
 }

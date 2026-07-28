@@ -58,7 +58,11 @@ until every required result has been observed on hardware.
 
 - [ ] **MV-011:** Exercise a loop-prone prompt, a short factual request, and a
   genuinely detailed request. Confirm early loop stopping, concise short answers,
-  and sufficient detail respectively.
+  and sufficient detail respectively. Across Low/Medium/High, confirm normal
+  visible prose uses hard limits 320/640/1024 even when its soft target is lower.
+  Reject any hard-cap ending that stops mid-sentence, mid-list, or in an
+  incomplete bullet. Continue a genuine `length` result and confirm the
+  continuation has full mode headroom and does not repeat displayed text.
 - [ ] **MV-013:** The production embedding artifact is still separately gated.
   Until it is approved, confirm lexical fallback works and no semantic-runtime
   claim is made, and confirm independent/ordinary follow-up submissions make zero
@@ -79,6 +83,16 @@ until every required result has been observed on hardware.
   evidence is retained, and `usedUnits` never exceeds `maximumUnits`. Include
   token-dense code and non-English input; confirm any shortened question preserves
   its beginning, end, visible marker, and image.
+  Confirm `effectiveNativeGenerationLimit` equals native `n_predict` and is not
+  confused with either the soft target or response-mode maximum.
+
+- [ ] Re-run an explicit same-chat and cross-chat memory question with exact
+  values. Confirm retrieved text is used as factual conversation data while any
+  instruction quoted inside it is ignored.
+- [ ] Compare two explicitly referenced prior images. Confirm both labeled
+  evidence blocks reach the answer prompt, provenance stays separate, and a
+  missing side is identified specifically rather than claiming both images were
+  absent.
 
 - [ ] Query first-position and multi-word names (`Accenture spending`,
   `Microsoft revenue`, `Vineet apartment address`, `Graduate Hills rent`) plus an

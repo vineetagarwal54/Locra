@@ -171,16 +171,25 @@ describe('QwenLlamaRuntime lifecycle', () => {
     const { runtime, context } = makeRuntime();
     await runtime.loadModel(load);
 
-    await runtime.generate({
+    const result = await runtime.generate({
       ...generateRequest([{ role: 'user', content: 'Brief answer.' }]),
-      generationHardLimitTokens: 144,
-      generationPlanId: 'concise-text-v1',
+      softTargetTokens: 128,
+      hardSafetyLimitTokens: 640,
+      generationPlanId: 'concise-prose-v2',
+      generationTaskKind: 'concise-prose',
     });
 
     expect(context.completion).toHaveBeenCalledWith(
-      expect.objectContaining({ n_predict: 144 }),
+      expect.objectContaining({ n_predict: 640 }),
       expect.any(Function),
     );
+    expect(result.generationDiagnostics).toEqual({
+      responseModeHardMaximum: 640,
+      effectiveNativeGenerationLimit: 640,
+      softTargetTokens: 128,
+      generationPlanId: 'concise-prose-v2',
+      taskKind: 'concise-prose',
+    });
   });
 
   it('formats and tokenizes again after removing history before completion', async () => {

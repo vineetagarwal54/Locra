@@ -12,7 +12,7 @@ State: uncommitted working-tree corrections; nothing staged, committed, or pushe
 
 - `npm run type-check`: passed.
 - `npm run lint`: passed.
-- `npm test -- --runInBand`: passed — 107 suites, 727 tests,
+- `npm test -- --runInBand`: passed — 110 suites, 765 tests,
   0 snapshots.
 - `git diff --check`: passed.
 
@@ -39,11 +39,21 @@ pre-implementation baseline.
   prices, dates, and identifiers while filtering generic command/question words.
 - `QwenLlamaRuntime` is the sole loop-triggered native stop owner; mocked
   cancellation/loop behavior is deterministic and idempotent.
+- `GenerationPlan` separates `softTargetTokens` from
+  `hardSafetyLimitTokens`. Normal visible prose and continuations retain the
+  response-mode maximum (320/640/1024); only structurally bounded output may use
+  a smaller native cap.
+- The effective native limit is propagated once to `n_predict` and returned
+  through runtime, objective-record, trace, and production-summary diagnostics
+  alongside the distinct soft target and response-mode maximum.
+- Retrieved context is factual conversation data while embedded instructions
+  remain non-authoritative. Multi-image comparisons deliver separately labeled,
+  provenance-bearing evidence in the final Qwen messages.
 
 ## Task truthfulness and remaining gates
 
 Automated source implementation through optional Phase 8 is complete, but the
-task ledger is not fully complete: 51 of 56 tasks are checked. These five
+task ledger is not fully complete: 53 of 59 tasks are checked. These six
 physical/manual tasks remain open:
 
 - T034: native `stopCompletion()` hardware acceptance, partial persistence,
@@ -52,8 +62,11 @@ physical/manual tasks remain open:
 - T053: final airplane-mode validation.
 - T054: Spec 006 physical-device regression checklist.
 - T055: quickstart Phases 1–9 end-to-end on a physical device.
+- T058: corrected output-limit, retrieval-memory, and multi-image device matrix.
 
-No physical-device result is claimed.
+No physical-device success is claimed. The corrected output-limit path still
+requires retesting against the observed mid-sentence and mid-list truncation
+probes, plus exact-value retrieval and two-image comparison.
 
 The production embedding artifact is not approved or activated by Spec 007.
 Runtime behavior remains lexical-only until the separate manifest, license, hash,

@@ -26,18 +26,22 @@ export interface SamplingProfile {
   readonly topK: number;
 }
 
+export type GenerationTaskKind =
+  | 'concise-prose'
+  | 'detailed-prose'
+  | 'visual-description'
+  | 'visual-extraction'
+  | 'long-synthesis'
+  | 'continuation'
+  | 'structured-extraction';
+
 export interface GenerationPlan {
-  readonly softTarget: number;
-  readonly effectiveHardLimit: number;
+  readonly softTargetTokens: number;
+  readonly hardSafetyLimitTokens: number;
   readonly samplingProfile: SamplingProfile;
   readonly loopDetectionEligible: boolean;
-  readonly diagnosticsId:
-    | 'concise-text-v1'
-    | 'concise-image-identification-v1'
-    | 'bounded-visual-extraction-v1'
-    | 'detailed-v1'
-    | 'long-synthesis-v1';
-  readonly detailed: boolean;
+  readonly diagnosticsId: string;
+  readonly taskKind: GenerationTaskKind;
 }
 
 export function createGenerationPlan(
@@ -45,41 +49,71 @@ export function createGenerationPlan(
   question: string,
   classification: RequestClassification,
   taskModality: 'text' | 'image',
+  explicitTaskKind?: GenerationTaskKind,
 ): GenerationPlan {
   const config = getResponseModeConfig(mode);
+  if (explicitTaskKind === 'continuation') {
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      'continuation-v1',
+      'continuation',
+      config.generationLimit,
+    );
+  }
   const detailed = classification.requestsDetailedAnswer || hasDetailedRequestCue(question);
   if (detailed) {
-    return plan(config.answerTargetTokens, config.generationLimit, 'detailed-v1', true);
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      'detailed-prose-v2',
+      'detailed-prose',
+      config.generationLimit,
+    );
   }
   if (classification.isLongContextRetrievalRequest || classification.isCrossChatEligible) {
     return plan(
       config.answerTargetTokens,
       config.generationLimit,
-      'long-synthesis-v1',
-      true,
+      'long-synthesis-v2',
+      'long-synthesis',
+      config.generationLimit,
+    );
+  }
+  if (isStructurallyBoundedRequest(question, taskModality)) {
+    const softTarget = Math.min(config.answerTargetTokens, mode === 'Low' ? 64 : 96);
+    return plan(
+      softTarget,
+      Math.min(config.generationLimit, softTarget + 128),
+      'structured-extraction-v1',
+      'structured-extraction',
+      config.generationLimit,
     );
   }
   if (taskModality === 'image' && isVisualExtractionRequest(question, classification)) {
     return plan(
       Math.min(config.answerTargetTokens, mode === 'High' ? 320 : mode === 'Medium' ? 256 : 160),
-      Math.min(config.generationLimit, mode === 'High' ? 512 : mode === 'Medium' ? 384 : 256),
-      'bounded-visual-extraction-v1',
-      false,
+      config.generationLimit,
+      'visual-extraction-v2',
+      'visual-extraction',
+      config.generationLimit,
     );
   }
   if (taskModality === 'image') {
     return plan(
       Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128),
-      Math.min(config.generationLimit, mode === 'Low' ? 128 : 192),
-      'concise-image-identification-v1',
-      false,
+      config.generationLimit,
+      'visual-description-v2',
+      'visual-description',
+      config.generationLimit,
     );
   }
   return plan(
     resolveGenerationTarget(mode, classification),
-    Math.min(config.generationLimit, mode === 'Low' ? 128 : mode === 'Medium' ? 160 : 192),
-    'concise-text-v1',
-    false,
+    config.generationLimit,
+    'concise-prose-v2',
+    'concise-prose',
+    config.generationLimit,
   );
 }
 
@@ -107,19 +141,51 @@ export function resolveGenerationTarget(
 }
 
 function plan(
-  softTarget: number,
-  effectiveHardLimit: number,
-  diagnosticsId: GenerationPlan['diagnosticsId'],
-  detailed: boolean,
+  requestedSoftTarget: number,
+  requestedHardLimit: number,
+  diagnosticsId: string,
+  taskKind: GenerationTaskKind,
+  responseModeMaximum: number,
 ): GenerationPlan {
+  const hardSafetyLimitTokens = Math.max(
+    1,
+    Math.min(responseModeMaximum, requestedHardLimit),
+  );
+  const requiredHeadroom = Math.min(128, Math.max(0, hardSafetyLimitTokens - 1));
+  const softTargetTokens = Math.max(
+    1,
+    Math.min(requestedSoftTarget, hardSafetyLimitTokens - requiredHeadroom),
+  );
   return {
-    softTarget,
-    effectiveHardLimit,
+    softTargetTokens,
+    hardSafetyLimitTokens,
     samplingProfile: QWEN_VISIBLE_SAMPLING_PROFILE,
     loopDetectionEligible: true,
     diagnosticsId,
-    detailed,
+    taskKind,
   };
+}
+
+function isStructurallyBoundedRequest(
+  question: string,
+  taskModality: 'text' | 'image',
+): boolean {
+  const normalized = question.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (/\b(?:yes or no|one word|single word)\b/.test(normalized)) {
+    return true;
+  }
+  if (
+    /\b(?:return|output|respond with)\b.*\bjson\b.*\b(?:fields?|keys?|schema)\b/
+      .test(normalized)
+  ) {
+    return true;
+  }
+  if (/\b(?:exactly|at most|no more than)\s+\d+\s+(?:items?|values?|words?|bullets?|lines?)\b/.test(normalized)) {
+    return true;
+  }
+  return taskModality === 'image' &&
+    /\b(?:what is|read|give|report)\s+(?:the\s+)?(?:single|one)\s+(?:visible\s+)?(?:value|date|serial number|code)\b/
+      .test(normalized);
 }
 
 function hasDetailedRequestCue(question: string): boolean {

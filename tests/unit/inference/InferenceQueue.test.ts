@@ -626,6 +626,13 @@ describe('InferenceQueue two-stage first image turns', () => {
           response: 'The mug handle is chipped.',
           tokenCount: 6,
           promptTokenCount: 44,
+          generationDiagnostics: {
+            responseModeHardMaximum: 640,
+            effectiveNativeGenerationLimit: 640,
+            softTargetTokens: 128,
+            generationPlanId: 'visual-description-v2',
+            taskKind: 'visual-description',
+          },
         });
       },
     };
@@ -659,6 +666,11 @@ describe('InferenceQueue two-stage first image turns', () => {
         appBuildId: 'locra-test-build',
         truncated: false,
         looping: false,
+        softTargetTokens: 128,
+        responseModeHardMaximum: 640,
+        effectiveNativeGenerationLimit: 640,
+        generationPlanId: 'visual-description-v2',
+        generationTaskKind: 'visual-description',
       }),
     );
     expect(record?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);

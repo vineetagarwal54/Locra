@@ -58,15 +58,18 @@ describe('generation tuning', () => {
   it.each([
     ['What is a mutex?', 192],
     ['Give the short definition of a mutex.', 192],
-  ])('creates a concise independent plan for "%s"', (question, maximum) => {
+  ])('uses a concise soft target without shrinking the High hard limit for "%s"', (question) => {
     const plan = createGenerationPlan(
       'High',
       question,
       classification({ isIndependentTextQuestion: true }),
       'text',
     );
-    expect(plan.effectiveHardLimit).toBeLessThanOrEqual(maximum);
-    expect(plan.diagnosticsId).toBe('concise-text-v1');
+    expect(plan.softTargetTokens).toBeLessThanOrEqual(192);
+    expect(plan.hardSafetyLimitTokens).toBe(1024);
+    expect(plan.hardSafetyLimitTokens).toBeGreaterThanOrEqual(plan.softTargetTokens + 128);
+    expect(plan.taskKind).toBe('concise-prose');
+    expect(plan.diagnosticsId).toBe('concise-prose-v2');
   });
 
   it.each([
@@ -79,11 +82,11 @@ describe('generation tuning', () => {
       classification({ isIndependentTextQuestion: true, requestsDetailedAnswer: true }),
       'text',
     );
-    expect(plan.effectiveHardLimit).toBe(1024);
-    expect(plan.detailed).toBe(true);
+    expect(plan.hardSafetyLimitTokens).toBe(1024);
+    expect(plan.taskKind).toBe('detailed-prose');
   });
 
-  it('gives extraction lists more room than identification without allowing an essay', () => {
+  it('keeps full mode headroom for image descriptions and unbounded extraction lists', () => {
     const extraction = createGenerationPlan(
       'High',
       'List every readable line in these screenshots.',
@@ -96,8 +99,39 @@ describe('generation tuning', () => {
       classification({ isNewImageQuestion: true, hasVisualReference: true }),
       'image',
     );
-    expect(extraction.effectiveHardLimit).toBeGreaterThan(identification.effectiveHardLimit);
-    expect(extraction.effectiveHardLimit).toBeLessThan(1024);
+    expect(extraction.hardSafetyLimitTokens).toBe(1024);
+    expect(identification.hardSafetyLimitTokens).toBe(1024);
+    expect(extraction.taskKind).toBe('visual-extraction');
+    expect(identification.taskKind).toBe('visual-description');
+  });
+
+  it('uses full response-mode headroom for an explicit continuation', () => {
+    const continuation = createGenerationPlan(
+      'Medium',
+      'Continue the previous answer without repeating it.',
+      classification({ isTextFollowUp: true }),
+      'text',
+      'continuation',
+    );
+
+    expect(continuation.taskKind).toBe('continuation');
+    expect(continuation.hardSafetyLimitTokens).toBe(640);
+    expect(continuation.hardSafetyLimitTokens)
+      .toBeGreaterThanOrEqual(continuation.softTargetTokens + 128);
+  });
+
+  it('may reduce the native cap only for a structurally bounded answer', () => {
+    const bounded = createGenerationPlan(
+      'High',
+      'Reply yes or no.',
+      classification({ isIndependentTextQuestion: true }),
+      'text',
+    );
+
+    expect(bounded.taskKind).toBe('structured-extraction');
+    expect(bounded.hardSafetyLimitTokens).toBeLessThan(1024);
+    expect(bounded.hardSafetyLimitTokens)
+      .toBeGreaterThanOrEqual(bounded.softTargetTokens + 128);
   });
   it('pins visible and structured sampling separately', () => {
     expect(QWEN_VISIBLE_SAMPLING_PROFILE).toEqual({

@@ -58,6 +58,15 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
 
 **Rationale**: Response modes (Low/Medium/High) already express *user-chosen* verbosity; classification expresses *task-shape*. A mode-only target means a Low-mode user still gets padded toward ~192 tokens for a two-word factual answer. Layering classification on top keeps the existing, tested mode system intact (spec Non-Goal: not changing response-mode generation limits) while adding the finer-grained signal the spec requires (FR-032/FR-034).
 
+**Correction after physical diagnostics (2026-07-26)**: The classification-aware
+value is a soft answer target, not a native output ceiling. Passing 128/160/192
+as `n_predict` caused repeatable mid-sentence and mid-list stops while input
+prompts remained far below the context limit. Ordinary visible prose now retains
+the response-mode hard maximum (320/640/1024); only structurally bounded output
+may use a smaller native cap. Continuations always retain full mode headroom.
+Diagnostics record the mode maximum and the effective native limit separately,
+with the latter equal to the actual `n_predict` value.
+
 **Alternatives considered**:
 - *Add a fourth response mode ("very low")*: rejected — conflates a user setting with a per-request signal; the user didn't choose a different mode, the question shape did.
 - *Let the system prompt alone handle conciseness*: already tried (existing `getResponseModeInstruction` conciseness wording) and insufficient per the spec's stated problem — prompting alone doesn't reliably cap length or prevent padding.

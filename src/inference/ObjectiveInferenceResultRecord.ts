@@ -8,6 +8,11 @@ export const OBJECTIVE_INFERENCE_RESULT_RECORD_FIELDS = [
   'promptTokens',
   'estimatedPromptTokens',
   'finalNativePromptTokens',
+  'softTargetTokens',
+  'responseModeHardMaximum',
+  'effectiveNativeGenerationLimit',
+  'generationPlanId',
+  'generationTaskKind',
   'truncated',
   'looping',
   'timestamp',
@@ -42,5 +47,10 @@ export interface ObjectiveInferenceResultRecord {
   responseMode?: import('./ResponseMode').ResponseMode;
   targetTokenCount?: number;
   generationLimit?: number;
+  softTargetTokens?: number;
+  responseModeHardMaximum?: number;
+  effectiveNativeGenerationLimit?: number;
+  generationPlanId?: string;
+  generationTaskKind?: import('./GenerationTuning').GenerationTaskKind;
   samplingProfile?: import('./GenerationTuning').SamplingProfile;
 }

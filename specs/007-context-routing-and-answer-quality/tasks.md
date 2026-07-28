@@ -146,6 +146,17 @@ Generation quality remains outside the five required automated-test areas, but d
 - [X] T035 [US10] Implement `resolveGenerationTarget(mode, classification)` in `src/inference/GenerationTuning.ts` and wire it into the answer-generation call site: reduced soft target for independent/short-follow-up classifications; unchanged or unshortened target for long-context/detailed requests; hard generation limit never reduced below safe completion room.
 - [X] T036 [US10] **Automated implementation complete; hardware acceptance pending under T034.** Implement the streaming loop detector in `src/inference/llamaRn/QwenLlamaRuntime.ts` as the single authoritative native loop-stop owner, make cancellation idempotent, return a completed `looping` result with cleaned partial text, and prevent queue-level duplicate stop/cancellation paths. Deterministic mocked tests pass; this checkbox does not claim physical-device acceptance. (hardware acceptance depends on T034)
 - [X] T037 [US10] Run the existing `postProcessAnswer` pass on the early-stopped buffer exactly as on a normal completion; extend `src/inference/AnswerPostProcessor.ts` only if early-stopping introduces a new truncation shape to handle (spec FR-031, "may improve, not required to stay unchanged"). (depends on T036)
+- [X] T056 Correct the output-limit regression by separating soft targets from
+  hard safety limits, restoring 320/640/1024 for ordinary visible prose and
+  continuations, propagating one effective native limit, and making diagnostics
+  report that actual value.
+- [X] T057 Clarify retrieved-context trust so factual conversation data remains
+  answerable while embedded instructions remain non-authoritative; deliver
+  separately labeled, provenance-bearing multi-image evidence in final messages.
+- [ ] T058 Re-run the output-truncation, retrieval-memory, and multi-image
+  comparison matrix on a physical device. Reject mid-sentence/mid-list hard-cap
+  endings and do not claim success until all effective-limit diagnostics match
+  observed native behavior.
 
 **Checkpoint**: Spec MV-011 passes manually; independent short-answer questions are concise; genuinely detailed answers are unaffected; loop-prone fixtures stop earlier without losing partial text.
 

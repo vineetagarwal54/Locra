@@ -224,9 +224,10 @@ export interface InferenceRequest {
   assistantMessageId?: string;
   imagePath: string | null;
   question: string;
-  generationTargetTokens?: number;
-  generationHardLimitTokens?: number;
+  softTargetTokens?: number;
+  hardSafetyLimitTokens?: number;
   generationPlanId?: string;
+  generationTaskKind?: import('../inference/GenerationTuning').GenerationTaskKind;
   loopDetectionEligible?: boolean;
 }
 

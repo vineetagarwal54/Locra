@@ -218,7 +218,10 @@ A user receives an answer that would otherwise loop, run long, or pad unnecessar
 - **FR-016**: Semantic retrieval activation MUST remain gated behind the existing embedding-artifact approval process — covering model identity, license, artifact hash, dimensions, latency, memory, and device-compatibility verification, as established for this project. This feature defines and wires the routing, fusion, and query-time embedding path; it does not itself grant that approval, and no artifact of this feature may assert or imply that an embedding runtime is currently approved when it is not.
 - **FR-017**: Embedding backfill MUST continue to run under the existing exclusive device resource policy (never concurrent with answer generation, compaction, or voice) and MUST NOT block answering — a request MUST use lexical fallback while backfill is incomplete.
 - **FR-018**: Hybrid retrieval MUST support an expanded scope (current chat, plus opted-in, non-excluded cross-chat sources per Section 7) using the same scope-filter-before-scoring rule already required for same-chat retrieval, so enabling cross-chat scope never changes single-chat-only retrieval results when cross-chat is off.
-- **FR-019**: Retrieved items from any scope MUST remain source-attributed and treated as untrusted content, consistent with the existing `[Untrusted source: conversation X, message Y]` formatting.
+- **FR-019**: Retrieved items from any scope MUST remain source-attributed
+  conversation data. Relevant factual details remain usable for explicit memory
+  questions, while any instructions quoted inside retrieved text are
+  non-authoritative and MUST NOT be followed.
 - **FR-019a**: A lexical candidate containing a verbatim (case-insensitive) match for a number, price-like token, date-like token, or the query's likely proper-noun/identifier token MUST be included in the final fused result set — subject to the existing per-request retrieval limit and token budget — regardless of its computed fused rank, so the deterministic fusion method in FR-014 can never silently drop a precise factual match in favor of weaker semantic similarity.
 
 ## 7. Optional Scoped Cross-Chat Behavior

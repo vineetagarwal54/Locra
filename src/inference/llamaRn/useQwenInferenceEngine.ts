@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import type { GenerationFinishReason } from '../../types/models';
 import type { SamplingProfile } from '../GenerationTuning';
 import type { EngineGenerateRequest, InferenceEngineHandle } from '../InferenceEngineHandle';
+import type { GenerationRuntimeDiagnostics } from '../InferenceEngineHandle';
 
 import { QwenLlamaRuntime, type LlamaBinding } from './QwenLlamaRuntime';
 
@@ -31,6 +32,7 @@ interface EngineState {
   finishReason: GenerationFinishReason | null;
   inputShortenedWarning: string | null;
   samplingProfile: SamplingProfile | null;
+  generationDiagnostics: GenerationRuntimeDiagnostics | null;
 }
 
 const INITIAL_ENGINE_STATE: EngineState = {
@@ -46,6 +48,7 @@ const INITIAL_ENGINE_STATE: EngineState = {
   finishReason: null,
   inputShortenedWarning: null,
   samplingProfile: null,
+  generationDiagnostics: null,
 };
 
 function loadLlamaBinding(): LlamaBinding {
@@ -120,8 +123,10 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             messages: request.messages,
             responseMode: request.responseMode,
             kind: request.kind,
-            generationHardLimitTokens: request.generationHardLimitTokens,
+            softTargetTokens: request.softTargetTokens,
+            hardSafetyLimitTokens: request.hardSafetyLimitTokens,
             generationPlanId: request.generationPlanId,
+            generationTaskKind: request.generationTaskKind,
             loopDetectionEligible: request.loopDetectionEligible,
             signal: controller.signal,
             onToken: (cumulativeText, generatedTokenCount) => {
@@ -142,6 +147,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             finishReason: result.finishReason,
             inputShortenedWarning: result.inputShortenedWarning,
             samplingProfile: result.samplingProfile,
+            generationDiagnostics: result.generationDiagnostics,
           });
           return result.text;
         } catch (error) {
@@ -171,6 +177,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
       getFinishReason: (): GenerationFinishReason | null => stateRef.current.finishReason,
       getInputShortenedWarning: (): string | null => stateRef.current.inputShortenedWarning,
       getSamplingProfile: (): SamplingProfile | null => stateRef.current.samplingProfile,
+      getGenerationDiagnostics: (): GenerationRuntimeDiagnostics | null =>
+        stateRef.current.generationDiagnostics,
       // Locra owns all conversation context; the runtime keeps no native history.
       getMessageHistoryLength: (): number => 0,
       clearHistory: (): void => {},

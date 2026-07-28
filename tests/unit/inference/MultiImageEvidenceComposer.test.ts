@@ -26,7 +26,10 @@ describe('composeMultiImageEvidence', () => {
     ]);
 
     expect(result.items[0].summary).toContain('Image A evidence');
-    expect(result.items[1].summary).toContain('Image B evidence is insufficient');
+    expect(result.items[0].summary).toContain('Source: first referenced image');
+    expect(result.items[0].summary).toContain('asset asset-a');
+    expect(result.items[1].summary).toContain('Image B evidence');
+    expect(result.items[1].summary).toContain('Evidence is insufficient');
     expect(result.complete).toBe(false);
     expect(result.missingImageAssetIds).toEqual(['asset-b']);
   });

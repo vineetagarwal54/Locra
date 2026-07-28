@@ -24,7 +24,12 @@ import {
   samplingProfileForRequestKind,
   type SamplingProfile,
 } from '../GenerationTuning';
-import { getResponseGenerationLimit, type ResponseMode } from '../ResponseMode';
+import type { GenerationRuntimeDiagnostics } from '../InferenceEngineHandle';
+import {
+  getResponseGenerationLimit,
+  getResponseModeConfig,
+  type ResponseMode,
+} from '../ResponseMode';
 
 import {
   convertToQwenMessages,
@@ -152,8 +157,10 @@ export interface QwenGenerateRequest {
   onToken: (cumulativeText: string, generatedTokenCount?: number) => void;
   responseMode: ResponseMode;
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
-  generationHardLimitTokens?: number;
+  softTargetTokens?: number;
+  hardSafetyLimitTokens?: number;
   generationPlanId?: string;
+  generationTaskKind?: import('../GenerationTuning').GenerationTaskKind;
   loopDetectionEligible?: boolean;
 }
 
@@ -172,6 +179,7 @@ export interface QwenGenerateResult {
   /** Set when the supplied input had to be shortened to fit the context window. */
   inputShortenedWarning: string | null;
   samplingProfile: SamplingProfile;
+  generationDiagnostics: import('../InferenceEngineHandle').GenerationRuntimeDiagnostics;
 }
 
 // ── Typed errors (surfaced to the queue/store boundary) ──────────────────────
@@ -395,7 +403,7 @@ export class QwenLlamaRuntime {
     // is length-truncated (finishReason === 'length'), never a natural stop.
     const generationLimit = Math.min(
       getResponseGenerationLimit(request.responseMode),
-      request.generationHardLimitTokens ?? Number.POSITIVE_INFINITY,
+      request.hardSafetyLimitTokens ?? Number.POSITIVE_INFINITY,
     );
     const samplingProfile = samplingProfileForRequestKind(request.kind);
 
@@ -456,6 +464,13 @@ export class QwenLlamaRuntime {
         reconciled.estimatedPromptTokens,
         reconciled.finalNativePromptTokens,
         loopStoppedText === null ? undefined : 'looping',
+        {
+          responseModeHardMaximum: getResponseGenerationLimit(request.responseMode),
+          effectiveNativeGenerationLimit: generationLimit,
+          softTargetTokens: request.softTargetTokens ?? getResponseModeConfig(request.responseMode).answerTargetTokens,
+          generationPlanId: request.generationPlanId ?? defaultPlanId(request.kind),
+          taskKind: request.generationTaskKind ?? defaultTaskKind(request.kind),
+        },
       );
     } catch (error) {
       if (error instanceof QwenGenerationCancelledError) {
@@ -525,6 +540,7 @@ export class QwenLlamaRuntime {
     estimatedPromptTokens: number,
     finalNativePromptTokens: number,
     forcedFinishReason?: GenerationFinishReason,
+    generationDiagnostics?: GenerationRuntimeDiagnostics,
   ): QwenGenerateResult {
     const totalWallTimeMs = this.now() - startedAt;
     const timings = result.timings ?? {};
@@ -555,8 +571,29 @@ export class QwenLlamaRuntime {
         ?? resolveFinishReason(result, generatedTokens, generationLimit),
       inputShortenedWarning,
       samplingProfile,
+      generationDiagnostics: generationDiagnostics ?? {
+        responseModeHardMaximum: generationLimit,
+        effectiveNativeGenerationLimit: generationLimit,
+        softTargetTokens: Math.max(1, generationLimit - 128),
+        generationPlanId: 'response-mode-default-v1',
+        taskKind: 'concise-prose',
+      },
     };
   }
+}
+
+function defaultTaskKind(
+  kind: QwenGenerateRequest['kind'],
+): import('../GenerationTuning').GenerationTaskKind {
+  return kind === 'extraction' || kind === 'extractionRetry' || kind === 'compaction'
+    ? 'structured-extraction'
+    : 'concise-prose';
+}
+
+function defaultPlanId(kind: QwenGenerateRequest['kind']): string {
+  return defaultTaskKind(kind) === 'structured-extraction'
+    ? 'runtime-structured-extraction-v1'
+    : 'response-mode-default-v1';
 }
 
 /**

@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { buildCanonicalModelMessages } from '../../../src/inference/ContextBuilder';
 import {
   CharacterContextBudgetPolicy,
   ContextOrchestrator,
@@ -9,6 +10,7 @@ import {
   mergeVisualEvidenceIntoMemory,
 } from '../../../src/inference/ContextOrchestrator';
 import type { HiddenVisualEvidence } from '../../../src/inference/OutputPipelineTypes';
+import { getResponseModeConfig } from '../../../src/inference/ResponseMode';
 import type { RetrievedItem } from '../../../src/retrieval/types';
 import type {
   Conversation,
@@ -543,8 +545,8 @@ describe('ContextOrchestrator', () => {
     expect(first.context).toEqual(second.context);
     expect(first.context.recentTurns).toHaveLength(0);
     expect(first.context.importantFacts.map((fact) => fact.text)).toEqual([
-      '[Untrusted source: conversation conversation-a, message same-message-a] same chat A',
-      '[Untrusted source: conversation conversation-a, message same-message-b] same chat B',
+      '[Same-chat conversation data: message same-message-a] same chat A',
+      '[Same-chat conversation data: message same-message-b] same chat B',
     ]);
     expect(search).toHaveBeenCalledTimes(2);
     for (const call of search.mock.calls) {
@@ -1399,6 +1401,17 @@ describe('ContextOrchestrator', () => {
       expect.stringContaining('Image A evidence'),
       expect.stringContaining('Image B evidence'),
     ]);
+    const finalMessages = buildCanonicalModelMessages({
+      conversationContext: result.context,
+      currentQuestion: 'Compare the first and second images.',
+      responseMode: 'Medium',
+      responseModeConfig: getResponseModeConfig('Medium'),
+    });
+    const finalSystemMessage = finalMessages.find((message) => message.role === 'system')?.content;
+    expect(finalSystemMessage).toContain('Structured evidence for each referenced image is supplied');
+    expect(finalSystemMessage).toContain('Image A evidence');
+    expect(finalSystemMessage).toContain('Image B evidence');
+    expect(finalSystemMessage).not.toMatch(/images? (?:were|are) not provided/i);
   });
 
   it('does not silently choose an image for an ambiguous multi-image comparison', () => {

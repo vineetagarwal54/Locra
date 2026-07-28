@@ -4,6 +4,7 @@ export interface MultiImageEvidenceInput {
   readonly imageAssetId: string;
   readonly sourceMessageId: string;
   readonly evidence: ContextMediaEvidence | null;
+  readonly sourceLabel?: string;
 }
 
 export interface MultiImageEvidenceComposition {
@@ -20,6 +21,9 @@ export function composeMultiImageEvidence(
     .map((input) => input.imageAssetId);
   const items = inputs.map((input, index) => {
     const label = imageLabel(index);
+    const sourceLabel = input.sourceLabel ?? ordinalSourceLabel(index);
+    const provenance =
+      `Source: ${sourceLabel}; message ${input.sourceMessageId}; asset ${input.imageAssetId}`;
     if (input.evidence === null) {
       return {
         version: 'context-media-evidence-v1' as const,
@@ -28,8 +32,8 @@ export function composeMultiImageEvidence(
         modality: 'image' as const,
         sourcePath: input.imageAssetId,
         summary:
-          `${label} is insufficient. Do not infer unsupported attributes for this image.`,
-        facts: [],
+          `${label}:\n${provenance}\nEvidence is insufficient for this comparison side.`,
+        facts: ['Do not infer unsupported attributes for this image.'],
         extractedText: [],
         uncertainty: ['Comparison is incomplete for this image.'],
         createdAt: 0,
@@ -37,7 +41,7 @@ export function composeMultiImageEvidence(
     }
     return {
       ...input.evidence,
-      summary: `${label}:\n${input.evidence.summary}`,
+      summary: `${label}:\n${provenance}\nSubject: ${input.evidence.summary}`,
       facts: [...input.evidence.facts],
       extractedText: [...input.evidence.extractedText],
       uncertainty: [...input.evidence.uncertainty],
@@ -52,4 +56,12 @@ export function composeMultiImageEvidence(
 
 function imageLabel(index: number): string {
   return `Image ${String.fromCharCode(65 + index)} evidence`;
+}
+
+function ordinalSourceLabel(index: number): string {
+  return index === 0
+    ? 'first referenced image'
+    : index === 1
+      ? 'second referenced image'
+      : `referenced image ${index + 1}`;
 }

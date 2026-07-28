@@ -119,7 +119,7 @@ interface ActiveGeneration {
   contextDiagnostics?: ContextSelectionDiagnostics;
   selectedContext?: CanonicalConversationContext;
   responseMode: ResponseMode;
-  generationTargetTokens?: number;
+  softTargetTokens?: number;
   generationPlan?: GenerationPlan;
   requestKind: DiagnosticRequestKind;
   imageSupplied: boolean;
@@ -279,10 +279,11 @@ export class ConversationStore implements IConversationStore {
         : 'text',
     );
     activeGeneration.generationPlan = generationPlan;
-    activeGeneration.generationTargetTokens = generationPlan.softTarget;
-    inferenceRequest.generationTargetTokens = activeGeneration.generationTargetTokens;
-    inferenceRequest.generationHardLimitTokens = generationPlan.effectiveHardLimit;
+    activeGeneration.softTargetTokens = generationPlan.softTargetTokens;
+    inferenceRequest.softTargetTokens = activeGeneration.softTargetTokens;
+    inferenceRequest.hardSafetyLimitTokens = generationPlan.hardSafetyLimitTokens;
     inferenceRequest.generationPlanId = generationPlan.diagnosticsId;
+    inferenceRequest.generationTaskKind = generationPlan.taskKind;
     inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     activeGeneration.selectedContext = orchestration.context;
@@ -344,6 +345,7 @@ export class ConversationStore implements IConversationStore {
       question: userMessage.text,
       imagePath: firstImagePath(userMessage),
       seedText: '',
+      generationTaskKind: undefined,
     });
   }
 
@@ -378,6 +380,7 @@ export class ConversationStore implements IConversationStore {
       question: userMessage.text,
       imagePath: firstImagePath(userMessage),
       seedText: '',
+      generationTaskKind: undefined,
     });
   }
 
@@ -418,6 +421,7 @@ export class ConversationStore implements IConversationStore {
       question: buildContinuationPrompt(userMessage.text, assistantMessage.text),
       imagePath: null,
       seedText: assistantMessage.text,
+      generationTaskKind: 'continuation',
     });
   }
 
@@ -434,6 +438,7 @@ export class ConversationStore implements IConversationStore {
     question: string;
     imagePath: string | null;
     seedText: string;
+    generationTaskKind?: import('../inference/GenerationTuning').GenerationTaskKind;
   }): Promise<void> {
     const now = this.dependencies.now();
     const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
@@ -500,9 +505,10 @@ export class ConversationStore implements IConversationStore {
         orchestration.contextNeedProfile.olderImageEvidence
         ? 'image'
         : 'text',
+      input.generationTaskKind,
     );
     activeGeneration.generationPlan = generationPlan;
-    activeGeneration.generationTargetTokens = generationPlan.softTarget;
+    activeGeneration.softTargetTokens = generationPlan.softTargetTokens;
     activeGeneration.contextDiagnostics = orchestration.diagnostics;
     activeGeneration.selectedContext = orchestration.context;
     const updatedConversation: Conversation = {
@@ -801,11 +807,30 @@ export class ConversationStore implements IConversationStore {
         finalNativePromptTokens: effectiveContext?.finalNativePromptTokens ?? null,
         groundingVerdict,
       },
-      targetTokenCount: activeGeneration.generationTargetTokens ?? modeConfig.answerTargetTokens,
+      targetTokenCount:
+        objective?.softTargetTokens
+        ?? activeGeneration.softTargetTokens
+        ?? modeConfig.answerTargetTokens,
       generationLimit:
-        activeGeneration.generationPlan?.effectiveHardLimit ?? modeConfig.generationLimit,
+        objective?.effectiveNativeGenerationLimit
+        ?? activeGeneration.generationPlan?.hardSafetyLimitTokens
+        ?? modeConfig.generationLimit,
+      softTargetTokens:
+        objective?.softTargetTokens
+        ?? activeGeneration.softTargetTokens
+        ?? modeConfig.answerTargetTokens,
+      responseModeHardMaximum:
+        objective?.responseModeHardMaximum ?? modeConfig.generationLimit,
+      effectiveNativeGenerationLimit:
+        objective?.effectiveNativeGenerationLimit
+        ?? activeGeneration.generationPlan?.hardSafetyLimitTokens
+        ?? modeConfig.generationLimit,
       generationPlanId:
         activeGeneration.generationPlan?.diagnosticsId ?? 'response-mode-default-v1',
+      generationTaskKind:
+        objective?.generationTaskKind
+        ?? activeGeneration.generationPlan?.taskKind
+        ?? 'concise-prose',
       samplingProfile:
         objective?.samplingProfile ?? samplingProfileForRequestKind(
           activeGeneration.requestKind === 'image' ? 'answer' : 'chat',
@@ -868,9 +893,10 @@ export class ConversationStore implements IConversationStore {
       assistantMessageId: activeGeneration.assistantMessageId,
       question: request.question,
       imagePath: request.imagePath,
-      generationTargetTokens: activeGeneration.generationTargetTokens,
-      generationHardLimitTokens: activeGeneration.generationPlan?.effectiveHardLimit,
+      softTargetTokens: activeGeneration.softTargetTokens,
+      hardSafetyLimitTokens: activeGeneration.generationPlan?.hardSafetyLimitTokens,
       generationPlanId: activeGeneration.generationPlan?.diagnosticsId,
+      generationTaskKind: activeGeneration.generationPlan?.taskKind,
       loopDetectionEligible: activeGeneration.generationPlan?.loopDetectionEligible,
     };
   }

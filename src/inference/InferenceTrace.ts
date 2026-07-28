@@ -1,4 +1,5 @@
 import type { ModelRequestMessage } from './ContextBuilder';
+import type { GenerationRuntimeDiagnostics } from './InferenceEngineHandle';
 
 export type InferenceTraceStageKind =
   | 'perception'
@@ -13,6 +14,7 @@ export interface InferenceTraceStage {
   parsedOutput?: unknown;
   processedOutput?: string;
   refusalRetry?: boolean;
+  generationDiagnostics?: GenerationRuntimeDiagnostics;
 }
 
 export interface InferenceTrace {
