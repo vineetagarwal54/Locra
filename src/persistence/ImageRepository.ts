@@ -39,19 +39,32 @@ export class ImageRepository {
       }
       return existing;
     }
+    const createdAt = input.createdAt ?? this.now();
     const row: ImageAssetRow = {
       id: input.id ?? this.createId(),
       conversation_id: input.conversationId,
       local_path: input.localPath,
       available: 1,
       content_hash: input.contentHash ?? null,
-      created_at: input.createdAt ?? this.now(),
+      asset_revision: input.contentHash ?? 'asset-v1',
+      asset_availability: 'available',
+      created_at: createdAt,
+      updated_at: createdAt,
     };
     this.driver.runSync(
       `INSERT INTO image_asset
-         (id, conversation_id, local_path, available, content_hash, created_at)
-       VALUES (?, ?, ?, 1, ?, ?)`,
-      [row.id, row.conversation_id, row.local_path, row.content_hash, row.created_at],
+         (id, conversation_id, local_path, available, content_hash,
+          asset_revision, asset_availability, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?, 'available', ?, ?)`,
+      [
+        row.id,
+        row.conversation_id,
+        row.local_path,
+        row.content_hash,
+        row.asset_revision,
+        row.created_at,
+        row.updated_at,
+      ],
     );
     return row;
   }
@@ -80,7 +93,15 @@ export class ImageRepository {
   }
 
   markMissing(imageAssetId: string): void {
-    this.driver.runSync('UPDATE image_asset SET available = 0 WHERE id = ?', [imageAssetId]);
+    const now = this.now();
+    this.driver.runSync(
+      `UPDATE image_asset
+          SET available = 0, asset_availability = 'missing',
+              asset_revision = asset_revision || ':missing:' || ?,
+              updated_at = ?
+        WHERE id = ?`,
+      [now, now, imageAssetId],
+    );
   }
 
   reconcileAvailability(fileExists: (path: string) => boolean): number {
@@ -89,7 +110,22 @@ export class ImageRepository {
     for (const asset of assets) {
       const available = fileExists(asset.local_path) ? 1 : 0;
       if (available !== asset.available) {
-        this.driver.runSync('UPDATE image_asset SET available = ? WHERE id = ?', [available, asset.id]);
+        const now = this.now();
+        this.driver.runSync(
+          `UPDATE image_asset
+              SET available = ?, asset_availability = ?,
+                  asset_revision = asset_revision || ':' || ? || ':' || ?,
+                  updated_at = ?
+            WHERE id = ?`,
+          [
+            available,
+            available === 1 ? 'available' : 'missing',
+            available === 1 ? 'available' : 'missing',
+            now,
+            now,
+            asset.id,
+          ],
+        );
         changed += 1;
       }
     }

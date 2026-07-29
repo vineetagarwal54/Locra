@@ -26,6 +26,7 @@ import {
   ContextOrchestrator,
   TokenContextBudgetPolicy,
 } from '../../../src/inference/ContextOrchestrator';
+import { DEFAULT_PLANNER_ACTIVATION } from '../../../src/planning/PlannerActivation';
 import { storage } from '../../../src/storage/mmkv';
 import { createConversationStore } from '../../../src/store/conversationStore';
 import type { IHistoryStore, IInferenceQueue } from '../../../src/types/interfaces';
@@ -665,6 +666,40 @@ describe('conversationStore', () => {
         (message) => message.id === submitted.assistantMessageId,
       )?.text,
     ).toBe(answer);
+    append.mockRestore();
+  });
+
+  it('persists shadow planning separately while legacy remains the execution owner', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const ids = [...ID_SEQUENCE];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      now: () => 1_700_000_000_000,
+      createId: () => ids.shift() ?? `id-${ids.length}`,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        shadowDiagnosticsEnabled: true,
+      },
+    });
+
+    await store.submit('new', {
+      question: 'What is entropy?',
+      imagePath: null,
+    });
+    queue.emit(makeInferenceState('completed', 'Entropy measures uncertainty.'));
+
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      architectureDiagnostics: expect.objectContaining({
+        authorityMode: 'shadow',
+        planOwner: 'legacy-router:v1',
+        shadowPlan: expect.any(Object),
+        constrainedPlanner: expect.objectContaining({ invoked: false }),
+      }),
+    }));
+    expect(queue.submitted).toHaveLength(1);
     append.mockRestore();
   });
 

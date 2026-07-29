@@ -4,6 +4,7 @@ const REFERENCE_STOP_WORDS = new Set([
   'extract',
   'extracted',
   'image',
+  'inspect',
   'item',
   'look',
   'object',
@@ -55,6 +56,7 @@ export interface ImageReferenceResolutionResult {
 
 export interface ImageReferenceResolutionOptions {
   readonly activeImageId: string | null;
+  readonly activeVisualReference?: boolean;
   readonly expectsMultiple?: boolean;
   readonly currentImage?: ResolvedImageReference;
 }
@@ -122,6 +124,27 @@ export function resolveImageReferences(
       : { kind: 'ambiguous', references: [], ambiguousCandidateIds: scored.map(idOf).sort() };
   }
   if (scored.length === 0) {
+    if (options.activeVisualReference === true && options.activeImageId !== null) {
+      const active = candidates.find(
+        (candidate) => candidate.imageAssetId === options.activeImageId,
+      );
+      if (active !== undefined) {
+        return {
+          kind: 'active',
+          references: [toResolvedReference(active)],
+          ambiguousCandidateIds: [],
+        };
+      }
+    }
+    if (meaningfulTokens(query).size === 0 && candidates.length >= 2) {
+      return {
+        kind: 'ambiguous',
+        references: [],
+        ambiguousCandidateIds: candidates
+          .map((candidate) => candidate.imageAssetId)
+          .sort(),
+      };
+    }
     return { kind: 'none', references: [], ambiguousCandidateIds: [] };
   }
   if (scored[0].score === scored[1]?.score) {
@@ -155,7 +178,6 @@ function candidateSearchText(candidate: ImageReferenceCandidate): string {
   return [
     candidate.searchText,
     candidate.imageBearingText ?? '',
-    candidate.assistantAnswer ?? '',
     ...(candidate.associatedTurnText ?? []),
     candidate.latestEvidenceText ?? '',
   ].join(' ');

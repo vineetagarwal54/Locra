@@ -192,6 +192,7 @@ export class InferenceQueue implements IInferenceQueue {
     if (this.isInFlight()) {
       return Promise.reject(new Error('An inference is already in progress.'));
     }
+    validatePlannedVisionRequest(request);
 
     const conversationContext = resolveConversationContext(options);
 
@@ -429,7 +430,14 @@ export class InferenceQueue implements IInferenceQueue {
     recorder: InferenceMetricsRecorder,
     lifecycleGates: LifecycleGates,
   ): Promise<EngineGenerateResult> {
-    if (!requiresStructuredVision(request.question)) {
+    const plannedVisionStrategy = request.visionExecutionPlan?.strategy;
+    const shouldStructure =
+      plannedVisionStrategy === 'inspect-and-structure'
+      || (
+        plannedVisionStrategy === undefined
+        && requiresStructuredVision(request.question)
+      );
+    if (!shouldStructure) {
       lifecycleGates.perception.resolve({ hiddenEvidence: null, pinnedExtraction: null });
       lifecycleGates.contextAssembly.resolve(undefined);
       return this.generateVisibleAnswer(
@@ -819,6 +827,14 @@ export class InferenceQueue implements IInferenceQueue {
     request: InferenceRequest,
     options: InferenceSubmitOptions,
   ): string | null {
+    const strategy = request.visionExecutionPlan?.strategy;
+    if (
+      strategy === 'none'
+      || strategy === 'reuse-evidence'
+      || strategy === 'compare-evidence'
+    ) {
+      return null;
+    }
     if (request.imagePath === null) {
       return null;
     }
@@ -843,6 +859,16 @@ export class InferenceQueue implements IInferenceQueue {
     for (const listener of this.listeners) {
       listener(this.state);
     }
+  }
+}
+
+function validatePlannedVisionRequest(request: InferenceRequest): void {
+  const strategy = request.visionExecutionPlan?.strategy;
+  if (
+    (strategy === 'inspect-original' || strategy === 'inspect-and-structure')
+    && request.imagePath === null
+  ) {
+    throw new Error('The validated vision plan requires an available image asset.');
   }
 }
 

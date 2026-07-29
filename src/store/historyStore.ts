@@ -9,9 +9,11 @@ import { ConversationRepository } from '../persistence/ConversationRepository';
 import { EmbeddingRepository } from '../persistence/EmbeddingRepository';
 import { EvidenceRepository } from '../persistence/EvidenceRepository';
 import { FactRepository } from '../persistence/FactRepository';
+import { ImageEntityRepository } from '../persistence/ImageEntityRepository';
 import { ImageRepository } from '../persistence/ImageRepository';
 import { MessageRepository } from '../persistence/MessageRepository';
 import { getDatabase } from '../persistence/sqlite/Database';
+import { StructuredImageEvidenceRepository } from '../persistence/StructuredImageEvidenceRepository';
 import { SummaryRepository } from '../persistence/SummaryRepository';
 import type { SqliteDriver } from '../persistence/types';
 import type { IHistoryStore } from '../types/interfaces';
@@ -50,7 +52,10 @@ export const conversationRepository = new ConversationRepository(driver, {
 });
 export const messageRepository = new MessageRepository(driver);
 export const imageRepository = new ImageRepository(driver, { deleteFile: unlinkFile });
+export const imageEntityRepository = new ImageEntityRepository(driver);
 export const evidenceRepository = new EvidenceRepository(driver);
+export const structuredImageEvidenceRepository =
+  new StructuredImageEvidenceRepository(driver);
 export const chunkRepository = new ChunkRepository(driver);
 export const embeddingRepository = new EmbeddingRepository(driver);
 export const summaryRepository = new SummaryRepository(driver);

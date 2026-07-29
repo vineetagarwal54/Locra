@@ -265,59 +265,59 @@ T059–T110 and then continues at T112.
 gates; controlled classes require an explicit allowlist.
 **Rollback**: disable those gates and execute the complete legacy turn.
 
-- [ ] T059 [P] Write failing `TurnPlan` MVP tests for authority mode/owner, intent,
+- [X] T059 [P] Write failing `TurnPlan` MVP tests for authority mode/owner, intent,
   modality, dependency, resolved/unresolved references, context requirements,
   memory operations, vision strategy, generation task, confidence, and fallback
   in `tests/unit/planning/TurnPlan.test.ts`.
-- [ ] T060 [P] Write failing authority-mode tests proving shadow is diagnostics
+- [X] T060 [P] Write failing authority-mode tests proving shadow is diagnostics
   only, controlled ownership is whole-turn by named class, authoritative mode
   bypasses legacy semantics, and rollback switches the whole turn in
   `tests/unit/planning/PlannerActivation.test.ts`.
-- [ ] T061 [P] Write bounded Tier-3 contract tests for deterministic invocation
+- [X] T061 [P] Write bounded Tier-3 contract tests for deterministic invocation
   gating, candidate confinement, partial-field output, rationale enums,
   `0.80` threshold, 96-token/8-second budgets, cancellation, timeout, app
   suspension, malformed output, and conservative fallback in
   `tests/unit/planning/ConstrainedPlannerFallback.test.ts`.
-- [ ] T062 [P] Write failing independent-routing recovery tests for every FR-086
+- [X] T062 [P] Write failing independent-routing recovery tests for every FR-086
   protected exact/direct source plus unrelated negatives in
   `tests/unit/inference/IndependentRoutingRecovery.test.ts`.
-- [ ] T063 [P] Add GV-001–GV-009 Wave A fixtures and contract tests using
+- [X] T063 [P] Add GV-001–GV-009 Wave A fixtures and contract tests using
   deterministic injected/mocked ledger state, active entities, image-reference
   candidates, explicit-memory candidates, and lexical retrieval candidates.
   Assert the expected `TurnPlan`, fallback, authority mode, and
   `constrainedPlanner.invoked === false`; do not claim end-to-end vision,
   ledger persistence, explicit-memory persistence, or semantic-retrieval
   execution. Place them in `tests/contract/spec007-turn-planning-golden.test.ts`.
-- [ ] T064 [P] Write failing main-provider capability/substitution tests,
+- [X] T064 [P] Write failing main-provider capability/substitution tests,
   including structured extraction, tokenizer, image capability, cancellation,
   and no storage/planning-schema change, in
   `tests/unit/model/MainInferenceProvider.test.ts`.
-- [ ] T065 Implement MVP planning types in `src/planning/types.ts`; do not add
+- [X] T065 Implement MVP planning types in `src/planning/types.ts`; do not add
   optional enrichment fields as Wave A blockers. (depends on T059)
-- [ ] T066 Implement deterministic validation/post-processing in
+- [X] T066 Implement deterministic validation/post-processing in
   `src/planning/TurnPlanValidator.ts`, including unresolved-image/no-silent-
   text-only and uncertain-memory-write rejection. (depends on T059, T065)
-- [ ] T067 Implement authority-mode/plan-owner resolution and whole-turn rollback
+- [X] T067 Implement authority-mode/plan-owner resolution and whole-turn rollback
   semantics in `src/planning/PlannerActivation.ts`. (depends on T060)
-- [ ] T068 Implement shadow tier orchestration in `src/planning/TurnPlanner.ts`
+- [X] T068 Implement shadow tier orchestration in `src/planning/TurnPlanner.ts`
   using state, ledger/recent state, and lexical-only topic/entity signals:
   ledger identities, canonical labels, known aliases, exact lexical matches,
   code identifiers, direct references, and active comparison state. Optional
   injected embedding signals are additive; the implementation must work with
   embeddings unavailable and must not add semantic regex routing. (depends on T066)
-- [ ] T069 Implement the constrained unresolved-field adapter/validator in
+- [X] T069 Implement the constrained unresolved-field adapter/validator in
   `src/planning/ConstrainedPlannerFallback.ts`; run serially under the existing
   resource policy before answer generation. (depends on T061, T064)
-- [ ] T070 Implement the temporary bounded independent-routing recovery ahead of
+- [X] T070 Implement the temporary bounded independent-routing recovery ahead of
   the legacy hard skip, without broad semantic regex classification.
   (depends on T062)
-- [ ] T071 Wire shadow planning and separate derived diagnostics into the turn
+- [X] T071 Wire shadow planning and separate derived diagnostics into the turn
   lifecycle so no visible behavior, source/image selection, memory write, or
   inference execution changes. (depends on T067–T070)
-- [ ] T072 Extend diagnostics with authority mode, exact plan owner, executed
+- [X] T072 Extend diagnostics with authority mode, exact plan owner, executed
   plan ID/version, shadow delta, recovery, Tier-3 gate/latency/result, and
   sanitization; add focused serialization tests first.
-- [ ] T073 Record Wave A shadow/controlled entry evidence and physically validate
+- [X] T073 Record Wave A shadow/controlled entry evidence and physically validate
   Tier-3 cancellation, suspension, timeout, resource release, and next-turn
   readiness; do not activate controlled mode without this evidence.
 
@@ -332,32 +332,33 @@ controlled gate. **Rollback**: disable the class and execute the complete legacy
 turn. **Physical gate**: fresh-pixel, persistence, reinspection, and comparison
 checks before expanding controlled classes.
 
-- [ ] T074 [P] Write failing reference tests for uniquely resolved active/older
+- [X] T074 [P] Write failing reference tests for uniquely resolved active/older
   images, unresolved multi-candidate ambiguity, no selected pixels/evidence, and
   clarification in `tests/unit/vision/ImageReferenceResolver.test.ts`.
-- [ ] T075 [P] Write failing five-strategy executor tests for capability failure,
+- [X] T075 [P] Write failing five-strategy executor tests for capability failure,
   missing/deleted assets, cancellation, and no replanning in
   `tests/unit/vision/VisionExecutor.test.ts`.
-- [ ] T076 [P] Write failing MVP evidence tests for image/source identity,
+- [X] T076 [P] Write failing MVP evidence tests for image/source identity,
   summary, objects, text, prices/dates/counts/serials, optional associations,
   uncertainty, `complete|partial|failed|stale`, and malformed extraction in
   `tests/unit/persistence/StructuredImageEvidenceRepository.test.ts`.
-- [ ] T077 Implement first-class image-entity persistence and asset
+- [X] T077 Implement first-class image-entity persistence and asset
   availability/revision handling in `src/persistence/ImageEntityRepository.ts`.
-- [ ] T078 Implement MVP structured-evidence persistence/versioning and
+- [X] T078 Implement MVP structured-evidence persistence/versioning and
   reinference invalidation in
   `src/persistence/StructuredImageEvidenceRepository.ts`. (depends on T076)
-- [ ] T079 Implement plan-driven vision strategy execution; the queue executes
+- [X] T079 Implement plan-driven vision strategy execution; the queue executes
   the selected strategy without choosing image/modality itself.
   (depends on T075, T077)
-- [ ] T080 Implement normal-turn evidence persistence or guaranteed canonical
+- [X] T080 Implement normal-turn evidence persistence or guaranteed canonical
   pixel continuity, including partial/failed diagnostics and no text-only visual
   fact retry. (depends on T078, T079)
-- [ ] T081 Implement active-image pronoun follow-up and fresh-pixel reinspection,
+- [X] T081 Implement active-image pronoun follow-up and fresh-pixel reinspection,
   excluding prior refusal/unsupported prose as factual authority.
-- [ ] T082 Implement provenance-separated multi-image comparison with explicit
+- [X] T082 Implement provenance-separated multi-image comparison with explicit
   one-missing-side behavior and no identity/evidence merging.
-- [ ] T083 Enable only explicitly named image scenario classes in controlled
+- [ ] T083 **Automated implementation complete; physical Wave B matrix pending.**
+  Enable only explicitly named image scenario classes in controlled
   mode. Add a failing-then-passing controlled-image authority test proving that
   the validated `TurnPlan` owns the complete turn—reference resolution, image
   selection, context-source selection, context assembly, vision strategy,

@@ -3,6 +3,7 @@ import {
   type DiagnosticRequestKind,
   type ProductionDiagnosticTurnSummary,
 } from '../diagnostics/DiagnosticsTraceStore';
+import type { TurnArchitectureDiagnostics } from '../diagnostics/TurnArchitectureDiagnostics';
 import {
   CompactionService,
   createRegisteredEngineCompactionGenerator,
@@ -30,6 +31,7 @@ import {
   assessGroundingFromSources,
   createGroundingSourceSet,
 } from '../inference/GroundingAssessment';
+import type { IndependentRecoveryCandidate } from '../inference/IndependentRoutingRecovery';
 import {
   applyImageSelectionToInferenceRequest,
   inferenceQueue,
@@ -44,6 +46,12 @@ import {
   toStoredMode,
 } from '../inference/ResponseMode';
 import { durableImageStorage } from '../media/DurableImageStorage';
+import {
+  DEFAULT_PLANNER_ACTIVATION,
+  type PlannerActivationConfig,
+} from '../planning/PlannerActivation';
+import { runShadowPlanningLifecycle } from '../planning/ShadowPlanningLifecycle';
+import { TurnPlanner } from '../planning/TurnPlanner';
 import { ChunkingService } from '../retrieval/ChunkingService';
 import type { EmbeddingService } from '../retrieval/EmbeddingService';
 import { HybridRetriever } from '../retrieval/HybridRetriever';
@@ -71,9 +79,11 @@ import {
   evidenceRepository,
   factRepository,
   historyStore,
+  imageEntityRepository,
   imageRepository,
   messageRepository,
   summaryRepository,
+  structuredImageEvidenceRepository,
   useHistoryStore,
 } from './historyStore';
 import { useSettingsStore } from './settingsStore';
@@ -110,6 +120,11 @@ export interface ConversationStoreDependencies {
   }) => void;
   checkpointAssistantText?: (assistantMessageId: string, text: string) => void;
   persistImage?: (conversationId: string, sourcePath: string) => Promise<string>;
+  plannerActivation?: PlannerActivationConfig;
+  turnPlanner?: TurnPlanner;
+  listIndependentRecoveryCandidates?: (
+    snapshot: import('../types/models').CanonicalConversationSnapshot,
+  ) => readonly IndependentRecoveryCandidate[];
 }
 
 interface ActiveGeneration {
@@ -117,6 +132,7 @@ interface ActiveGeneration {
   originatingUserMessageId: string;
   assistantMessageId: string;
   contextDiagnostics?: ContextSelectionDiagnostics;
+  architectureDiagnostics?: TurnArchitectureDiagnostics;
   selectedContext?: CanonicalConversationContext;
   responseMode: ResponseMode;
   softTargetTokens?: number;
@@ -258,8 +274,18 @@ export class ConversationStore implements IConversationStore {
         diagnosticsEnabled: true,
         queryVector,
         crossChat,
+        independentRecovery: {
+          enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+          candidates: this.dependencies.listIndependentRecoveryCandidates(snapshot),
+        },
       },
     );
+    activeGeneration.architectureDiagnostics = runShadowPlanningLifecycle({
+      snapshot,
+      orchestration,
+      activation: this.dependencies.plannerActivation,
+      action: 'answer',
+    }, this.dependencies.turnPlanner) ?? undefined;
     const inferenceRequest = this.applyImageSelection(
       activeGeneration,
       this.createInferenceRequest(activeGeneration, durableRequest, requestId),
@@ -491,8 +517,18 @@ export class ConversationStore implements IConversationStore {
         diagnosticsEnabled: true,
         queryVector,
         crossChat,
+        independentRecovery: {
+          enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+          candidates: this.dependencies.listIndependentRecoveryCandidates(snapshot),
+        },
       },
     );
+    activeGeneration.architectureDiagnostics = runShadowPlanningLifecycle({
+      snapshot,
+      orchestration,
+      activation: this.dependencies.plannerActivation,
+      action: 'retry',
+    }, this.dependencies.turnPlanner) ?? undefined;
     const generationPlan = createGenerationPlan(
       activeGeneration.responseMode,
       input.question,
@@ -851,6 +887,7 @@ export class ConversationStore implements IConversationStore {
       trace: development ? trace ?? null : null,
       objectiveResult: development ? objective : null,
       contextDiagnostics: development ? effectiveContext ?? null : null,
+      architectureDiagnostics: activeGeneration.architectureDiagnostics ?? null,
       summary,
     });
   }
@@ -1079,6 +1116,9 @@ export function createConversationStore(
     recordBenchmark: () => undefined,
     checkpointAssistantText: () => undefined,
     persistImage: async (_conversationId, sourcePath) => sourcePath,
+    plannerActivation: DEFAULT_PLANNER_ACTIVATION,
+    turnPlanner: new TurnPlanner(),
+    listIndependentRecoveryCandidates: () => [],
     ...dependencies,
   });
 }
@@ -1165,6 +1205,24 @@ export const conversationStore: IConversationStore = createConversationStore({
       evidenceRepository.saveReinferredEvidence(input);
     } else {
       evidenceRepository.saveEvidence(input);
+    }
+    const imageEntity = imageEntityRepository.get(asset.id);
+    if (imageEntity !== null) {
+      const structuredRevision =
+        `${imageEntity.assetRevision}:evidence:${evidence.version}`;
+      if (target?.reinferred === true) {
+        structuredImageEvidenceRepository.invalidateForReinference(
+          asset.id,
+          structuredRevision,
+        );
+      }
+      structuredImageEvidenceRepository.saveFromHiddenEvidence({
+        conversationId,
+        imageId: asset.id,
+        sourceMessageIds: [sourceMessageId],
+        sourceRevision: structuredRevision,
+        hiddenEvidence: evidence,
+      });
     }
   },
   persistRetrievalUnits: (_conversationId, messageIds) => {

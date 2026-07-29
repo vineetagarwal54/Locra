@@ -25,8 +25,8 @@ describe('production SQLite migrations', () => {
         v1.up(database.driver);
         database.driver.execSync('PRAGMA user_version = 1');
       });
-      expect(runMigrations(database.driver).applied).toEqual([2, 3, 4]);
-      expect(readSchemaVersion(database.driver)).toBe(4);
+      expect(runMigrations(database.driver).applied).toEqual([2, 3, 4, 5]);
+      expect(readSchemaVersion(database.driver)).toBe(5);
     } finally { database.close(); }
   });
 
@@ -46,7 +46,7 @@ describe('production SQLite migrations', () => {
         ['existing'],
       );
 
-      expect(runMigrations(database.driver).applied).toEqual([4]);
+      expect(runMigrations(database.driver).applied).toEqual([4, 5]);
       expect(database.driver.getFirstSync<{ excluded_from_cross_chat: number }>(
         'SELECT excluded_from_cross_chat FROM conversation WHERE id = ?',
         ['existing'],

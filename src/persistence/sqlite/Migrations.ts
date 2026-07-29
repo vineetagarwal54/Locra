@@ -1,7 +1,7 @@
 // T089 — production-safe SQLite migrations.
 //
 // The store is built and upgraded by an ORDERED list of numbered migrations
-// (v1 -> v2 -> v3 -> v4). Each migration runs inside a transaction; the stored schema
+// (v1 -> v2 -> v3 -> v4 -> v5). Each migration runs inside a transaction; the stored schema
 // version (`PRAGMA user_version`) is stamped last inside the migration transaction.
 // If a migration throws, its transaction rolls back and the version is
 // left unchanged, so the previous usable database is preserved — production data is
@@ -20,6 +20,7 @@ import {
   CORE_SCHEMA_STATEMENTS,
   readSchemaVersion,
   SCHEMA_VERSION,
+  STRUCTURED_IMAGE_EVIDENCE_SCHEMA_STATEMENTS,
 } from './Schema';
 
 export interface Migration {
@@ -65,6 +66,31 @@ export const MIGRATIONS: ReadonlyArray<Migration> = [
       'excluded_from_cross_chat',
       'INTEGER NOT NULL DEFAULT 0',
     ),
+  },
+  {
+    version: 5,
+    description: 'first-class image state and structured image evidence',
+    up: (driver) => {
+      addColumnIfMissing(
+        driver,
+        'image_asset',
+        'asset_revision',
+        "TEXT NOT NULL DEFAULT 'asset-v1'",
+      );
+      addColumnIfMissing(
+        driver,
+        'image_asset',
+        'asset_availability',
+        "TEXT NOT NULL DEFAULT 'available'",
+      );
+      addColumnIfMissing(
+        driver,
+        'image_asset',
+        'updated_at',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+      runStatements(driver, STRUCTURED_IMAGE_EVIDENCE_SCHEMA_STATEMENTS);
+    },
   },
 ];
 

@@ -30,6 +30,7 @@ const REQUIRED_TABLES = [
   'image_asset',
   'message_image',
   'visual_evidence',
+  'structured_image_evidence',
   'chunk',
   'durable_fact',
   'durable_fact_source',
@@ -64,10 +65,11 @@ describe('SQL schema contract', () => {
   });
 
   it('cascades every conversation child on delete', () => {
-    // Eight tables reference conversation(id) directly: message, image_asset,
-    // visual_evidence, chunk, durable_fact, embedding, summary, benchmark_run.
+    // Nine tables reference conversation(id) directly: message, image_asset,
+    // visual_evidence, structured image evidence, chunk, durable_fact,
+    // embedding, summary, benchmark_run.
     const directRefs = DDL.match(/REFERENCES conversation\(id\) ON DELETE CASCADE/g) ?? [];
-    expect(directRefs.length).toBe(8);
+    expect(directRefs.length).toBe(9);
     // The two link tables cascade transitively via their parents.
     expect(DDL).toMatch(/message_image[\s\S]*REFERENCES message\(id\) ON DELETE CASCADE/);
     expect(DDL).toMatch(/durable_fact_source[\s\S]*REFERENCES durable_fact\(id\) ON DELETE CASCADE/);
@@ -122,8 +124,9 @@ describe('SQL schema contract', () => {
 
     initializeSchema(driver);
 
-    // v3 and v4 backfill `finish_reason` and cross-chat exclusion after v1/v2 DDL.
-    expect(executed.length).toBe(SCHEMA_STATEMENTS.length + 2);
+    // v3/v4 backfill two columns. v5 idempotently checks/adds three image-state
+    // columns and replays the three structured-evidence CREATE statements.
+    expect(executed.length).toBe(SCHEMA_STATEMENTS.length + 8);
     expect(stampedVersion).toBe(SCHEMA_VERSION);
     expect(inTransaction).toBe(false);
   });

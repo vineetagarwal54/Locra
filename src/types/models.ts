@@ -229,6 +229,8 @@ export interface InferenceRequest {
   generationPlanId?: string;
   generationTaskKind?: import('../inference/GenerationTuning').GenerationTaskKind;
   loopDetectionEligible?: boolean;
+  /** Validated Wave B authority. When present, the queue executes it verbatim. */
+  visionExecutionPlan?: import('../planning/types').VisionExecutionPlan;
 }
 
 export interface InferenceState {
@@ -335,7 +337,10 @@ export interface ImageAssetRow {
   local_path: string;
   available: number;
   content_hash: string | null;
+  asset_revision: string;
+  asset_availability: 'available' | 'missing' | 'deleted' | 'unsupported';
   created_at: number;
+  updated_at: number;
 }
 
 export interface MessageImageRow {

@@ -9,6 +9,8 @@ import type { ResponseMode } from '../inference/ResponseMode';
 import { storage } from '../storage/mmkv';
 import type { GenerationFinishReason } from '../types/models';
 
+import type { TurnArchitectureDiagnostics } from './TurnArchitectureDiagnostics';
+
 export interface DiagnosticsStorage {
   set(key: string, value: string | number | boolean | ArrayBuffer): void;
   getString(key: string): string | undefined;
@@ -26,6 +28,7 @@ export interface DiagnosticTurnRecord {
   objectiveResult: ObjectiveInferenceResultRecord | null;
   /** Detailed candidate previews are development-only. */
   contextDiagnostics: ContextSelectionDiagnostics | null;
+  architectureDiagnostics?: TurnArchitectureDiagnostics | null;
   summary?: ProductionDiagnosticTurnSummary;
 }
 

@@ -37,6 +37,11 @@ import {
   type ImageReferenceResolutionResult,
   type ImageReferenceCandidate,
 } from './ImageReferenceResolver';
+import {
+  recoverIndependentRoutingSources,
+  type IndependentRecoveryCandidate,
+  type IndependentRoutingRecoveryResult,
+} from './IndependentRoutingRecovery';
 import { isDevelopmentInferenceTraceEnabled } from './InferenceTrace';
 import { composeMultiImageEvidence } from './MultiImageEvidenceComposer';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
@@ -172,6 +177,7 @@ export interface ContextSelectionDiagnostics {
   readonly estimatedPromptTokens: number | null;
   readonly finalNativePromptTokens: number | null;
   readonly groundingVerdict: 'supported' | 'unsupported' | null;
+  readonly independentRecovery: IndependentRoutingRecoveryResult;
 }
 
 interface ConversationTurn {
@@ -295,6 +301,10 @@ export interface ContextOrchestrationOptions {
     readonly currentConversationExcluded: boolean;
     readonly eligibleConversationIds: readonly string[];
   };
+  readonly independentRecovery?: {
+    readonly enabled: boolean;
+    readonly candidates: readonly IndependentRecoveryCandidate[];
+  };
 }
 
 export interface HybridContextSources {
@@ -345,6 +355,11 @@ export class ContextOrchestrator {
       initialClassification,
     );
     const classification = referenceResolution.classification;
+    const independentRecovery = recoverIndependentRoutingSources({
+      enabled: options.independentRecovery?.enabled ?? false,
+      classifiedIndependent: classification.isIndependentTextQuestion,
+      candidates: options.independentRecovery?.candidates ?? [],
+    });
     const baseContextNeedProfile = deriveContextNeedProfile(
       classification,
       referenceResolution.imageReferences,
@@ -477,6 +492,7 @@ export class ContextOrchestrator {
     const importantFacts = memorySelection.facts;
     const sameChatRetrieved = memorySelection.sameChatRetrieved;
     const crossChatRetrieved = memorySelection.crossChatRetrieved;
+    const recoveredFacts = recoveryFacts(independentRecovery);
     usedUnits = memorySelection.usedUnits;
     const crossChatItemsSelected = crossChatRetrieved.items.length;
 
@@ -492,6 +508,7 @@ export class ContextOrchestrator {
         recentTurns: selection.turns.map(cloneContextTurn),
         mediaEvidence: mediaEvidence.items.map(cloneMediaEvidence),
         importantFacts: [
+          ...recoveredFacts,
           ...sameChatRetrieved.items,
           ...crossChatRetrieved.items,
           ...importantFacts.items.map(cloneMemoryFact),
@@ -567,6 +584,7 @@ export class ContextOrchestrator {
         estimatedPromptTokens: null,
         finalNativePromptTokens: null,
         groundingVerdict: null,
+        independentRecovery,
       },
     };
   }
@@ -1040,6 +1058,23 @@ function proposedRoutingDiagnostic(
       ? 'phase-3-independent-question'
       : 'classification-requires-context',
   };
+}
+
+function recoveryFacts(
+  recovery: IndependentRoutingRecoveryResult,
+): ContextMemoryFact[] {
+  return recovery.recovered.flatMap((candidate) => {
+    if (candidate.content === null || candidate.content.trim() === '') {
+      return [];
+    }
+    return [{
+      version: 'context-memory-fact-v1' as const,
+      id: `independent-recovery:${candidate.id}`,
+      sourceMessageId: candidate.sourceMessageId,
+      text: candidate.content,
+      createdAt: 0,
+    }];
+  });
 }
 
 export function createCanonicalConversationSnapshot(

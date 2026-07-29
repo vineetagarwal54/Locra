@@ -465,6 +465,73 @@ describe('InferenceQueue false tool-refusal recovery', () => {
 });
 
 describe('InferenceQueue two-stage first image turns', () => {
+  it('executes inspect-original directly even when legacy text heuristics request extraction', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest) => {
+        generatedRequests.push(generateRequest);
+        return Promise.resolve({ response: 'The label says LOC-42.', tokenCount: 5 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit({
+      imagePath: '/tmp/label.jpg',
+      question: 'Read the exact text.',
+      visionExecutionPlan: {
+        strategy: 'inspect-original',
+        imageReferenceIds: ['image-label'],
+        evidenceIds: [],
+      },
+    });
+
+    expect(generatedRequests).toHaveLength(1);
+    expect(generatedRequests[0]?.kind).toBe('answer');
+  });
+
+  it('executes inspect-and-structure even when legacy text heuristics prefer direct vision', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest) => {
+        generatedRequests.push(generateRequest);
+        const response = generatedRequests.length === 1
+          ? validExtractionJson
+          : 'A ceramic mug.';
+        return Promise.resolve({ response, tokenCount: 5 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit({
+      imagePath: '/tmp/mug.jpg',
+      question: 'What is this?',
+      visionExecutionPlan: {
+        strategy: 'inspect-and-structure',
+        imageReferenceIds: ['image-mug'],
+        evidenceIds: [],
+      },
+    });
+
+    expect(generatedRequests).toHaveLength(2);
+    expect(generatedRequests[0]?.kind).toBe('extraction');
+  });
+
+  it('rejects a pixel-required plan with no asset before acquiring inference', async () => {
+    const queue = makeQueue();
+
+    await expect(queue.submit({
+      imagePath: null,
+      question: 'Inspect it.',
+      visionExecutionPlan: {
+        strategy: 'inspect-original',
+        imageReferenceIds: ['missing-image'],
+        evidenceIds: [],
+      },
+    })).rejects.toThrow(/requires an available image/i);
+  });
+
   it('uses one direct vision call for a normal image question', async () => {
     const generatedRequests: EngineGenerateRequest[] = [];
     const engine: InferenceEngineAdapter = {

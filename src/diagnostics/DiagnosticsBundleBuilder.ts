@@ -5,6 +5,10 @@ import type { Conversation, ConversationMessage } from '../types/models';
 
 import type { DiagnosticTurnRecord } from './DiagnosticsTraceStore';
 import type { ProductionDiagnosticTurnSummary } from './DiagnosticsTraceStore';
+import {
+  sanitizeTurnArchitectureDiagnostics,
+  type TurnArchitectureDiagnostics,
+} from './TurnArchitectureDiagnostics';
 
 const TITLE_MAX_CHARS = 60;
 
@@ -51,6 +55,7 @@ export interface DiagnosticsTurnJson {
   readonly refusalRecoveryTriggered: boolean;
   readonly objectiveResult: ObjectiveInferenceResultRecord | null;
   readonly contextDiagnostics: ContextSelectionDiagnostics | null;
+  readonly architectureDiagnostics: TurnArchitectureDiagnostics | null;
   readonly summary: ProductionDiagnosticTurnSummary | null;
 }
 
@@ -182,6 +187,11 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
     refusalRecoveryTriggered: trace?.stages.some((stage) => stage.refusalRetry === true) ?? false,
     objectiveResult: turn.objectiveResult,
     contextDiagnostics: sanitizeContextDiagnostics(turn.contextDiagnostics),
+    architectureDiagnostics:
+      turn.architectureDiagnostics === undefined
+      || turn.architectureDiagnostics === null
+        ? null
+        : sanitizeTurnArchitectureDiagnostics(turn.architectureDiagnostics),
     summary: turn.summary ?? null,
   };
 }

@@ -4,7 +4,8 @@
 //
 // The schema is built and upgraded through ordered, transactional migrations
 // (see Migrations.ts): v1 = core tables, v2 = benchmark_run, v3 = message
-// finish_reason, v4 = conversation cross-chat exclusion. This file owns the DDL;
+// finish_reason, v4 = conversation cross-chat exclusion, v5 = first-class image
+// state and structured image evidence. This file owns the DDL;
 // the migration runner owns the ordering, transactions, and version stamping.
 
 import type { SqliteDriver } from '../types';
@@ -14,7 +15,7 @@ import type { SqliteDriver } from '../types';
  * last entry of MIGRATIONS (Migrations.ts asserts they match). Bump alongside a
  * new migration.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Idempotently adds a column to an existing table. `ALTER TABLE ADD COLUMN` is not
@@ -56,6 +57,29 @@ export const BENCHMARK_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     ON benchmark_run (created_at DESC, id DESC)`,
   `CREATE INDEX IF NOT EXISTS ix_benchmark_kind
     ON benchmark_run (kind, created_at DESC, id DESC)`,
+];
+
+export const STRUCTURED_IMAGE_EVIDENCE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
+  `CREATE TABLE IF NOT EXISTS structured_image_evidence (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    image_asset_id TEXT NOT NULL REFERENCES image_asset(id) ON DELETE CASCADE,
+    source_message_ids_json TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    visible_objects_json TEXT NOT NULL,
+    extracted_text_json TEXT NOT NULL,
+    numeric_values_json TEXT NOT NULL,
+    uncertainty_json TEXT NOT NULL,
+    status TEXT NOT NULL
+      CHECK (status IN ('complete','partial','failed','stale')),
+    source_revision TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS ix_structured_evidence_image
+    ON structured_image_evidence (image_asset_id, created_at DESC, id DESC)`,
+  `CREATE INDEX IF NOT EXISTS ix_structured_evidence_conversation
+    ON structured_image_evidence (conversation_id)`,
 ];
 
 /**
@@ -121,7 +145,11 @@ export const CORE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     local_path TEXT NOT NULL UNIQUE,
     available INTEGER NOT NULL DEFAULT 1,
     content_hash TEXT,
-    created_at INTEGER NOT NULL
+    asset_revision TEXT NOT NULL DEFAULT 'asset-v1',
+    asset_availability TEXT NOT NULL DEFAULT 'available'
+      CHECK (asset_availability IN ('available','missing','deleted','unsupported')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE INDEX IF NOT EXISTS ix_image_asset_conversation
     ON image_asset (conversation_id)`,
@@ -156,6 +184,8 @@ export const CORE_SCHEMA_STATEMENTS: ReadonlyArray<string> = [
     ON visual_evidence (source_message_id)`,
   `CREATE INDEX IF NOT EXISTS ix_evidence_image
     ON visual_evidence (image_asset_id)`,
+
+  ...STRUCTURED_IMAGE_EVIDENCE_SCHEMA_STATEMENTS,
 
   // chunk — searchable fragment of a message; never an independent original.
   `CREATE TABLE IF NOT EXISTS chunk (
@@ -284,6 +314,7 @@ export const SCHEMA_TABLES: ReadonlyArray<string> = [
   'durable_fact_source',
   'durable_fact',
   'chunk',
+  'structured_image_evidence',
   'visual_evidence',
   'message_image',
   'image_asset',
