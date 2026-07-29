@@ -109,6 +109,9 @@ function enforceReferenceSafety(
     return {
       ...plan,
       references: plan.references.filter((reference) => reference.targetType !== 'image'),
+      requiredContextSources: plan.requiredContextSources.filter(
+        (source) => source.sourceType !== 'image',
+      ),
       vision: noVision(),
       generationTaskKind: 'clarification',
       fallback: 'clarify-reference',
@@ -137,6 +140,9 @@ function enforceReferenceSafety(
       && reference.assetAvailability !== 'available',
   );
   if (!unavailableImage) {
+    return plan;
+  }
+  if (plan.vision.strategy === 'compare-evidence') {
     return plan;
   }
   changes.push({ field: 'vision.imageReferenceIds', code: 'unavailable-image-fallback' });

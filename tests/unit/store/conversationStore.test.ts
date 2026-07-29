@@ -26,9 +26,15 @@ import {
   ContextOrchestrator,
   TokenContextBudgetPolicy,
 } from '../../../src/inference/ContextOrchestrator';
+import { buildRuntimeIndependentRecoveryCandidates } from '../../../src/inference/RuntimeIndependentRecoveryCandidates';
+import { VisionExecutor } from '../../../src/inference/VisionExecutor';
+import type { ControlledPlanningImage } from '../../../src/planning/ControlledImageTurnPlanner';
 import { DEFAULT_PLANNER_ACTIVATION } from '../../../src/planning/PlannerActivation';
 import { storage } from '../../../src/storage/mmkv';
-import { createConversationStore } from '../../../src/store/conversationStore';
+import {
+  createConversationStore,
+  RUNTIME_PLANNER_ACTIVATION,
+} from '../../../src/store/conversationStore';
 import type { IHistoryStore, IInferenceQueue } from '../../../src/types/interfaces';
 import type {
   CanonicalConversationContext,
@@ -48,6 +54,109 @@ const ID_SEQUENCE = [
   'request-retry',
 ];
 
+function planningImage(id: string): ControlledPlanningImage {
+  return {
+    entity: {
+      id,
+      conversationId: 'conversation-a',
+      sourceMessageId: `message-${id}`,
+      assetRevision: `${id}-v1`,
+      assetAvailability: 'available',
+      localAssetReference: `/images/${id}.jpg`,
+      evidenceIds: [`evidence-${id}`],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    aliases: [id],
+    evidence: {
+      id: `evidence-${id}`,
+      conversationId: 'conversation-a',
+      imageId: id,
+      sourceMessageIds: [`message-${id}`],
+      summary: `${id} display`,
+      visibleObjects: [{ id: `object-${id}`, label: id, attributes: [], confidence: 1 }],
+      extractedText: [{ text: '$3.99', confidence: 1, objectId: `object-${id}` }],
+      numericValues: [{
+        kind: 'price', value: '$3.99', rawText: '$3.99', confidence: 1,
+        objectId: `object-${id}`,
+      }],
+      uncertainty: { overallConfidence: 1, notes: [] },
+      status: 'complete',
+      sourceRevision: `${id}-v1`,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  };
+}
+
+function conversationWithImage(image: ControlledPlanningImage): Conversation {
+  return {
+    id: 'conversation-a', createdAt: 1, updatedAt: 2,
+    messages: [
+      {
+        id: image.entity.sourceMessageId, role: 'user', text: 'What is visible?',
+        attachments: [{
+          kind: 'image', path: image.entity.localAssetReference,
+          imageAssetId: image.entity.id, available: true,
+        }],
+        status: 'completed', errorMessage: null, createdAt: 1,
+      },
+      {
+        id: `assistant-${image.entity.id}`, role: 'assistant', text: 'A fruit display.',
+        attachments: [], status: 'completed', errorMessage: null, createdAt: 2,
+      },
+    ],
+    status: 'completed', errorMessage: null, metrics: null,
+    flagged: false, flagNote: null, contextMemory: null,
+  };
+}
+
+function conversationWithImages(images: readonly ControlledPlanningImage[]): Conversation {
+  return {
+    id: 'conversation-a',
+    createdAt: 1,
+    updatedAt: images.length * 2,
+    messages: images.flatMap((image, index) => [
+      {
+        id: image.entity.sourceMessageId,
+        role: 'user' as const,
+        text: `What is visible in image ${index + 1}?`,
+        attachments: [{
+          kind: 'image' as const,
+          path: image.entity.localAssetReference,
+          imageAssetId: image.entity.id,
+          available: image.entity.assetAvailability === 'available',
+        }],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: index * 2 + 1,
+      },
+      {
+        id: `assistant-${image.entity.id}`,
+        role: 'assistant' as const,
+        text: image.evidence?.summary ?? 'Image unavailable.',
+        attachments: [],
+        status: 'completed' as const,
+        errorMessage: null,
+        createdAt: index * 2 + 2,
+      },
+    ]),
+    status: 'completed',
+    errorMessage: null,
+    metrics: null,
+    flagged: false,
+    flagNote: null,
+    contextMemory: null,
+  };
+}
+
+function visionExecutorFor(images: readonly ControlledPlanningImage[]): VisionExecutor {
+  return new VisionExecutor({
+    getImage: (imageId) => images.find((image) => image.entity.id === imageId)?.entity ?? null,
+    getEvidence: (imageId) => images.find((image) => image.entity.id === imageId)?.evidence ?? null,
+  });
+}
+
 class FakeInferenceQueue implements IInferenceQueue {
   readonly submitted: Array<{
     requestId?: string;
@@ -60,6 +169,7 @@ class FakeInferenceQueue implements IInferenceQueue {
     hardSafetyLimitTokens?: number;
     generationPlanId?: string;
     generationTaskKind?: string;
+    visionExecutionPlan?: import('../../../src/planning/types').VisionExecutionPlan;
   }> = [];
   readonly submittedContexts: Array<CanonicalConversationContext | undefined> = [];
 
@@ -175,6 +285,195 @@ function makeStore() {
 }
 
 describe('conversationStore', () => {
+  it('uses the temporary controlled activation for the real development runtime store', () => {
+    expect(RUNTIME_PLANNER_ACTIVATION).toEqual(expect.objectContaining({
+      configuredMode: 'controlled',
+      shadowDiagnosticsEnabled: true,
+      independentRecoveryEnabled: true,
+      controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
+      rollbackToLegacy: false,
+      legacyPlanOwner: DEFAULT_PLANNER_ACTIVATION.legacyPlanOwner,
+      newPlanOwner: DEFAULT_PLANNER_ACTIVATION.newPlanOwner,
+    }));
+  });
+
+  it('wires exact rent recovery candidates into the legacy hard-skip recovery path', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    history.save({
+      id: 'conversation-a', createdAt: 1, updatedAt: 2,
+      messages: [
+        {
+          id: 'user-rent', role: 'user', text: 'My apartment rent is 1900 dollars.',
+          attachments: [], status: 'completed', errorMessage: null, createdAt: 1,
+        },
+        {
+          id: 'assistant-rent', role: 'assistant', text: 'Understood.',
+          attachments: [], status: 'completed', errorMessage: null, createdAt: 2,
+        },
+      ],
+      status: 'completed', errorMessage: null, metrics: null,
+      flagged: false, flagNote: null, contextMemory: null,
+    });
+    const ids = ['request-rent', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        shadowDiagnosticsEnabled: true,
+        independentRecoveryEnabled: true,
+      },
+      listIndependentRecoveryCandidates: buildRuntimeIndependentRecoveryCandidates,
+    });
+
+    await store.submit('conversation-a', {
+      question: 'What was the rent of my apartment?', imagePath: null,
+    });
+
+    expect(queue.submittedContexts[0]?.importantFacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceMessageId: 'user-rent', text: 'My apartment rent is 1900 dollars.',
+      }),
+    ]));
+  });
+
+  it('executes a controlled image follow-up without consulting legacy semantics', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const controlledImage = planningImage('fruit');
+    history.save(conversationWithImage(controlledImage));
+    const orchestrate = jest.fn(() => {
+      throw new Error('legacy semantic routing must not run');
+    });
+    const ids = ['request-follow-up', 'user-follow-up', 'assistant-follow-up'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      contextOrchestrator: { orchestrate } as unknown as ContextOrchestrator,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled',
+        controlledScenarioClasses: ['image-follow-up'],
+      },
+      listControlledPlanningImages: () => [controlledImage],
+      visionExecutor: visionExecutorFor([controlledImage]),
+    });
+
+    await store.submit('conversation-a', {
+      question: 'What are their prices?', imagePath: null,
+    });
+
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(queue.submitted[0]?.visionExecutionPlan).toEqual({
+      strategy: 'reuse-evidence', imageReferenceIds: ['fruit'], evidenceIds: [],
+    });
+    expect(queue.submittedContexts[0]?.mediaEvidence[0]).toEqual(expect.objectContaining({
+      sourceMessageId: 'message-fruit',
+    }));
+    queue.emit(makeInferenceState('completed', 'The visible price is $3.99.'));
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      architectureDiagnostics: expect.objectContaining({
+        planOwner: 'turn-planner:v1',
+        scenarioClass: 'image-follow-up',
+        legacySemanticDecisionCount: 0,
+        vision: expect.objectContaining({
+          strategy: 'reuse-evidence', imageIds: ['fruit'], evidenceAction: 'reused',
+          storedEvidenceUsed: true,
+        }),
+      }),
+    }));
+    append.mockRestore();
+  });
+
+  it('constructs and executes a two-image comparison as one controlled turn', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const images = [planningImage('fruit'), planningImage('mattress')];
+    history.save(conversationWithImages(images));
+    const orchestrate = jest.fn(() => {
+      throw new Error('legacy semantic routing must not run');
+    });
+    const ids = ['request-comparison', 'user-comparison', 'assistant-comparison'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      contextOrchestrator: { orchestrate } as unknown as ContextOrchestrator,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled',
+        controlledScenarioClasses: ['image-comparison'],
+      },
+      listControlledPlanningImages: () => images,
+      visionExecutor: visionExecutorFor(images),
+    });
+
+    await store.submit('conversation-a', {
+      question: 'Compare both images.', imagePath: null,
+    });
+
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(queue.submitted[0]?.visionExecutionPlan).toEqual({
+      strategy: 'compare-evidence',
+      imageReferenceIds: ['fruit', 'mattress'],
+      evidenceIds: [],
+    });
+    expect(queue.submittedContexts[0]?.mediaEvidence.map((evidence) => ({
+      imageAssetId: evidence.sourcePath,
+      sourceMessageId: evidence.sourceMessageId,
+    }))).toEqual([
+      { imageAssetId: 'fruit', sourceMessageId: 'message-fruit' },
+      { imageAssetId: 'mattress', sourceMessageId: 'message-mattress' },
+    ]);
+    queue.emit(makeInferenceState('completed', 'The images contain different products.'));
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      architectureDiagnostics: expect.objectContaining({
+        scenarioClass: 'image-comparison',
+        legacySemanticDecisionCount: 0,
+        vision: expect.objectContaining({
+          strategy: 'compare-evidence',
+          imageIds: ['fruit', 'mattress'],
+          storedEvidenceUsed: true,
+        }),
+      }),
+    }));
+    append.mockRestore();
+  });
+
+  it('allows the next controlled request after cancellation releases ownership', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const controlledImage = planningImage('fruit');
+    history.save(conversationWithImage(controlledImage));
+    const ids = [
+      'request-1', 'user-1', 'assistant-1',
+      'request-2', 'user-2', 'assistant-2',
+    ];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled', controlledScenarioClasses: ['image-follow-up'],
+      },
+      listControlledPlanningImages: () => [controlledImage],
+      visionExecutor: visionExecutorFor([controlledImage]),
+    });
+
+    await store.submit('conversation-a', { question: 'What is its price?', imagePath: null });
+    queue.emit(makeInferenceState('cancelled'));
+    await expect(store.submit('conversation-a', {
+      question: 'What is its color?', imagePath: null,
+    })).resolves.toEqual(expect.objectContaining({ conversationId: 'conversation-a' }));
+    expect(queue.submitted).toHaveLength(2);
+  });
+
   it.each([
     ['independent question', 'What is the capital of France?', []],
     [
@@ -695,7 +994,19 @@ describe('conversationStore', () => {
       architectureDiagnostics: expect.objectContaining({
         authorityMode: 'shadow',
         planOwner: 'legacy-router:v1',
+        scenarioClass: 'text-answer',
+        executedPlanId: expect.stringContaining('legacy:'),
+        executedPlanVersion: 'legacy-routing-v1',
+        legacySemanticDecisionCount: 1,
+        vision: expect.objectContaining({
+          strategy: 'none',
+          imageIds: [],
+          missingImageIds: [],
+          evidenceAction: 'not-produced',
+          evidenceStatus: 'not-applicable',
+        }),
         shadowPlan: expect.any(Object),
+        independentRecovery: expect.any(Object),
         constrainedPlanner: expect.objectContaining({ invoked: false }),
       }),
     }));

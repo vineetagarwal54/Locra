@@ -5,6 +5,7 @@ import {
   type AppDiagnosticsInfo,
 } from '../../../src/diagnostics/DiagnosticsBundleBuilder';
 import type { DiagnosticTurnRecord } from '../../../src/diagnostics/DiagnosticsTraceStore';
+import type { TurnArchitectureDiagnostics } from '../../../src/diagnostics/TurnArchitectureDiagnostics';
 import { ContextOrchestrator } from '../../../src/inference/ContextOrchestrator';
 import type { Conversation } from '../../../src/types/models';
 
@@ -90,6 +91,45 @@ const APP_INFO: AppDiagnosticsInfo = {
   activeResourceOperation: null,
 };
 
+const ARCHITECTURE_DIAGNOSTICS: TurnArchitectureDiagnostics = {
+  authorityMode: 'controlled',
+  planOwner: 'turn-planner:v1',
+  scenarioClass: 'image-comparison',
+  executedPlanId: 'turn-image-1',
+  executedPlanVersion: 'turn-plan-mvp-v1',
+  legacySemanticDecisionCount: 0,
+  executedStages: [{ stage: 'vision-execution', planId: 'turn-image-1' }],
+  executionResult: 'completed',
+  vision: {
+    strategy: 'compare-evidence',
+    imageIds: ['image-a', 'image-b'],
+    missingImageIds: ['image-b'],
+    evidenceAction: 'reused',
+    evidenceStatus: 'partial',
+    pixelsUsed: false,
+    storedEvidenceUsed: true,
+  },
+  shadowPlan: null,
+  planDelta: [],
+  independentRecovery: {
+    enabled: true,
+    classifiedIndependent: false,
+    considered: 2,
+    recoveredCandidateIds: ['image-a'],
+    reasonCodes: ['active-comparison-target'],
+  },
+  constrainedPlanner: {
+    invoked: false,
+    wouldInvoke: false,
+    gateReason: 'not-ambiguous',
+    queueWaitMs: 0,
+    executionMs: 0,
+    result: 'not-invoked',
+    confidence: null,
+    fallback: 'execute',
+  },
+};
+
 describe('DiagnosticsBundleBuilder', () => {
   it('builds a readable markdown transcript with title, messages, and timestamps', () => {
     const markdown = buildDiagnosticsMarkdown([makeConversation()]);
@@ -144,6 +184,33 @@ describe('DiagnosticsBundleBuilder', () => {
       imageReferenceAmbiguous: false,
       crossChatActive: false,
       groundingVerdict: null,
+    }));
+  });
+
+  it('exports planner, vision, recovery, and legacy-decision diagnostics', () => {
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [],
+      turns: [makeTurn({ architectureDiagnostics: ARCHITECTURE_DIAGNOSTICS })],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.turns[0]?.architectureDiagnostics).toEqual(expect.objectContaining({
+      authorityMode: 'controlled',
+      planOwner: 'turn-planner:v1',
+      scenarioClass: 'image-comparison',
+      executedPlanId: 'turn-image-1',
+      executedPlanVersion: 'turn-plan-mvp-v1',
+      legacySemanticDecisionCount: 0,
+      vision: expect.objectContaining({
+        strategy: 'compare-evidence',
+        imageIds: ['image-a', 'image-b'],
+        missingImageIds: ['image-b'],
+        evidenceAction: 'reused',
+        evidenceStatus: 'partial',
+      }),
+      independentRecovery: expect.objectContaining({
+        recoveredCandidateIds: ['image-a'],
+      }),
     }));
   });
 

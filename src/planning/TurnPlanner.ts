@@ -82,6 +82,7 @@ export interface PlanningReferenceCandidate {
   readonly match: PlanningReferenceMatch;
   readonly materiallyPlausible: boolean;
   readonly sourceMessageIds: readonly string[];
+  readonly assetAvailability?: import('./types').AssetAvailability;
 }
 
 export interface ExplicitMemoryCandidate {
@@ -208,8 +209,10 @@ function resolveReferences(input: TurnPlanningInput): ResolvedReference[] {
       sourceMessageIds: [...candidate.sourceMessageIds],
       assetAvailability:
         candidate.targetType === 'image'
-          && input.applicationState.availableImageIds.includes(candidate.id)
-          ? 'available'
+          ? candidate.assetAvailability
+            ?? (input.applicationState.availableImageIds.includes(candidate.id)
+              ? 'available'
+              : undefined)
           : undefined,
     });
   }

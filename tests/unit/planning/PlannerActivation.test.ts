@@ -1,5 +1,6 @@
 import {
   DEFAULT_PLANNER_ACTIVATION,
+  plannerActivationForRuntime,
   resolvePlannerActivation,
 } from '../../../src/planning/PlannerActivation';
 
@@ -63,5 +64,20 @@ describe('PlannerActivation', () => {
     expect(result.semanticAuthority).toBe('legacy');
     expect(result.wholeTurnOwned).toBe(true);
     expect(result.useLegacySemantics).toBe(true);
+  });
+
+  it('enables only the temporary Wave A/B validation classes in development', () => {
+    expect(plannerActivationForRuntime(true)).toEqual({
+      ...DEFAULT_PLANNER_ACTIVATION,
+      configuredMode: 'controlled',
+      shadowDiagnosticsEnabled: true,
+      independentRecoveryEnabled: true,
+      controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
+      rollbackToLegacy: false,
+    });
+  });
+
+  it('returns the unchanged default activation in release builds', () => {
+    expect(plannerActivationForRuntime(false)).toBe(DEFAULT_PLANNER_ACTIVATION);
   });
 });

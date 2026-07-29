@@ -117,6 +117,47 @@ export function createGenerationPlan(
   );
 }
 
+export function createGenerationPlanFromTurnPlan(
+  mode: ResponseMode,
+  taskKind: import('../planning/types').GenerationTaskKind,
+): GenerationPlan {
+  const config = getResponseModeConfig(mode);
+  if (taskKind === 'comparison') {
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      'turn-plan-comparison-v1',
+      'detailed-prose',
+      config.generationLimit,
+    );
+  }
+  if (taskKind === 'extraction') {
+    return plan(
+      Math.min(config.answerTargetTokens, mode === 'High' ? 320 : mode === 'Medium' ? 256 : 160),
+      config.generationLimit,
+      'turn-plan-visual-extraction-v1',
+      'visual-extraction',
+      config.generationLimit,
+    );
+  }
+  if (taskKind === 'clarification') {
+    return plan(
+      Math.min(config.answerTargetTokens, 96),
+      Math.min(config.generationLimit, 224),
+      'turn-plan-clarification-v1',
+      'concise-prose',
+      config.generationLimit,
+    );
+  }
+  return plan(
+    Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128),
+    config.generationLimit,
+    'turn-plan-image-answer-v1',
+    'visual-description',
+    config.generationLimit,
+  );
+}
+
 export function resolveGenerationTarget(
   mode: ResponseMode,
   classification: RequestClassification,

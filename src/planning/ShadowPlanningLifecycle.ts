@@ -45,6 +45,11 @@ export function runShadowPlanningLifecycle(
     activation,
     planning,
     recovery: recoveryFor(input.orchestration),
+    scenarioClass,
+    missingImageIds: missingImageIdsFor(input.orchestration),
+    // The current runtime invokes this lifecycle after the legacy orchestrator.
+    // Keep the diagnostic truthful until the controlled executor owns that path.
+    legacySemanticDecisionCount: 1,
   });
 }
 
@@ -126,6 +131,16 @@ function recoveryFor(
     considered: 0,
     recovered: [],
   };
+}
+
+function missingImageIdsFor(
+  orchestration: ContextOrchestrationResult,
+): readonly string[] {
+  return orchestration.imageSelections
+    .filter((selection) => selection.decision === 'original-unavailable')
+    .map((selection) => selection.imageAssetId)
+    .filter((imageId): imageId is string => imageId !== null)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function scenarioClassFor(input: ShadowPlanningLifecycleInput): string {

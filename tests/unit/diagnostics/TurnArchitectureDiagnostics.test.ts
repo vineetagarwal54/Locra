@@ -2,6 +2,7 @@ import {
   createTurnArchitectureDiagnostics,
   sanitizeTurnArchitectureDiagnostics,
   serializeTurnArchitectureDiagnostics,
+  withTerminalVisionEvidenceDiagnostic,
 } from '../../../src/diagnostics/TurnArchitectureDiagnostics';
 import {
   DEFAULT_PLANNER_ACTIVATION,
@@ -46,6 +47,9 @@ describe('TurnArchitectureDiagnostics', () => {
     const diagnostics = createTurnArchitectureDiagnostics({
       activation,
       planning,
+      scenarioClass: 'text-answer',
+      missingImageIds: [],
+      legacySemanticDecisionCount: 1,
       recovery: {
         enabled: true,
         classifiedIndependent: true,
@@ -63,8 +67,17 @@ describe('TurnArchitectureDiagnostics', () => {
     expect(diagnostics).toEqual(expect.objectContaining({
       authorityMode: 'shadow',
       planOwner: 'legacy-router:v1',
+      scenarioClass: 'text-answer',
       executedPlanId: 'legacy:turn-1',
       executedPlanVersion: 'legacy-routing-v1',
+      legacySemanticDecisionCount: 1,
+      vision: expect.objectContaining({
+        strategy: 'none',
+        imageIds: [],
+        missingImageIds: [],
+        evidenceAction: 'not-produced',
+        evidenceStatus: 'not-applicable',
+      }),
       shadowPlan: expect.objectContaining({ turnId: 'turn-1' }),
       constrainedPlanner: expect.objectContaining({
         invoked: false,
@@ -80,8 +93,21 @@ describe('TurnArchitectureDiagnostics', () => {
     const dirty = {
       authorityMode: 'shadow' as const,
       planOwner: 'legacy-router:v1',
+      scenarioClass: 'new-image',
       executedPlanId: 'legacy:turn-1',
       executedPlanVersion: 'legacy-routing-v1',
+      legacySemanticDecisionCount: 1,
+      executedStages: [],
+      executionResult: 'planned' as const,
+      vision: {
+        strategy: 'inspect-and-structure' as const,
+        imageIds: ['C:\\private\\photo.jpg'],
+        missingImageIds: ['missing-image'],
+        evidenceAction: 'freshly-structured' as const,
+        evidenceStatus: 'pending' as const,
+        pixelsUsed: true,
+        storedEvidenceUsed: false,
+      },
       shadowPlan: {
         turnId: 'turn-1',
         planVersion: 'turn-plan-mvp-v1',
@@ -127,5 +153,46 @@ describe('TurnArchitectureDiagnostics', () => {
     expect(serialized).not.toContain('secret rent value');
     expect(serialized).not.toContain('C:\\');
     expect(JSON.parse(serialized)).toEqual(sanitized);
+  });
+
+  it('records the terminal result of structured evidence extraction', () => {
+    const diagnostics = createTurnArchitectureDiagnostics({
+      activation: resolvePlannerActivation({
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled',
+        controlledScenarioClasses: ['new-image'],
+      }, 'new-image'),
+      planning: new TurnPlanner().plan({
+        turnId: 'turn-image',
+        scenarioClass: 'new-image',
+        activation: {
+          ...DEFAULT_PLANNER_ACTIVATION,
+          configuredMode: 'controlled',
+          controlledScenarioClasses: ['new-image'],
+        },
+        applicationState: {
+          action: 'answer',
+          attachedImageIds: ['image-1'],
+          availableImageIds: ['image-1'],
+        },
+        ledgerState: {
+          activeTopicIds: [], activeEntities: [], activeComparisonTargetIds: [], activeImageIds: [],
+        },
+        signals: {
+          referenceCandidates: [], explicitMemoryCandidates: [], lexicalRetrievalCandidates: [],
+          activeTopicMatches: [], activeEntityMatches: [],
+        },
+      }),
+      scenarioClass: 'new-image',
+      recovery: { enabled: false, classifiedIndependent: false, considered: 0, recovered: [] },
+    });
+
+    expect(withTerminalVisionEvidenceDiagnostic(diagnostics, {
+      hiddenEvidencePresent: true,
+      extractionFailurePresent: false,
+    }).vision).toEqual(expect.objectContaining({
+      evidenceAction: 'freshly-structured',
+      evidenceStatus: 'complete',
+    }));
   });
 });

@@ -56,4 +56,21 @@ describe('ImageEntityRepository', () => {
     expect(deleted.sourceMessageId).toBe('message-1');
     expect(deleted.localAssetReference).toBe('/images/one.jpg');
   });
+
+  it('lists conversation images in stable source order without merging identities', () => {
+    new MessageRepository(database.driver).appendUserMessage({
+      id: 'message-2', conversationId: 'conversation-1', text: 'second image', createdAt: 20,
+    });
+    repository.create({
+      id: 'image-2', conversationId: 'conversation-1', sourceMessageId: 'message-2',
+      localAssetReference: '/images/two.jpg', assetRevision: 'image-2-v1', createdAt: 20,
+    });
+    repository.create({
+      id: 'image-1', conversationId: 'conversation-1', sourceMessageId: 'message-1',
+      localAssetReference: '/images/one.jpg', assetRevision: 'image-1-v1', createdAt: 10,
+    });
+
+    expect(repository.listForConversation('conversation-1').map((image) => image.id))
+      .toEqual(['image-1', 'image-2']);
+  });
 });

@@ -137,6 +137,27 @@ describe('VisionExecutor', () => {
     expect(result.missingImageIds).toEqual(['image-b']);
   });
 
+  it('reports a missing comparison asset even when stale retained evidence exists', () => {
+    const source = sources();
+    const originalGetImage = source.getImage;
+    source.getImage = (imageId) => imageId === 'image-b'
+      ? {
+          ...originalGetImage(imageId),
+          id: imageId,
+          assetAvailability: 'missing',
+        } as NonNullable<ReturnType<typeof originalGetImage>>
+      : originalGetImage(imageId);
+
+    const result = new VisionExecutor(source).execute(
+      plan('compare-evidence', ['image-a', 'image-b']),
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe('partial');
+    expect(result.imageInputs.map((input) => input.imageId)).toEqual(['image-a']);
+    expect(result.missingImageIds).toEqual(['image-b']);
+  });
+
   it('honors cancellation before resolving any assets', () => {
     const source = sources();
     const controller = new AbortController();

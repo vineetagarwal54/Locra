@@ -31,6 +31,31 @@ export const DEFAULT_PLANNER_ACTIVATION: PlannerActivationConfig = {
   newPlanOwner: 'turn-planner:v1',
 };
 
+/**
+ * Temporary physical-validation activation. This is selected only by the
+ * runtime store in development builds; release builds retain the default object
+ * unchanged and expose no user-facing control for it.
+ */
+export function plannerActivationForRuntime(
+  isDevelopment: boolean = __DEV__,
+): PlannerActivationConfig {
+  if (!isDevelopment) {
+    return DEFAULT_PLANNER_ACTIVATION;
+  }
+  return {
+    ...DEFAULT_PLANNER_ACTIVATION,
+    configuredMode: 'controlled',
+    shadowDiagnosticsEnabled: true,
+    independentRecoveryEnabled: true,
+    controlledScenarioClasses: [
+      'new-image',
+      'image-follow-up',
+      'image-comparison',
+    ],
+    rollbackToLegacy: false,
+  };
+}
+
 export function resolvePlannerActivation(
   config: PlannerActivationConfig,
   scenarioClass: string,

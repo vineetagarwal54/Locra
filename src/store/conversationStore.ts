@@ -3,7 +3,12 @@ import {
   type DiagnosticRequestKind,
   type ProductionDiagnosticTurnSummary,
 } from '../diagnostics/DiagnosticsTraceStore';
-import type { TurnArchitectureDiagnostics } from '../diagnostics/TurnArchitectureDiagnostics';
+import {
+  createTurnArchitectureDiagnostics,
+  withTerminalVisionEvidenceDiagnostic,
+  withControlledExecutionDiagnostic,
+  type TurnArchitectureDiagnostics,
+} from '../diagnostics/TurnArchitectureDiagnostics';
 import {
   CompactionService,
   createRegisteredEngineCompactionGenerator,
@@ -21,9 +26,16 @@ import {
   type ImageSelectionResult,
 } from '../inference/ContextOrchestrator';
 import {
+  assembleControlledImageContext,
+} from '../inference/ControlledImageContextAssembler';
+import {
+  ControlledImageTurnExecutor,
+} from '../inference/ControlledImageTurnExecutor';
+import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   createGenerationPlan,
+  createGenerationPlanFromTurnPlan,
   samplingProfileForRequestKind,
   type GenerationPlan,
 } from '../inference/GenerationTuning';
@@ -31,7 +43,10 @@ import {
   assessGroundingFromSources,
   createGroundingSourceSet,
 } from '../inference/GroundingAssessment';
-import type { IndependentRecoveryCandidate } from '../inference/IndependentRoutingRecovery';
+import {
+  recoverIndependentRoutingSources,
+  type IndependentRecoveryCandidate,
+} from '../inference/IndependentRoutingRecovery';
 import {
   applyImageSelectionToInferenceRequest,
   inferenceQueue,
@@ -45,13 +60,25 @@ import {
   type ResponseMode,
   toStoredMode,
 } from '../inference/ResponseMode';
+import {
+  buildRuntimeIndependentRecoveryCandidates,
+} from '../inference/RuntimeIndependentRecoveryCandidates';
+import { VisionExecutor } from '../inference/VisionExecutor';
 import { durableImageStorage } from '../media/DurableImageStorage';
 import {
+  planControlledImageTurn,
+  type ControlledImageTurnPlanningResult,
+  type ControlledPlanningImage,
+} from '../planning/ControlledImageTurnPlanner';
+import {
   DEFAULT_PLANNER_ACTIVATION,
+  plannerActivationForRuntime,
+  resolvePlannerActivation,
   type PlannerActivationConfig,
 } from '../planning/PlannerActivation';
 import { runShadowPlanningLifecycle } from '../planning/ShadowPlanningLifecycle';
 import { TurnPlanner } from '../planning/TurnPlanner';
+import type { TurnPlan } from '../planning/types';
 import { ChunkingService } from '../retrieval/ChunkingService';
 import type { EmbeddingService } from '../retrieval/EmbeddingService';
 import { HybridRetriever } from '../retrieval/HybridRetriever';
@@ -124,7 +151,13 @@ export interface ConversationStoreDependencies {
   turnPlanner?: TurnPlanner;
   listIndependentRecoveryCandidates?: (
     snapshot: import('../types/models').CanonicalConversationSnapshot,
+    options?: import('../inference/RuntimeIndependentRecoveryCandidates')
+      .RuntimeRecoveryCandidateOptions,
   ) => readonly IndependentRecoveryCandidate[];
+  listControlledPlanningImages?: (
+    conversationId: string,
+  ) => readonly ControlledPlanningImage[];
+  visionExecutor?: VisionExecutor;
 }
 
 interface ActiveGeneration {
@@ -168,6 +201,7 @@ export class ConversationStore implements IConversationStore {
     Set<(state: ConversationRuntimeState | null) => void>
   >();
   private activeGeneration: ActiveGeneration | null = null;
+  private readonly activeComparisonImageIds = new Map<string, readonly string[]>();
 
   constructor(private readonly dependencies: Required<ConversationStoreDependencies>) {
     this.dependencies.inferenceQueue.subscribe((state) => this.handleInferenceState(state));
@@ -257,10 +291,62 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointAt: 0,
       seedText: '',
     };
+    let planningConversation = updatedConversation;
+    let planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
+    const controlledPreflight =
+      this.dependencies.plannerActivation.configuredMode === 'controlled'
+      && !this.dependencies.plannerActivation.rollbackToLegacy
+      && (durableRequest.imagePath !== null || planningImages.length > 0);
+    if (controlledPreflight) {
+      // Persist the canonical user/image identity before controlled planning so
+      // image candidates use stable repository IDs rather than local paths.
+      this.dependencies.historyStore.save(updatedConversation);
+      planningConversation =
+        this.dependencies.historyStore.get(resolvedConversationId) ?? updatedConversation;
+      planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
+    }
     const snapshot = createCanonicalConversationSnapshot(
-      updatedConversation,
+      planningConversation,
       originatingUserMessageId,
     );
+    const recoveryCandidates = this.dependencies.listIndependentRecoveryCandidates(
+      snapshot,
+      {
+        imageEntities: planningImages.map((image) => image.entity),
+        entityAliases: planningImages.map((image) => ({
+          id: image.entity.id,
+          sourceMessageId: image.entity.sourceMessageId,
+          aliases: image.aliases,
+        })),
+        activeComparisonImageIds:
+          this.activeComparisonImageIds.get(resolvedConversationId) ?? [],
+      },
+    );
+    const controlledPlanning = controlledPreflight
+      ? planControlledImageTurn({
+          snapshot,
+          activation: this.dependencies.plannerActivation,
+          images: planningImages,
+          activeComparisonImageIds:
+            this.activeComparisonImageIds.get(resolvedConversationId) ?? [],
+          planner: this.dependencies.turnPlanner,
+        })
+      : null;
+    if (
+      controlledPlanning !== null
+      && controlledPlanning.planning.plan.planOwner
+        === this.dependencies.plannerActivation.newPlanOwner
+    ) {
+      return this.startControlledImageTurn({
+        activeGeneration,
+        conversation: planningConversation,
+        request: durableRequest,
+        requestId,
+        planning: controlledPlanning,
+        recoveryCandidates,
+        draftConversationId: conversationId,
+      });
+    }
     const crossChat = this.dependencies.getCrossChatOptions(resolvedConversationId);
     const queryVector = await this.resolveEligibleQueryVector(
       snapshot,
@@ -276,7 +362,7 @@ export class ConversationStore implements IConversationStore {
         crossChat,
         independentRecovery: {
           enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
-          candidates: this.dependencies.listIndependentRecoveryCandidates(snapshot),
+          candidates: recoveryCandidates,
         },
       },
     );
@@ -334,6 +420,122 @@ export class ConversationStore implements IConversationStore {
       conversationId: activeGeneration.conversationId,
       originatingUserMessageId: activeGeneration.originatingUserMessageId,
       assistantMessageId: activeGeneration.assistantMessageId,
+    };
+  }
+
+  private async startControlledImageTurn(input: {
+    readonly activeGeneration: ActiveGeneration;
+    readonly conversation: Conversation;
+    readonly request: { readonly question: string; readonly imagePath: string | null };
+    readonly requestId: string;
+    readonly planning: ControlledImageTurnPlanningResult;
+    readonly recoveryCandidates: readonly IndependentRecoveryCandidate[];
+    readonly draftConversationId: string | 'new';
+  }): Promise<SubmitResult> {
+    const plan = input.planning.planning.plan;
+    const activation = resolvePlannerActivation(
+      this.dependencies.plannerActivation,
+      input.planning.scenarioClass,
+    );
+    const recovery = recoverIndependentRoutingSources({
+      enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+      classifiedIndependent: false,
+      candidates: input.recoveryCandidates,
+    });
+    input.activeGeneration.architectureDiagnostics = createTurnArchitectureDiagnostics({
+      activation,
+      planning: input.planning.planning,
+      recovery: {
+        ...recovery,
+        considered: input.recoveryCandidates.length,
+        recovered: input.recoveryCandidates,
+      },
+      scenarioClass: input.planning.scenarioClass,
+      legacySemanticDecisionCount: 0,
+    });
+
+    const selectedImages = plan.vision.imageReferenceIds.map((imageId) =>
+      input.planning.orderedImages.find((image) => image.entity.id === imageId),
+    ).filter((image): image is ControlledPlanningImage => image !== undefined);
+    const context = assembleControlledImageContext(
+      plan,
+      selectedImages.map((image) => ({
+        image: image.entity,
+        evidence: image.evidence ?? null,
+      })),
+    );
+    const generationPlan = createGenerationPlanFromTurnPlan(
+      input.activeGeneration.responseMode,
+      plan.generationTaskKind,
+    );
+    const controller = new AbortController();
+    let executedVision: ReturnType<VisionExecutor['execute']> | null = null;
+    const executor = new ControlledImageTurnExecutor({
+      resolveReferences: (authoritativePlan) => authoritativePlan.references,
+      selectImages: () => selectedImages.map((image) => image.entity),
+      selectContextSources: (authoritativePlan) => authoritativePlan.requiredContextSources,
+      assembleContext: () => context,
+      executeVision: (visionPlan, _images, signal) => {
+        executedVision = this.dependencies.visionExecutor.execute(visionPlan, signal);
+        return executedVision;
+      },
+      projectGeneration: () => generationPlan,
+      executeInference: async (authoritativePlan) => {
+        if (executedVision === null) {
+          throw new Error('Controlled vision execution result is unavailable.');
+        }
+        const imagePath = executedVision.imageInputs.find(
+          (image) => image.localAssetReference !== null,
+        )?.localAssetReference ?? null;
+        const inferenceRequest = this.createInferenceRequest(
+          input.activeGeneration,
+          {
+            question: controlledQuestion(authoritativePlan, input.request.question),
+            imagePath,
+          },
+          input.requestId,
+        );
+        inferenceRequest.visionExecutionPlan = authoritativePlan.vision;
+        inferenceRequest.softTargetTokens = generationPlan.softTargetTokens;
+        inferenceRequest.hardSafetyLimitTokens = generationPlan.hardSafetyLimitTokens;
+        inferenceRequest.generationPlanId = generationPlan.diagnosticsId;
+        inferenceRequest.generationTaskKind = generationPlan.taskKind;
+        inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
+        input.activeGeneration.generationPlan = generationPlan;
+        input.activeGeneration.softTargetTokens = generationPlan.softTargetTokens;
+        input.activeGeneration.selectedContext = context;
+        input.activeGeneration.requestKind = imagePath === null ? 'text' : 'image';
+        input.activeGeneration.imageSupplied = imagePath !== null;
+
+        this.dependencies.historyStore.save(input.conversation);
+        this.activeGeneration = input.activeGeneration;
+        this.setRuntimeState({
+          conversationId: input.activeGeneration.conversationId,
+          originatingUserMessageId: input.activeGeneration.originatingUserMessageId,
+          assistantMessageId: input.activeGeneration.assistantMessageId,
+          streamingText: '',
+          isOwnerOfActiveInference: true,
+        });
+        this.startQueueSubmission(input.activeGeneration, inferenceRequest, context);
+        return { answer: '' };
+      },
+    });
+    const execution = await executor.execute(plan, controller.signal);
+    input.activeGeneration.architectureDiagnostics = withControlledExecutionDiagnostic(
+      input.activeGeneration.architectureDiagnostics,
+      execution.audit,
+    );
+    if (input.planning.scenarioClass === 'image-comparison') {
+      this.activeComparisonImageIds.set(
+        input.activeGeneration.conversationId,
+        [...plan.vision.imageReferenceIds],
+      );
+    }
+    this.clearDraft(input.draftConversationId);
+    return {
+      conversationId: input.activeGeneration.conversationId,
+      originatingUserMessageId: input.activeGeneration.originatingUserMessageId,
+      assistantMessageId: input.activeGeneration.assistantMessageId,
     };
   }
 
@@ -519,7 +721,23 @@ export class ConversationStore implements IConversationStore {
         crossChat,
         independentRecovery: {
           enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
-          candidates: this.dependencies.listIndependentRecoveryCandidates(snapshot),
+          candidates: this.dependencies.listIndependentRecoveryCandidates(
+            snapshot,
+            {
+              imageEntities: this.dependencies
+                .listControlledPlanningImages(input.conversationId)
+                .map((image) => image.entity),
+              entityAliases: this.dependencies
+                .listControlledPlanningImages(input.conversationId)
+                .map((image) => ({
+                  id: image.entity.id,
+                  sourceMessageId: image.entity.sourceMessageId,
+                  aliases: image.aliases,
+                })),
+              activeComparisonImageIds:
+                this.activeComparisonImageIds.get(input.conversationId) ?? [],
+            },
+          ),
         },
       },
     );
@@ -887,7 +1105,21 @@ export class ConversationStore implements IConversationStore {
       trace: development ? trace ?? null : null,
       objectiveResult: development ? objective : null,
       contextDiagnostics: development ? effectiveContext ?? null : null,
-      architectureDiagnostics: activeGeneration.architectureDiagnostics ?? null,
+      architectureDiagnostics:
+        activeGeneration.architectureDiagnostics === undefined
+          ? null
+          : withTerminalVisionEvidenceDiagnostic(
+              activeGeneration.architectureDiagnostics,
+              {
+                hiddenEvidencePresent: state.hiddenEvidence !== null && state.hiddenEvidence !== undefined,
+                extractionFailurePresent: state.pinnedExtraction !== null,
+                terminalStatus: state.status === 'completed'
+                  ? 'completed'
+                  : state.status === 'cancelled'
+                    ? 'cancelled'
+                    : 'failed',
+              },
+            ),
       summary,
     });
   }
@@ -1094,6 +1326,16 @@ export class ConversationStore implements IConversationStore {
   }
 }
 
+function controlledQuestion(plan: TurnPlan, originalQuestion: string): string {
+  if (plan.fallback === 'clarify-reference') {
+    return 'Ask the user to clarify which image they mean. Do not claim that any image was inspected.';
+  }
+  if (plan.fallback === 'asset-unavailable') {
+    return 'Explain that the requested image asset is unavailable. Do not substitute another image.';
+  }
+  return originalQuestion;
+}
+
 export function createConversationStore(
   dependencies: ConversationStoreDependencies
 ): ConversationStore {
@@ -1119,6 +1361,11 @@ export function createConversationStore(
     plannerActivation: DEFAULT_PLANNER_ACTIVATION,
     turnPlanner: new TurnPlanner(),
     listIndependentRecoveryCandidates: () => [],
+    listControlledPlanningImages: () => [],
+    visionExecutor: new VisionExecutor({
+      getImage: () => null,
+      getEvidence: () => null,
+    }),
     ...dependencies,
   });
 }
@@ -1158,11 +1405,65 @@ function listLexicalCandidates(conversationIds: readonly string[]): RetrievalCan
   return [...chunks, ...evidence];
 }
 
+function listRuntimeControlledPlanningImages(
+  conversationId: string,
+): ControlledPlanningImage[] {
+  return imageEntityRepository.listForConversation(conversationId).map((entity) => {
+    const evidence = structuredImageEvidenceRepository.getLatestCompatible(
+      entity.id,
+      entity.assetRevision,
+    );
+    return {
+      entity,
+      evidence,
+      aliases: evidence === null
+        ? []
+        : [
+            evidence.summary,
+            ...evidence.visibleObjects.map((object) => object.label),
+          ].filter((alias) => alias.trim() !== ''),
+    };
+  });
+}
+
+/** Development-only temporary Wave A/B physical-validation activation. */
+export const RUNTIME_PLANNER_ACTIVATION = plannerActivationForRuntime();
+
 export const conversationStore: IConversationStore = createConversationStore({
   inferenceQueue,
   historyStore,
   persistImage: (conversationId, sourcePath) => durableImageStorage.persist(conversationId, sourcePath),
   contextOrchestrator: createRuntimeContextOrchestrator(),
+  plannerActivation: RUNTIME_PLANNER_ACTIVATION,
+  listControlledPlanningImages: listRuntimeControlledPlanningImages,
+  visionExecutor: new VisionExecutor({
+    getImage: (imageId) => imageEntityRepository.get(imageId),
+    getEvidence: (imageId) => {
+      const image = imageEntityRepository.get(imageId);
+      return image === null
+        ? null
+        : structuredImageEvidenceRepository.getLatestCompatible(
+            image.id,
+            image.assetRevision,
+          );
+    },
+  }),
+  listIndependentRecoveryCandidates: (snapshot, options = {}) => {
+    const planningImages = listRuntimeControlledPlanningImages(snapshot.conversationId);
+    return buildRuntimeIndependentRecoveryCandidates(snapshot, {
+      ...options,
+      imageEntities:
+        options.imageEntities
+        ?? planningImages.map((image) => image.entity),
+      entityAliases:
+        options.entityAliases
+        ?? planningImages.map((image) => ({
+          id: image.entity.id,
+          sourceMessageId: image.entity.sourceMessageId,
+          aliases: image.aliases,
+        })),
+    });
+  },
   getDefaultResponseMode: () => useSettingsStore.getState().defaultResponseMode,
   setPersistedResponseMode: (conversationId, mode) => {
     conversationRepository.setResponseMode(conversationId, toStoredMode(mode));

@@ -130,7 +130,14 @@ export class VisionExecutor {
       const evidence = image === null
         ? null
         : eligibleEvidence(this.sources.getEvidence(imageId), image);
-      if (image === null || evidence === null) {
+      if (
+        image === null
+        || evidence === null
+        || (
+          plan.strategy === 'compare-evidence'
+          && image.assetAvailability !== 'available'
+        )
+      ) {
         missingImageIds.push(imageId);
         continue;
       }

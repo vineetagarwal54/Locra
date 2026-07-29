@@ -1,3 +1,4 @@
+import type { ControlledImageTurnAudit } from '../inference/ControlledImageTurnExecutor';
 import type {
   IndependentRecoveryKind,
   IndependentRoutingRecoveryResult,
@@ -54,11 +55,44 @@ export interface ConstrainedPlannerDiagnostic {
   readonly fallback: SafeFallback;
 }
 
+export type VisionEvidenceDiagnosticAction =
+  | 'not-produced'
+  | 'reused'
+  | 'freshly-inspected'
+  | 'freshly-structured';
+
+export type VisionEvidenceDiagnosticStatus =
+  | 'not-applicable'
+  | 'pending'
+  | 'complete'
+  | 'partial'
+  | 'failed'
+  | 'stale'
+  | 'unavailable';
+
+export interface VisionArchitectureDiagnostic {
+  readonly strategy: VisionStrategy;
+  readonly imageIds: readonly string[];
+  readonly missingImageIds: readonly string[];
+  readonly evidenceAction: VisionEvidenceDiagnosticAction;
+  readonly evidenceStatus: VisionEvidenceDiagnosticStatus;
+  readonly pixelsUsed: boolean;
+  readonly storedEvidenceUsed: boolean;
+}
+
 export interface TurnArchitectureDiagnostics {
   readonly authorityMode: 'shadow' | 'controlled' | 'authoritative';
   readonly planOwner: string;
+  readonly scenarioClass: string;
   readonly executedPlanId: string;
   readonly executedPlanVersion: string;
+  readonly legacySemanticDecisionCount: number;
+  readonly executedStages: readonly {
+    readonly stage: string;
+    readonly planId: string;
+  }[];
+  readonly executionResult: 'planned' | 'dispatched' | 'completed' | 'failed' | 'cancelled';
+  readonly vision: VisionArchitectureDiagnostic;
   readonly shadowPlan: SanitizedTurnPlan | null;
   readonly planDelta: readonly PlanDeltaDiagnostic[];
   readonly independentRecovery: IndependentRecoveryDiagnostic;
@@ -69,14 +103,23 @@ export function createTurnArchitectureDiagnostics(input: {
   readonly activation: PlannerActivation;
   readonly planning: TurnPlannerResult;
   readonly recovery: IndependentRoutingRecoveryResult;
+  readonly scenarioClass: string;
+  readonly missingImageIds?: readonly string[];
+  readonly legacySemanticDecisionCount?: number;
 }): TurnArchitectureDiagnostics {
   const plan = input.planning.plan;
   const legacyExecution = input.activation.semanticAuthority === 'legacy';
   return {
     authorityMode: input.activation.authorityMode,
     planOwner: input.activation.planOwner,
+    scenarioClass: input.scenarioClass,
     executedPlanId: legacyExecution ? `legacy:${plan.turnId}` : plan.turnId,
     executedPlanVersion: legacyExecution ? 'legacy-routing-v1' : plan.planVersion,
+    legacySemanticDecisionCount:
+      input.legacySemanticDecisionCount ?? (legacyExecution ? 1 : 0),
+    executedStages: [],
+    executionResult: 'planned',
+    vision: visionDiagnosticFor(plan, input.missingImageIds ?? []),
     shadowPlan: input.activation.runShadowPlanner ? sanitizePlan(plan) : null,
     planDelta: input.planning.validation.changes.map((change) => ({
       field: change.field,
@@ -109,8 +152,20 @@ export function sanitizeTurnArchitectureDiagnostics(
   return {
     authorityMode: diagnostics.authorityMode,
     planOwner: sanitizeIdentifier(diagnostics.planOwner),
+    scenarioClass: sanitizeIdentifier(diagnostics.scenarioClass),
     executedPlanId: sanitizeIdentifier(diagnostics.executedPlanId),
     executedPlanVersion: sanitizeIdentifier(diagnostics.executedPlanVersion),
+    legacySemanticDecisionCount: diagnostics.legacySemanticDecisionCount,
+    executedStages: diagnostics.executedStages.map((stage) => ({
+      stage: sanitizeIdentifier(stage.stage),
+      planId: sanitizeIdentifier(stage.planId),
+    })),
+    executionResult: diagnostics.executionResult,
+    vision: {
+      ...diagnostics.vision,
+      imageIds: diagnostics.vision.imageIds.map(sanitizeIdentifier),
+      missingImageIds: diagnostics.vision.missingImageIds.map(sanitizeIdentifier),
+    },
     shadowPlan: diagnostics.shadowPlan === null
       ? null
       : {
@@ -137,6 +192,62 @@ export function sanitizeTurnArchitectureDiagnostics(
     constrainedPlanner: {
       ...diagnostics.constrainedPlanner,
       gateReason: sanitizeIdentifier(diagnostics.constrainedPlanner.gateReason),
+    },
+  };
+}
+
+export function withTerminalVisionEvidenceDiagnostic(
+  diagnostics: TurnArchitectureDiagnostics,
+  input: {
+    readonly hiddenEvidencePresent: boolean;
+    readonly extractionFailurePresent: boolean;
+    readonly terminalStatus?: 'completed' | 'failed' | 'cancelled';
+  },
+): TurnArchitectureDiagnostics {
+  if (diagnostics.vision.strategy !== 'inspect-and-structure') {
+    return {
+      ...diagnostics,
+      executionResult: input.terminalStatus ?? diagnostics.executionResult,
+    };
+  }
+  return {
+    ...diagnostics,
+    executionResult: input.terminalStatus ?? diagnostics.executionResult,
+    vision: {
+      ...diagnostics.vision,
+      evidenceAction: input.hiddenEvidencePresent ? 'freshly-structured' : 'not-produced',
+      evidenceStatus: input.hiddenEvidencePresent
+        ? 'complete'
+        : input.extractionFailurePresent
+          ? 'failed'
+          : 'not-applicable',
+    },
+  };
+}
+
+export function withControlledExecutionDiagnostic(
+  diagnostics: TurnArchitectureDiagnostics,
+  audit: ControlledImageTurnAudit,
+): TurnArchitectureDiagnostics {
+  if (audit.semanticAuthority !== diagnostics.planOwner) {
+    throw new Error('Controlled execution owner diverged from architecture diagnostics.');
+  }
+  if (audit.stagePlanIds.some((stage) => stage.planId !== diagnostics.executedPlanId)) {
+    throw new Error('Controlled execution stage used a different TurnPlan ID.');
+  }
+  return {
+    ...diagnostics,
+    legacySemanticDecisionCount: audit.legacySemanticDecisionCount,
+    executedStages: audit.stagePlanIds,
+    executionResult: audit.result,
+    vision: {
+      strategy: audit.visionStrategy,
+      imageIds: [...audit.actualImageIds],
+      missingImageIds: [...audit.missingImageIds],
+      evidenceAction: audit.evidenceAction,
+      evidenceStatus: evidenceStatusForAudit(audit),
+      pixelsUsed: audit.pixelsUsed,
+      storedEvidenceUsed: audit.storedEvidenceUsed,
     },
   };
 }
@@ -168,6 +279,69 @@ function sanitizePlan(plan: TurnPlannerResult['plan']): SanitizedTurnPlan {
     confidence: plan.confidence.overall,
     fallback: plan.fallback,
   };
+}
+
+function visionDiagnosticFor(
+  plan: TurnPlannerResult['plan'],
+  missingImageIds: readonly string[],
+): VisionArchitectureDiagnostic {
+  const strategy = plan.vision.strategy;
+  if (strategy === 'none') {
+    return {
+      strategy,
+      imageIds: [],
+      missingImageIds: [],
+      evidenceAction: 'not-produced',
+      evidenceStatus: 'not-applicable',
+      pixelsUsed: false,
+      storedEvidenceUsed: false,
+    };
+  }
+  if (missingImageIds.length > 0) {
+    return {
+      strategy,
+      imageIds: [...plan.vision.imageReferenceIds],
+      missingImageIds: [...missingImageIds],
+      evidenceAction: 'not-produced',
+      evidenceStatus: 'unavailable',
+      pixelsUsed: false,
+      storedEvidenceUsed: false,
+    };
+  }
+  return {
+    strategy,
+    imageIds: [...plan.vision.imageReferenceIds],
+    missingImageIds: [],
+    evidenceAction:
+      strategy === 'reuse-evidence' || strategy === 'compare-evidence'
+        ? 'reused'
+        : strategy === 'inspect-original'
+          ? 'freshly-inspected'
+          : 'freshly-structured',
+    evidenceStatus:
+      strategy === 'reuse-evidence' || strategy === 'compare-evidence'
+        ? 'complete'
+        : strategy === 'inspect-original'
+          ? 'not-applicable'
+          : 'pending',
+    pixelsUsed: strategy === 'inspect-original' || strategy === 'inspect-and-structure',
+    storedEvidenceUsed: strategy === 'reuse-evidence' || strategy === 'compare-evidence',
+  };
+}
+
+function evidenceStatusForAudit(
+  audit: ControlledImageTurnAudit,
+): VisionEvidenceDiagnosticStatus {
+  if (audit.result === 'cancelled') return 'failed';
+  if (audit.evidenceStatus === 'partial') return 'partial';
+  if (
+    audit.evidenceStatus === 'asset-unavailable'
+    || audit.evidenceStatus === 'evidence-unavailable'
+    || audit.evidenceStatus === 'capability-unavailable'
+  ) return 'failed';
+  if (audit.evidenceAction === 'reused') return 'complete';
+  if (audit.evidenceAction === 'freshly-structured') return 'pending';
+  return 'not-applicable';
 }
 
 function sanitizeIdentifier(value: string): string {

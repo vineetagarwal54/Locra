@@ -103,6 +103,20 @@ export class ImageEntityRepository {
     return row === null ? null : this.toEntity(row);
   }
 
+  listForConversation(conversationId: string): ImageEntity[] {
+    return this.driver.getAllSync<ImageEntityRow>(
+      `SELECT asset.id, asset.conversation_id, asset.local_path,
+              asset.asset_revision, asset.asset_availability,
+              asset.created_at, asset.updated_at,
+              link.message_id AS source_message_id
+         FROM image_asset asset
+         JOIN message_image link ON link.image_asset_id = asset.id
+        WHERE asset.conversation_id = ?
+        ORDER BY asset.created_at ASC, link.ordinal ASC, asset.id ASC`,
+      [conversationId],
+    ).map((row) => this.toEntity(row));
+  }
+
   updateAvailability(
     imageId: string,
     availability: AssetAvailability,
