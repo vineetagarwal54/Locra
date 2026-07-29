@@ -1,50 +1,53 @@
 # Quickstart: Validating Context Routing and Answer Quality
 
-> **Architecture revision (2026-07-28)**: Legacy Phases 1–9 remain below as
-> historical validation. The authoritative new rollout is Phases 10–21.
+> **Architecture correction (2026-07-28)**: Legacy Phases 1–9 remain below as
+> historical validation. Remaining implementation uses Spec 007 Waves A–E.
 
 This guide runs the manual validation criteria from `spec.md` Section 11 against a local development build, using the existing beta diagnostics export as the source of truth for what the router actually did. It does not duplicate contract details — see `contracts/` and `data-model.md` for the shapes referenced below.
 
-## Architecture Revision Phases 10–21
+## Architecture Revision Waves A–E
 
-1. **Typed contracts**: review `data-model.md` and contracts; confirm one plan,
-   provider-independent model/embedding boundaries, ledger, typed units, and
-   first-class image/evidence entities without behavior changes.
-2. **Shadow planning**: confirm every turn receives a validated shadow
-   `TurnPlan` while legacy routing remains authoritative and unambiguous turns
-   require no constrained planner-model call.
-3. **Diagnostics/golden scenarios**: run GV-001–GV-008 from
-   `manual-validation-checklist.md`; inspect confidence, provenance, legacy
-   deltas, provider/index descriptors, selected sources, and fallback.
-4. **Plan-driven vision**: exercise all five vision strategies and confirm
-   refusals never become image authority.
-5. **Conversation-state ledger**: exercise code comparisons, pronoun price
-   follow-ups, previous-image comparisons, and decision recall; rebuild from
-   source revisions.
-6. **Immediate explicit memory**: write and recall an apartment-rent memory
-   before compaction or semantic indexing; confirm lexical/direct availability.
-7. **EmbeddingGemma indexing**: after approval, benchmark at least 256/512
-   dimensions; interrupt/restart/pause/cancel backfill and confirm lexical
-   availability.
-8. **Shadow semantic retrieval**: compare lexical-authoritative results with
-   typed-unit multi-signal ranking; confirm low-trust attempts are not factual
-   evidence.
-9. **Controlled semantic activation**: enable only through measured gates;
-   verify stale/failing/migrating index fallback and rollback.
-10. **Planner authority**: confirm context, vision, memory, retrieval,
-    generation, queue, refusal recovery, and grounding use one plan ID/version.
-11. **Semantic-regex removal**: confirm regex remains only for deterministic
-    syntax/validation and downstream semantic reclassification is gone.
-12. **Final physical validation**: run golden, provider-switch, embedding
-    migration, failure/cancellation, airplane-mode, and regression matrices on
-    representative 6–8GB devices.
+1. **Wave A — Single authority foundation**: validate `TurnPlan` MVP,
+   deterministic validator, shadow-only behavior, authority ownership,
+   independent-routing recovery, Tier-3 failure contracts, and all golden
+   scenarios with `constrainedPlannerInvoked: false`. Use deterministic fixtures
+   with injected/mocked ledger, entity, image-candidate, explicit-memory, and
+   lexical-retrieval state; do not treat Wave A as end-to-end vision, persistence,
+   or semantic-retrieval validation.
+2. **Wave B — Vision continuity**: enable only named image classes in controlled
+   mode. For each enabled class, confirm the `TurnPlan` owns reference
+   resolution, image selection, context-source selection, context assembly,
+   vision strategy, generation-task projection, and inference execution, with
+   zero legacy semantic decisions for that turn. Then exercise all five
+   strategies, unresolved ambiguity, MVP evidence status, reinspection,
+   comparison, and refusal exclusion.
+3. **Wave C — Ledger and explicit memory**: confirm completed-turn publication
+   before the next plan, cold-start rebuild, immediate write/read, false-write
+   negatives, corrections, supersession, deletion, and ordinal reliability.
+4. **Wave D — EmbeddingGemma and semantic retrieval**: after separate approval,
+   benchmark 256/512, interrupt/restart/pause/cancel backfill, shadow ranking,
+   controlled activation, atomic index switch, and lexical fallback.
+5. **Wave E — Authority transfer and cleanup**: transfer all supported turns to
+   one new plan owner in both embedding-unavailable lexical-only mode and any
+   approved semantic mode; remove obsolete semantic regexes only after physical
+   validation, then remove the rollback gate.
+
+Wave D may occur before or after Wave E. Embedding approval is not required for
+planner authority.
+
+With embeddings unavailable, validate lexical-only topic/entity resolution from
+ledger identities, canonical labels, known aliases, exact lexical matches, code
+identifiers, direct references, and active comparison state. This is not a new
+semantic regex path.
 
 ## Prerequisites
 
 - A local Android development build with the model already downloaded and verified (`npx expo run:android`, per `AGENTS.md` Build Strategy).
 - `Settings → Beta Tools → Diagnostics Export` available (existing Spec 006 feature) to inspect per-turn `ContextSelectionDiagnostics`.
 - At least one conversation with: some unrelated prior turns, a durable fact or two, a rolling summary (long enough conversation), and one attached image — plus a second conversation for cross-chat scenarios (Phase 7 only).
-- Phases implemented up through the one you're validating (see `plan.md` Implementation Phases) — earlier phases must be exercised first since later phases build on them.
+- For historical checks, implement the matching Phase 1–9 baseline. For revised
+  architecture checks, satisfy the target wave's entry conditions and dependency
+  graph in `plan.md`; Wave D is not a prerequisite for Wave E.
 
 ## Phase 1 — Diagnostics-only routing visibility (observation only)
 
@@ -58,12 +61,12 @@ This guide runs the manual validation criteria from `spec.md` Section 11 against
 2. Ask a non-pixel-dependent follow-up about the same image → confirm no re-inference occurs (`imageDecision: 'use-evidence'`).
 3. Ask a pixel-dependent follow-up (e.g., "how many are there", "what does it say", "what's the price") → confirm a new inference runs through the Qwen vision path (visible as a fresh evidence timestamp / new inference trace tied to a new inference call) and `imageDecision: 'use-original'`.
 4. Attach a second image, then reference the first one explicitly and unambiguously (e.g., "the first image") → confirm the correct (first) image's evidence/original is used, never the second.
-5. With two images attached, ask about "the image" with no disambiguating detail; repeat after adding a third image. In both cases confirm diagnostics show `imageReferenceAmbiguous: true`, record `imageReferenceResolution: 'ambiguous-active-fallback'`, and resolve against the active image rather than guessing.
+5. With two images attached, ask about "the image" with no disambiguating detail; repeat after adding a third image. Confirm `imageReferenceAmbiguous: true`, `imageReferenceResolution: 'unresolved-reference'` or `clarification-required`, no selected image/evidence, and no visual claim until clarification succeeds.
 6. Delete/remove the referenced image's file (or use a fixture with a missing asset) and repeat a pixel-dependent question about it → confirm the response reports the original as unavailable; repeat with a non-pixel-dependent question → confirm stored evidence still answers if sufficient.
 
 ## Phase 3 — Minimal-context request routing
 
-1. Repeat the Phase 1 independent-question scenario → confirm the answer itself now reflects zero prior turns/summary/facts/image evidence (diagnostics `selected` counts are zero, not just `considered`).
+1. Repeat the Phase 1 independent-question scenario → confirm no irrelevant source is selected. Then inject a false independent label for an exact memory/user-fact/direct-reference query and confirm the temporary recovery preserves that exact/direct candidate before the hard skip.
 2. Ask a follow-up with a genuine reference to prior context → confirm only the needed recent turns are included, per diagnostics.
 3. In a long conversation, ask about an earlier topic → confirm relevant facts/summary/retrieved items appear; ask an unrelated independent question in the same long conversation → confirm none of that older material leaks in.
 

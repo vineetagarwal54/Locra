@@ -21,9 +21,12 @@ Each item below resolves one NEEDS-CLARIFICATION-shaped question from the plan's
   safely usable for bounded final reconciliation, so declining to use it would
   leave FR-026b unmet.
 
-## 2. Conversational-reference classification heuristic
+## 2. Conversational-reference classification heuristic (historical; superseded)
 
-**Decision**: Extend the existing regex/lexical-overlap approach already used in `ContextOrchestrator` (`VISUAL_REFERENCE_PATTERN`, `TOKEN_STOP_WORDS`, `lexicalOverlap`) with a new `CONVERSATIONAL_REFERENCE_PATTERN`-style deterministic check: pronouns and demonstratives ("it", "that", "this", "they", "those", "these"), continuation phrases ("also", "again", "what about", "and if", "does that", "the other one", "same as"), and a length/structure heuristic (very short messages with no independent subject default to follow-up, per spec's conservative-default edge case). No ML classifier, no additional model inference.
+**Historical decision**: The first implementation extended regex/lexical-overlap
+classification. This remains a recorded baseline, not the semantic authority.
+The unified planner may use deterministic patterns only for syntax/candidate
+construction and invokes the constrained structured tier only under FR-092.
 
 **Rationale**: The codebase already has a working, tested precedent for exactly this kind of deterministic linguistic-signal classification (image-relevance detection). Reusing the same style keeps classification synchronous, offline, and trivially unit-testable with fixed input/output pairs — matching Constitution IX ("no new on-device classifier model") and the spec's explicit non-goal of adding a second inference pass.
 
@@ -97,16 +100,25 @@ implementation proceeds.
 
 **Alternatives considered**: Not evaluated in depth at this time — deferred to Phase 8's own research pass, consistent with the phased scope.
 
-## 8. Ambiguous image-reference default (Phase 2)
+## 8. Ambiguous image-reference behavior (corrected)
 
-**Decision**: When a reference could plausibly mean more than one prior image and the request carries no disambiguating detail (an ordinal like "the first one", a description like "the receipt", or similar), resolve the request as a same-image follow-up against the conversation's current active image, rather than guessing among the older images or refusing to answer. Record the ambiguity and this resolution in diagnostics (spec FR-012a, FR-037).
+**Decision**: When multiple image candidates remain materially plausible, return
+`unresolved-reference` with clarification required. Select no image and present
+no pixels/evidence as belonging to the requested image until resolution succeeds.
+The active image is selected only when the request semantically refers to that
+active visual entity and there is no material ambiguity.
 
-**Rationale**: The spec requires that missing or ambiguous images never cause another image to be silently substituted. Guessing among two or more equally-plausible older images would be exactly that kind of silent substitution — the router would be picking one specific older image without justification. Defaulting to the current active image is not a guess among *ambiguous* candidates: the active image is a well-defined, already-existing default used throughout Section 5 for same-image follow-ups, so this reuses an existing, unambiguous fallback rather than inventing a new one.
+**Rationale**: An “active” marker is recency state, not evidence that ambiguous
+reference language selected that image. Treating it as a fallback can present
+the wrong pixels/evidence as the user's target.
 
 **Alternatives considered**:
-- *Ask the user to disambiguate*: would require new UI/conversational-flow beyond this spec's scope (Non-Goals: no broad UI redesign); deferred as a possible future enhancement, not required for this feature.
-- *Refuse to resolve and answer with a generic "not sure which image" response*: closer to correct than guessing, but is a product/UX decision about response content, not a routing decision — Locra's task in this feature is to select context, not author response copy. Defaulting to the active image and letting the model's own answer reflect what it was actually shown is simpler and keeps this feature's scope to context selection.
-- *Always resolve to the most recently attached image, even calling it an "older-image reference"*: rejected — that would misclassify the request and could cause a false claim of having resolved a specific referenced image; classifying it as a same-image follow-up against the active image is the more honest classification for what's actually happening.
+- *Default to active/most recent*: rejected because it guesses when multiple
+  candidates are plausible.
+- *Use evidence common to all candidates*: rejected for target-specific answers;
+  no candidate evidence may be represented as belonging to the requested image.
+- *Clarification-required result*: selected. It may use existing conversational
+  response surfaces and does not require a broad UI redesign.
 
 ## 9. Implementation-time llama.rn API re-verification (T002)
 
@@ -137,10 +149,10 @@ dependency or network call is needed.
 - **Exact names**: likely proper names are extracted at any query position,
   including multi-word names. Generic sentence-opening question and command words
   are removed explicitly rather than discarding the first capitalized token.
-- **Embedding sequencing**: deterministic classification runs before any query
-  embedding. The approved runtime is invoked only for eligible same-chat or
-  cross-chat retrieval; inactive manifests, independent questions, and ordinary
-  follow-ups make zero embedding calls.
+- **Embedding sequencing (historical baseline)**: the first architecture gated
+  query embeddings behind deterministic classification. The revision instead
+  constructs eligible candidates/scope first; an approved provider is additive,
+  and the independent label alone neither forces nor forbids semantic scoring.
 - **Grounding input**: diagnostics combine selected conversation/retrieved context
   with the current inference's fresh hidden visual evidence. The canonical
   selected context and visible answer remain unchanged.
@@ -198,7 +210,7 @@ the source of truth and supports invalidation.
 **Alternatives considered**:
 - Store only a rolling prose summary: rejected because it loses typed identity,
   comparison, reference, and reliability information.
-- Treat the ledger as canonical: rejected because source edits/deletion and
+- Treat the ledger as canonical: rejected because source lifecycle/deletion and
   provenance would become ambiguous.
 
 ## 14. Layered memory and typed retrieval units
@@ -245,8 +257,9 @@ measured quality/resource tradeoff on constrained devices.
 
 **Decision**: Use feature-gated, artifact-approved, versioned indexes with
 restart-safe background backfill, cooperative cancellation, persisted progress,
-pause/yield for visible inference, stale-vector detection, side-by-side rebuild,
-and lexical fallback throughout migration or failure.
+pause/yield for visible inference, stale-vector detection, and lexical fallback.
+Migration operationally builds a new index version, validates it, atomically
+activates it, and retires the previous version later.
 
 **Rationale**: Semantic capability must never block answering or risk canonical
 data. Side-by-side indexes allow rollback and provider/dimension/policy migration
@@ -317,12 +330,12 @@ prompt with the active provider's native tokenizer.
 requirements and ensures later budget logic cannot silently discard the image or
 reference that defines the turn.
 
-## 21. Shadow-to-authoritative rollout
+## 21. Shadow-to-authoritative rollout (corrected)
 
-**Decision**: Use twelve stages: contracts, shadow plan, diagnostics/golden
-scenarios, planned vision, ledger, immediate memory, EmbeddingGemma indexing,
-shadow semantic retrieval, controlled retrieval activation, planner authority,
-obsolete semantic-regex removal, and final physical validation.
+**Decision**: Use five Spec 007 waves: A single-authority foundation; B vision
+continuity; C ledger/explicit memory; D EmbeddingGemma/semantic retrieval; and E
+authority transfer/cleanup. Wave E depends on A–C, not D. Embeddings are additive
+and may activate before or after authority transfer.
 
 **Rationale**: The current implementation remains a safety comparator until the
 new plan has evidence. This avoids a big-bang rewrite and isolates rollback
@@ -340,3 +353,84 @@ points.
   EmbeddingGemma is selected for evaluation, not yet artifact-approved.
 - “Qwen tokenizer/context constants are application architecture” conflicts with
   model switching: moved behind the main provider descriptor.
+
+## 23. Authority-mode semantics
+
+**Decision**: Shadow mode is diagnostics-only while legacy executes the complete
+turn. Controlled mode assigns explicitly named turn classes wholly to the new
+planner and retains legacy only as a full-turn rollback. Authoritative mode
+bypasses legacy semantics for all supported turns while a temporary full-turn
+rollback gate remains.
+
+**Invariant**: No single turn may be executed by two semantic authorities.
+Diagnostics record the mode and exact plan owner.
+
+## 24. Constrained planner tier
+
+**Decision**: Tier 3 receives deterministic ordered candidate IDs and requests
+only unresolved fields. It returns candidate IDs received, selected IDs or
+unresolved status, requested intent clarification, memory read/write
+interpretation, context scope, confidence, bounded rationale codes, and whether
+clarification is required. It cannot rewrite resolved plan fields or introduce
+new candidates.
+
+The deterministic gate opens only when state, ledger, exact/lexical evidence,
+and reference resolution leave two or more materially plausible meanings that
+would change image target, memory operation, context scope, or answer task.
+Ordinary independent questions, clear image turns, explicit memory reads/writes,
+retry, regenerate, and continuation do not invoke it.
+
+Tier 3 runs serially before generation through the existing device-resource
+policy, uses at most 96 generated tokens, times out after 8 seconds of execution
+after lease acquisition, and supports cancellation/app suspension. A result
+below `0.80`, malformed, cancelled, timed out, suspended, unavailable, or
+candidate-injecting is rejected. Deterministic fallback preserves current input,
+attachments, direct references, and exact memories; ambiguity remains unresolved
+and uncertain durable writes are not created.
+
+## 25. Determinism boundary
+
+**Decision**: Application/ledger state, exact and lexical retrieval, candidate
+construction/order, validation, and fallback are deterministic. Tier-3 model
+bytes are not. Its schema validation and post-processing are deterministic.
+Every golden scenario must complete without Tier 3 and assert that fact; Tier-3
+failure paths use separate mocked structured-output contract tests.
+
+## 26. Source revisions without general editing
+
+**Decision**: `sourceRevision` is a content/status/version hash for derived-data
+compatibility. Spec 007 invalidates on creation, deletion, conversation deletion,
+retry/regeneration, superseded assistant attempts, evidence reinference,
+model/index changes, and derived rebuilds. General canonical message editing is
+not introduced.
+
+## 27. Ledger publication and restart
+
+**Decision**: Persist the completed canonical turn, derive validated results,
+update/rebuild the ledger, then publish it before the next turn plans. Persisted
+ledger state is a versioned cache rebuilt from canonical messages/records when
+missing, stale, incompatible, or corrupt. Corruption cannot alter canonical
+history.
+
+## 28. Explicit-memory semantics and reliability
+
+**Decision**: Combine explicit command/action semantics, constrained planner
+output when its gate permits, deterministic validation, user factual content,
+and memory-scope settings. Questions about memory are reads; first-person
+recollection is neither by default. Uncertain writes remain conversation-scoped
+or require clarification and never silently become durable.
+
+Reliability is ordinal: user fact/decision; confirmed pixel evidence;
+deterministically extracted exact content; confirmed durable derived fact;
+grounded completed assistant answer; ordinary assistant answer; uncertain
+assistant answer; failed/refusal/interrupted/cancelled/superseded attempt.
+Numeric ranking weights remain a benchmark.
+
+## 29. Structured image-evidence MVP
+
+**Decision**: Require image/source identity, short summary, visible objects,
+extracted text, numeric values, optional object associations, uncertainty, and
+`complete | partial | failed | stale` status. Spatial relationships/full scene
+graphs are later extensions. Malformed/incomplete extraction is never silently
+complete; pixel reinspection remains available, and text-only formatting retry
+cannot create new visual facts.

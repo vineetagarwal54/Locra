@@ -2,13 +2,13 @@
 
 This feature extends Spec 006 entities; it does not replace them. Only new or changed shapes are documented below — see `specs/006-hybrid-context-response-voice/data-model.md` for everything unchanged (message, attempt, image asset, evidence, chunk, embedding, summary, fact).
 
-## RequestClassification (new)
+## RequestClassification (historical legacy/shadow adapter)
 
 Computed per request by `RequestClassifier`; not persisted — it is a transient result of one `orchestrate()` call, though it is captured in that turn's diagnostics (see Router Diagnostics below).
 
 | Field | Type | Notes |
 |---|---|---|
-| `isIndependentTextQuestion` | boolean | No conversational-reference signal detected; gates FR-003's zero-context rule. |
+| `isIndependentTextQuestion` | boolean | Legacy signal only; MUST NOT globally disable FR-086 protected exact/direct sources. |
 | `isTextFollowUp` | boolean | Conversational-reference signal detected (pronoun/continuation phrase, or ambiguous-short-reply default). |
 | `isNewImageQuestion` | boolean | Current message carries a newly attached image. |
 | `isSameImageFollowUp` | boolean | References the conversation's current/active image without a new attachment. |
@@ -17,13 +17,13 @@ Computed per request by `RequestClassifier`; not persisted — it is a transient
 | `isLongContextRetrievalRequest` | boolean | Conversation length exceeds the response mode's recent-turn floor and the request plausibly concerns earlier content. |
 | `isCrossChatEligible` | boolean | Cross-chat setting enabled AND current conversation not excluded AND request is otherwise eligible (Phase 7 only; always `false` before Phase 7 ships). |
 | `referencedImageId` | string \| null | Set only when `isOlderImageReference` is true and the reference is unambiguous. |
-| `imageReferenceAmbiguous` | boolean | `true` when the request's image reference could plausibly mean more than one prior image with no disambiguating detail; when `true`, `isOlderImageReference` is `false` and `isSameImageFollowUp` is `true` instead (spec FR-012a). |
+| `imageReferenceAmbiguous` | boolean | Legacy observation that multiple candidates remain plausible; authoritative conversion produces `unresolved-reference`, not `isSameImageFollowUp`. |
 
 **Validation rules**:
 - At least one of `isIndependentTextQuestion` / `isTextFollowUp` is always true; they are mutually exclusive with each other (a request is either independent or a follow-up, never both), but each may combine with any image/pixel/long-context/cross-chat flag.
 - `isIndependentTextQuestion === true` implies every other flag is `false` except when another classification is *simultaneously and independently* true from its own signal (e.g., a genuinely independent question that also happens to attach a new image is `isIndependentTextQuestion && isNewImageQuestion`) — per spec FR-003's "unless the request also carries another classification" carve-out.
 - `referencedImageId` is non-null if and only if `isOlderImageReference` is true.
-- `imageReferenceAmbiguous` can only be `true` when the request contains image-reference language at all; when `true`, the classifier MUST set `isSameImageFollowUp = true` and `isOlderImageReference = false` (the ambiguous-reference default, spec FR-012a) rather than leaving both `false`.
+- `imageReferenceAmbiguous` can only be `true` when image-reference language has multiple materially plausible targets. In shadow mode it records the legacy result without changing execution. In controlled/authoritative mode it maps to an unresolved reference with no selected image.
 
 ## TokenBudget / ContextBudgetPolicy (changed)
 
@@ -103,8 +103,11 @@ Extends the existing `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` s
 | `actualSources` | object | Per-source queried/considered and selected counts for the current implementation. |
 | `proposedRouting` | object | Observation-only prediction such as `wouldSkipRetrieval`; never alters Phase 1 behavior. |
 | `imageDecision` | `ImageEvidenceDecision \| 'not-applicable'` | New — the resolved decision for this turn. |
-| `imageReferenceAmbiguous` | boolean | New — mirrors `RequestClassification.imageReferenceAmbiguous`; `true` when an ambiguous reference was defaulted to the active image (spec FR-012a, FR-037). |
-| `imageReferenceResolution` | string union | Records explicit ordinal, unique description, active-image selection, or disclosed ambiguous active fallback. |
+| `imageReferenceAmbiguous` | boolean | `true` when multiple materially plausible image candidates remain. |
+| `imageReferenceResolution` | string union | `not-applicable`, `new-image`, `active-image`, `explicit-ordinal`, `unique-description`, `unresolved-reference`, `clarification-required`, `asset-unavailable`; never an ambiguity-to-active fallback. |
+| `authorityMode` | `shadow \| controlled \| authoritative` | Required on every new record. |
+| `planOwner` | stable string | Exact semantic authority, e.g. `legacy-router-v1` or `turn-planner:<version>`. |
+| `constrainedPlanner` | object | Invocation/gate reason, queue wait, execution latency, result status, confidence, and fallback; required even when `invoked: false`. |
 | `crossChatActive` | boolean | Reflects whether an enabled, non-excluded cross-chat scope was actually queried for this turn; otherwise `false`. |
 | `groundingVerdict` | `'supported' \| 'unsupported' \| null` | Phase 8 diagnostics-only result; `null` when the turn did not include image evidence or retrieved text that can be assessed (spec FR-040). |
 
@@ -127,24 +130,24 @@ changing these semantics.
 
 | Field | Type | Validation |
 |---|---|---|
-| `planVersion` | string | Required; identifies schema/policy version. |
-| `turnId` | string | Stable link to canonical turn/action. |
-| `intent` | structured intent | One primary user goal plus optional secondary goals; not a regex label. |
-| `modality` | `text \| image \| multimodal` | Must match required inputs and provider capability. |
-| `conversationDependency` | structured dependency | `none`, `recent`, `ledger`, `retrieval`, or combinations with confidence/evidence. |
-| `references` | `ResolvedReference[]` | Each carries target type/ID, resolution evidence, and confidence. |
-| `unresolvedReferences` | `UnresolvedReference[]` | Non-empty when no safe unique target exists. |
-| `activeEntityIds` | string[] | Ledger entity IDs required by this turn. |
-| `activeTopics` | `TopicReference[]` | Topic IDs/labels plus source provenance. |
-| `memoryReads` | `MemoryRead[]` | Typed scope, query, required/optional status, limits. |
-| `memoryWrites` | `MemoryWrite[]` | Explicit/derived classification, value, provenance, reliability. |
-| `retrievalScope` | `RetrievalScope` | Conversation IDs/types, cross-chat eligibility, exclusions. |
-| `vision` | `VisionExecutionPlan` | Exactly one strategy; see below. |
-| `requiredContextSources` | `ContextSourceRequirement[]` | Each independently required/optional with reason and provenance. |
-| `generation` | `GenerationRequirements` | Output shape, grounding needs, length/headroom, provider capabilities. |
-| `confidence` | `PlanningConfidence` | Overall and field-level confidence. |
-| `fallback` | `SafeFallbackPlan` | Clarification, lexical-only, asset-unavailable, capability-unavailable, or safe execution. |
-| `evidence` | `PlanningSignal[]` | Deterministic, semantic, retrieval, ledger, or model-fallback signal provenance. |
+| `planVersion` | string | MVP; schema/policy version. |
+| `turnId` | string | MVP; stable canonical turn/action link. |
+| `authorityMode` | `shadow \| controlled \| authoritative` | MVP; execution ownership semantics. |
+| `planOwner` | stable string | MVP; exact semantic owner. |
+| `intent` | `answer \| compare \| transform \| recall \| remember \| inspect \| extract \| retry \| regenerate \| continue \| clarify` | MVP primary task kind. |
+| `modality` | `text \| image \| multimodal` | MVP; must match required inputs/provider capability. |
+| `conversationDependency` | `none \| recent \| ledger \| retrieval \| mixed \| unresolved` | MVP with evidence codes. |
+| `references` | `ResolvedReference[]` | MVP; target type/ID, resolution code, confidence. |
+| `unresolvedReferences` | `UnresolvedReference[]` | MVP; candidate IDs, reason, clarification flag; no selected target. |
+| `requiredContextSources` | `ContextSourceRequirement[]` | MVP; independently required/optional, reason, provenance. |
+| `memoryReads` | `MemoryReadRequirement[]` | MVP; query/scope/required status. |
+| `memoryWrites` | `MemoryWriteRequirement[]` | MVP; explicit status, fact payload, scope, provenance; uncertain durable writes forbidden. |
+| `vision` | `VisionExecutionPlan` | MVP; exactly one strategy. |
+| `generationTaskKind` | `answer \| comparison \| extraction \| clarification \| continuation \| refusal-recovery` | MVP. |
+| `confidence` | `PlanningConfidence` | MVP overall and unresolved-field confidence. |
+| `fallback` | `execute \| clarify-reference \| lexical-only \| asset-unavailable \| capability-unavailable \| cancelled` | MVP deterministic fallback. |
+| `activeEntityIds` / `activeTopics` | typed arrays | Optional later enrichment; ledger remains source. |
+| `retrievalRankingHints` / `outputFormat` / `planningSignals` | typed values | Optional later enrichment; never a second authority. |
 
 **Validation rules**:
 
@@ -156,6 +159,36 @@ changing these semantics.
   supported resolution.
 - Continue/retry/regenerate action semantics link to the prior plan/attempt.
 
+## AuthorityMode / PlanOwner
+
+| Mode | `planOwner` | Execution |
+|---|---|---|
+| `shadow` | `legacy-router:<version>` | Legacy executes the whole turn; new plan is diagnostics-only. |
+| `controlled` | `turn-planner:<version>` for an explicitly enabled class | New plan executes the whole turn; legacy is full-turn rollback only. |
+| `authoritative` | `turn-planner:<version>` | New plan executes all supported turns; legacy semantics are not consulted. |
+
+One turn cannot contain more than one semantic `planOwner`.
+
+## ConstrainedPlanningResolution
+
+Tier 3 returns only requested unresolved fields:
+
+| Field | Type | Validation |
+|---|---|---|
+| `candidateReferenceIdsReceived` | ordered ID list | Exact match to deterministic input list. |
+| `selectedReferenceIds` | ID list | Subset of candidates, or empty when unresolved. |
+| `referenceStatus` | `resolved \| unresolved` | `resolved` requires uniquely valid selection. |
+| `intentClarification` | nullable MVP intent | Present only when requested. |
+| `memoryInterpretation` | `read \| write \| neither \| unresolved` | Cannot create a write without validated user factual content/scope. |
+| `requestedContextScope` | `current-turn \| recent \| same-chat \| cross-chat \| unresolved` | Cross-chat still obeys settings/exclusions. |
+| `confidence` | number `[0,1]` | Initial acceptance threshold is `0.80`. |
+| `rationaleCodes` | bounded enum list | Only codes in the unified-planning contract. |
+| `clarificationRequired` | boolean | Required for unresolved target/write ambiguity. |
+
+The output cannot add candidate IDs or replace fields already resolved by
+deterministic tiers. Diagnostics record invocation, gate reason, queue wait,
+execution latency, validation result, and fallback.
+
 ## ConversationStateLedger
 
 Derived per conversation; canonical messages remain authoritative.
@@ -163,6 +196,7 @@ Derived per conversation; canonical messages remain authoritative.
 | Field | Type | Notes |
 |---|---|---|
 | `conversation_id` | stable ID | Parent; cascades on conversation delete. |
+| `schema_version` | string | Persisted-cache compatibility key. |
 | `revision` | integer | Increments on derived-state update/rebuild. |
 | `active_topics` | typed list | Topic identity, aliases, confidence, source message IDs. |
 | `active_entities` | typed list | Entity identity/type/aliases and source message IDs. |
@@ -174,10 +208,15 @@ Derived per conversation; canonical messages remain authoritative.
 | `explicit_memory_write_ids` | ID list | Immediate durable-memory links. |
 | `source_message_ids` | ID list | Complete derivation provenance. |
 | `updated_at` | timestamp | Derived update time. |
+| `source_state_hash` | string | Detects missing/stale cache against canonical messages and structured records. |
+| `status` | `ready \| stale \| rebuilding \| corrupt` | Corrupt/stale caches rebuild without modifying canonical history. |
 
-Ledger rebuild and invalidation follow source revision/deletion. Failed,
-cancelled, interrupted, refusal-like, superseded, or unsupported assistant
-attempts do not establish trusted facts or decisions.
+Turn completion ordering is: persist completed canonical turn; derive validated
+results; update/rebuild ledger; publish it before the next plan. Invalidation
+covers creation, deletion, conversation deletion, retry/regeneration,
+superseded attempts, evidence reinference, version changes, and rebuilds.
+General message editing is out of scope. Failed, cancelled, interrupted,
+refusal-like, superseded, or unsupported attempts establish no trusted fact.
 
 ## RetrievalUnit
 
@@ -188,8 +227,8 @@ attempts do not establish trusted facts or decisions.
 | `source_message_ids` | non-empty ID list | Canonical provenance. |
 | `type` | enum | `user-message`, `assistant-answer`, `code-block`, `explicit-memory`, `durable-fact`, `decision`, `summary-segment`, `image-evidence`. |
 | `text` | string | Searchable textual representation. |
-| `reliability` | enum/score | Derived from source type/status, never semantic similarity. |
-| `source_revision` | integer/string | Stale-unit/invalidation key. |
+| `reliability` | `user-direct \| pixel-confirmed \| exact-extracted \| durable-confirmed \| assistant-grounded \| assistant-ordinary \| assistant-uncertain \| ineligible-attempt` | Ordinal; derived from source type/status, never semantic similarity. |
+| `source_revision` | string | Content/status/version hash; not a general message-edit feature. |
 | `created_at` / `updated_at` | timestamps | Required. |
 | `status` | enum | `eligible`, `stale`, `superseded`, `deleted`, `untrusted`. |
 
@@ -209,6 +248,12 @@ not trusted factual evidence.
 | `reliability` | `user-explicit` | Distinct from inferred facts. |
 | `source_revision` | revision | Invalidation key. |
 | `available_at` | timestamp | Same transaction/workflow completion as source persistence; never compaction-gated. |
+| `status` | `active \| superseded \| deleted` | Only active value is returned by default. |
+| `supersedes_memory_id` | nullable stable ID | User correction link; both source provenances remain auditable. |
+
+Detection combines user command/action semantics, structured planner output,
+deterministic validation, factual payload, and memory-scope settings. Uncertain
+interpretation never silently creates a durable row.
 
 ## ImageEntity
 
@@ -229,13 +274,17 @@ not trusted factual evidence.
 | `id` | stable versioned ID | Separate from assistant message/answer. |
 | `image_id` | stable image ID | Mandatory source identity. |
 | `source_message_ids` | ID list | Image turn plus extraction-triggering turn. |
-| `objects` | typed list | Multiple object identities and attributes. |
-| `extracted_text` | typed spans | Text plus object/spatial association and confidence. |
-| `numeric_values` | typed list | Values, units, prices, counts, associations, confidence. |
-| `spatial_relationships` | typed list | Relative positions/containment/adjacency. |
+| `summary` | short string | Required MVP scene/evidence summary. |
+| `objects` | typed list | Required MVP visible object identities/attributes. |
+| `extracted_text` | typed spans | Required MVP text with confidence and optional object association. |
+| `numeric_values` | typed list | Required MVP prices, dates, counts, serial-like values, units, confidence, optional object association. |
 | `uncertainty` | typed list/score | Evidence-level and field-level uncertainty. |
+| `status` | `complete \| partial \| failed \| stale` | Required; malformed/incomplete output is never silently complete. |
 | `source_revision` | revision | Image/evidence policy revision key. |
 | `created_at` / `updated_at` | timestamps | Required. |
+
+Spatial relationships and full scene-graph fields are optional later
+extensions. A text-only formatting retry cannot add new visual facts.
 
 ## VisionExecutionPlan
 

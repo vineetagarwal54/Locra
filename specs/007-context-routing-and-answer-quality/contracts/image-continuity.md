@@ -1,82 +1,103 @@
-# Contract: Image Continuity and Original-Pixel Reuse
+# Contract: Image Continuity and Authoritative Vision Execution
 
-> **Architecture revision (2026-07-28)**: The `VisionExecutionPlan` in the
-> validated `TurnPlan` is authoritative; this earlier policy is a migration
-> adapter and MUST NOT independently select an image or strategy.
+The validated `TurnPlan.vision` is the only authority for image identity and
+execution strategy. Legacy `ImageEvidencePolicy` may adapt planned decisions
+during migration but cannot select a target or strategy independently.
 
-**Module**: extended `src/inference/ImageEvidencePolicy.ts` + extended `src/inference/ContextOrchestrator.ts` | Consumers: `store/conversationStore.ts`, `InferenceService`
+## Image entity
 
-## ImageEvidencePolicy (extended, still pure)
+Every image has a stable ID, source message ID, asset revision/availability,
+sanitized local asset reference, evidence-version links, and timestamps.
+Availability is `available | missing | deleted | unsupported`. Canonical local
+pixels, derived structured evidence, and assistant prose are distinct sources.
+
+## Vision strategies
 
 ```ts
-export type ImageEvidenceAvailability =
-  | { readonly kind: 'use-original' }        // MUST trigger fresh vision inference (see below)
-  | { readonly kind: 'use-evidence' }
-  | { readonly kind: 'original-unavailable' }
-  | { readonly kind: 'evidence-unavailable' };
-
-export interface ImageEvidenceAvailabilityInput {
-  readonly assetAvailable: boolean;
-  readonly hasEvidence: boolean;
-  readonly pixelDependent: boolean; // NOW populated from RequestClassification.isPixelDependent
-}
-
-export function evaluateImageEvidenceAvailability(
-  input: ImageEvidenceAvailabilityInput,
-): ImageEvidenceAvailability; // unchanged logic; now actually called
+type VisionExecutionPlan =
+  | { readonly strategy: 'none' }
+  | { readonly strategy: 'reuse-evidence'; readonly imageIds: readonly [string] }
+  | { readonly strategy: 'inspect-original'; readonly imageIds: readonly [string] }
+  | { readonly strategy: 'inspect-and-structure'; readonly imageIds: readonly [string] }
+  | { readonly strategy: 'compare-evidence'; readonly imageIds: readonly string[] };
 ```
 
-- **MUST** be invoked by `ContextOrchestrator` for every request where `isNewImageQuestion || isSameImageFollowUp || isOlderImageReference || isPixelDependent` is true (spec FR-007). Today this function exists and is unit-tested but is never called from the orchestrator — this contract closes that gap.
-- **MUST NOT** change its existing decision logic; only its caller and the population of `pixelDependent` change.
-- Generic detail vocabulary alone never sets `pixelDependent`; a deterministic
-  visual anchor is required. Consequently, unrelated tuition/population/website
-  color/counting questions after an image turn do not query or select the stale
-  active image.
+- `none`: no image/evidence input.
+- `reuse-evidence`: use eligible structured evidence for one resolved image.
+- `inspect-original`: run resolved canonical pixels for this answer.
+- `inspect-and-structure`: inspect pixels and persist MVP evidence.
+- `compare-evidence`: preserve at least two ordered identities/evidence sets. If
+  one side is unavailable, identify that side; never substitute or merge it.
 
-## "Use original image" re-inference (new behavior)
+Pixel inspection and extraction use the existing single-flight
+`InferenceQueue`/`DeviceResourcePolicy`; no bypass or parallel vision path is
+allowed.
 
-When `evaluateImageEvidenceAvailability` returns `{ kind: 'use-original' }`:
+## Reference resolution
 
-- The orchestrator (or its caller in `InferenceService`) **MUST** issue a new vision-inference call on the correct original local image file through the existing single-flight `InferenceQueue`/`DeviceResourcePolicy`, running it through the same Qwen multimodal vision path (`llama.rn`) used for a brand-new image question — rather than reusing or relabeling the existing stored evidence text (spec FR-008). Selecting the image's asset ID alone, without this fresh inference call, never satisfies `use-original`.
-- The resulting fresh evidence **MUST** be persisted as a new, versioned evidence row via the existing `EvidenceRepository` (same versioning scheme as first-time evidence), linked to the current message and the same `image_asset_id` as the original evidence.
-- This re-inference **MUST** go through the same queueing/resource-policy path as any other inference — no priority bypass (spec edge case: "queues normally like any other inference request").
+- Explicit ordinals and deterministic identifiers may resolve directly.
+- Description, ledger, exact/lexical, and optional semantic evidence may resolve
+  only when one candidate is uniquely supported.
+- If two or more candidates remain materially plausible, resolution is
+  `unresolved-reference` with clarification required. Select no image and do not
+  present any candidate pixels/evidence as belonging to the requested image.
+- The active image may be selected only when the request semantically refers to
+  that active visual entity and no other candidate is materially plausible.
+- The legacy ambiguity-to-active resolution value is prohibited.
+- Missing/deleted assets are never silently substituted.
 
-## Older-image, ambiguous-reference, and missing-original resolution
+## Structured image-evidence MVP
 
-- `isOlderImageReference` (unambiguous case) resolves via `EvidenceRepository.resolveReferencedImageEvidence` (existing) using `RequestClassification.referencedImageId`; never falls back to the conversation's current/active image (spec FR-010, no silent substitution).
-- **Ambiguous reference (new, spec FR-012a)**: ambiguity begins with two or more plausible prior images. Explicit ordinals remain unambiguous. Descriptive references are resolved deterministically from the image-bearing prompt, associated assistant/later turns, and the newest compatible stored evidence; exactly one uniquely strongest match is required. Tied, weak, or missing matches remain ambiguous. An unresolved ambiguous reference defaults to `isSameImageFollowUp` against the active image, never calls `resolveReferencedImageEvidence` with a guessed ID, and records both the ambiguity and `imageReferenceResolution: 'ambiguous-active-fallback'`.
-- `original-unavailable` (pixel-dependent, asset missing) **MUST** surface as a response indicating the original is unavailable, not a guess from stale evidence (spec FR-011).
-- `evidence-unavailable` combined with non-pixel-dependent and no evidence is unchanged from Spec 006 (no evidence available at all).
+```ts
+interface StructuredImageEvidence {
+  readonly id: string;
+  readonly imageId: string;
+  readonly sourceMessageIds: readonly string[];
+  readonly summary: string;
+  readonly visibleObjects: readonly VisibleObject[];
+  readonly extractedText: readonly ExtractedTextSpan[];
+  readonly numericValues: readonly NumericEvidence[];
+  readonly uncertainty: EvidenceUncertainty;
+  readonly status: 'complete' | 'partial' | 'failed' | 'stale';
+  readonly sourceRevision: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+```
 
-## Revised first-class image and vision contract
+Numeric evidence supports prices, dates, counts, units, and serial-like values.
+Text/numeric evidence may optionally associate with an object ID. Full spatial
+relationships and scene-graph modeling are later extensions, not Wave B MVP.
 
-The authoritative strategies are `none`, `reuse-evidence`,
-`inspect-original`, `inspect-and-structure`, and `compare-evidence`.
+Malformed or incomplete structured output becomes `partial` or `failed`, never
+silently `complete`. Asset/evidence revision mismatch produces `stale`. Original
+pixel reinspection remains possible. A text-only formatting retry cannot claim
+new visual facts because it has no pixels.
 
-Every referenced image has a stable image entity, source-message provenance,
-asset revision/availability, and evidence links. Structured evidence supports
-multiple objects, attributes, extracted text, numbers, prices, counts,
-text/value-to-object associations, spatial relationships, uncertainty, and
-source image identity.
+## Continuity and reinspection
 
-- A normal direct-image answer MUST also persist reusable structured evidence or
-  retain a planned, guaranteed path to inspect the canonical pixels for a
-  follow-up.
-- Multiple images and evidence sets remain separately labeled; comparison never
-  merges identities or provenance.
-- Canonical pixels, structured evidence, and assistant prose are separate
-  sources. A refusal, false image-unavailable statement, or unsupported visual
-  claim is never authoritative on reinspection.
-- Ambiguous image references remain unresolved. The earlier
-  `ambiguous-active-fallback` decision is superseded and MUST NOT be used by the
-  new planner.
-- A required image with no available pixels/evidence yields explicit
-  asset-unavailable or clarification fallback, never silent text-only execution.
+- A normal image turn persists reusable MVP evidence or preserves an explicit
+  plan/asset path for later original-pixel inspection. A direct visible answer
+  cannot strand the image.
+- Pixel-dependent requests with available pixels use a fresh inspection; stored
+  evidence alone is insufficient.
+- When pixels are missing, a pixel-dependent request reports
+  `asset-unavailable`; sufficient non-stale evidence may answer only a
+  non-pixel-dependent request and must be represented as reused evidence.
+- Reinspection uses canonical pixels and eligible evidence. Prior assistant
+  refusal, false image-unavailable prose, and unsupported visual claims are
+  excluded as factual authority.
+- Evidence versions remain linked to one image. Active retrieval exposes the
+  newest compatible eligible version without merging image identities.
 
-## Invariants
+## Diagnostics and tests
 
-- A request classified as pixel-dependent with an available original asset always resolves to `use-original`, even if sufficient stored evidence already exists (spec FR-009) — evidence sufficiency does not override pixel-dependence.
-- A missing image is never silently substituted with a different image (spec FR-010) — unchanged Spec 006 guarantee, now enforced through the wired policy rather than only through evidence-repository behavior.
-- An ambiguous reference among two or more images never resolves to an arbitrarily chosen older image; the active-image fallback is allowed only when disclosed in diagnostics.
-- Re-inferred evidence remains versioned in storage, but active retrieval exposes only the newest row per `image_asset_id` and `evidence_version`, so repeated OCR/counting/price requests do not create unbounded duplicate retrieval candidates.
-- This contract applies identically whether the pixel-dependent request concerns the active image or an unambiguously referenced older image (spec User Story 7, Acceptance Scenario 3) — there is exactly one re-inference code path, not one per image classification.
+Every image turn records resolved/unresolved IDs, vision strategy, asset state,
+evidence status (`complete | partial | failed | stale`), and evidence action
+(`reused | freshly-inspected | freshly-structured | not-produced`).
+
+Focused tests cover active follow-ups, deterministic resolution, unresolved
+ambiguity, deleted assets with stale evidence, extraction failure, refusal
+exclusion, reinspection, and one-missing-side comparison. Physical validation
+covers fresh pixels, persistence, restart, reinspection, and multi-image
+separation.

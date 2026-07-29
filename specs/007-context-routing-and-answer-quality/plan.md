@@ -28,18 +28,18 @@ Extend Spec 006's `ContextOrchestrator` with a deterministic request-classificat
 - **New modules**: a request classifier (pure functions, no new dependency), a token-based budget policy (replacing `CharacterContextBudgetPolicy` as the router's measurement), a lexical/semantic fusion step inside `HybridRetriever`, a classification-aware generation-plan resolver that separates soft targets from hard safety limits, and (Phase 7 only) a cross-chat scope resolver plus one new SQL column and one new MMKV setting.
 - **Testing**: Jest + React Native Testing Library, tests-first for the five focus areas in spec Section 12 (routing, token-budget protection, image-reference selection, cross-chat isolation, semantic/lexical fallback+fusion), consistent with Constitution VI (TDD for inference-pipeline code).
 - **Target scale**: unchanged from Spec 006 (200+ conversations, hundreds of messages per conversation); cross-chat scope (Phase 7) additionally spans that same conversation set on one device.
-- **Performance**: routing/classification adds no additional model inference and must not measurably regress Spec 006's retrieval/assembly latency budget (<1.5s for the active chat); pixel-dependent re-inference (Phase 2) costs one additional vision-inference call, gated by the existing single-flight queue like any other inference.
+- **Performance**: tiers 1/2/4 must not measurably regress Spec 006's retrieval/assembly latency budget (<1.5s for the active chat). Tier 3 is a separately diagnosed optional planning operation: at most 96 output tokens and an 8-second execution timeout after its single-flight lease is acquired; queue wait is measured separately. Pixel inspection remains a separately measured inference operation.
 - **Offline**: no network use anywhere in this feature, matching Constitution I.
 - **Memory**: no new native dependency is introduced; iterative candidate ranking stays synchronous, while final verification uses a bounded format/tokenize/reduce/re-tokenize flow with an explicit pass cap on the inference context the request already needs (see `research.md` §1).
 
 ## Approved Architecture Decisions
 
-1. **Classification is a pure, deterministic function layer in front of `ContextOrchestrator`**, not a new orchestrator or a rewrite; it consumes the same `CanonicalConversationSnapshot` already passed in today.
-2. **The independent-question zero-context rule is enforced by classification gating, not by making every source "optional"** — an independent text question short-circuits source resolution entirely rather than resolving every source and then discarding results. Consequently, the recent-turn floor itself does not apply to a pure independent-question request — there is nothing to protect, not an empty protected floor (spec FR-004/FR-030, Superseded Requirements).
+1. **Historical baseline (superseded for new work):** classification was a pure deterministic layer in front of `ContextOrchestrator`. It remains only as legacy/shadow input after Wave A.
+2. **Historical baseline (absolute behavior superseded):** the completed independent-question path short-circuited every source. Wave A adds the bounded FR-086 recovery; authoritative planning later replaces this kill switch with field-level source requirements.
 3. **Token-budget measurement is two-tier and bounded**: a calibrated estimator drives synchronous selection; the actual formatted Qwen prompt is then tokenized natively. An over-limit result evicts eligible context and is formatted/tokenized again; if only system plus current input remains, the request is shortened from measured native excess while preserving its beginning, end, visible marker, and media path. A small explicit pass cap guarantees termination, and completion is never called without a final fitting measurement.
 4. **Lexical/semantic fusion uses Reciprocal Rank Fusion (RRF) plus an explicit exact-match guarantee**: deterministic token extraction retains first-position and multi-word proper names, numbers, prices, dates, and identifiers while filtering generic sentence-opening question/command words before the per-request limit (spec FR-014/FR-019a).
 5. **"Use original image" for a pixel-dependent request means issuing a new vision-inference call through the Qwen multimodal path** via the existing single-flight `InferenceQueue`/`DeviceResourcePolicy`, producing a new evidence row versioned like any other evidence write — never a routing label alone, and never satisfied by selecting an image ID or reusing stored evidence alone (spec FR-008).
-6. **An ambiguous image reference (two or more plausible candidate images, no uniquely strongest ordinal/description match) defaults to the current active image and records that fallback, never a guessed older image** — deterministic descriptive resolution may use locally stored evidence and associated turns before ambiguity is declared (spec FR-012a, `research.md` §8).
+6. **Superseded:** an unresolved ambiguous image reference no longer defaults to the active image. It selects no image/evidence and requires clarification. Active-image resolution is valid only when the active visual entity is semantically referenced and no other candidate is materially plausible.
 7. **Earlier loop stopping has one native owner**: `QwenLlamaRuntime` alone calls `stopCompletion()` for a confirmed loop and returns a completed `looping` result. Queue-level streaming does not issue a duplicate abort, and user cancellation is idempotent. Deterministic mocks validate ownership/state behavior; physical acceptance remains open under T034.
 - **Soft targets are not native ceilings**: classification may shorten the
    desired answer target, but ordinary visible prose and continuations retain the
@@ -47,8 +47,18 @@ Extend Spec 006's `ContextOrchestrator` with a deterministic request-classificat
    reserved for structurally bounded output, and runtime diagnostics report the
    exact effective native value.
 8. **Cross-chat exclusion is a new SQL column added through the existing ordered `Migrations.ts` runner** (bump `SCHEMA_VERSION` to 4), not a destructive reset — Spec 006's migration mechanism already supports this safely.
-9. **Semantic retrieval activation remains behind the pre-existing embedding-artifact approval gate**; this feature ships the fusion/classification/query-embedding wiring inert-but-ready, exactly as `EmbeddingService`/`EmbeddingBackfill` already ship today. No artifact in this feature asserts or assumes that approval has happened.
-10. **Classification precedes query embedding**: only eligible same-chat long-context or explicit cross-chat-memory retrieval may request a query vector. Independent questions and ordinary non-retrieval follow-ups perform no embedding work.
+9. **Embedding activation remains artifact-gated**, but the current revision does
+   not place planner authority behind that gate.
+10. **Historical sequencing superseded:** the first architecture ran
+     classification before query embedding. Wave D uses deterministic candidate/
+     scope construction and the plan; an independent label alone neither forces
+     nor forbids semantic scoring.
+
+**Lexical-only topic/entity resolution (clarification):** When embeddings are
+unavailable, authoritative planning may match active topics and entities using
+conversation-state ledger identities, canonical labels, known aliases, exact
+lexical matches, code identifiers, direct references, and active comparison
+state. This does not add semantic regex routing.
 11. **Cross-chat eligibility is independent of current-chat length**: when opted in, explicit memory-seeking/prior-conversation language can expand scope from a new or short chat; ordinary independent questions never do.
 12. **Grounding includes current inference evidence**: diagnostics assess selected context plus the current turn's fresh hidden visual evidence without mutating canonical context or changing the visible answer.
 
@@ -58,7 +68,7 @@ Extend Spec 006's `ContextOrchestrator` with a deterministic request-classificat
 |---|---|---|
 | I. Privacy-first (NON-NEGOTIABLE) | Pass | Classification, budgeting, fusion, and (Phase 7) cross-chat retrieval are all pure/local computations over on-device SQL data; no network call is introduced anywhere. |
 | II. Single-flight inference queue (NON-NEGOTIABLE) | Pass | Pixel-dependent re-inference (Phase 2) and any future grounding checks reuse the existing `InferenceQueue`/`DeviceResourcePolicy`; classification/budgeting/fusion run in plain JS with no model call. |
-| III. Graceful degradation | Pass | Classification defaults conservatively (ambiguous → follow-up, not independent; ambiguous image reference → current active image, not a guessed older one); retrieval fallback (fused → lexical-only → none, including on embedding-call failure) and missing-image handling are unchanged/extended, never a crash path. |
+| III. Graceful degradation | Pass | Ambiguous image references remain unresolved, uncertain durable-memory writes are not persisted, and retrieval falls back to fully supported lexical-only operation; no path crashes or silently removes an attachment/direct reference. |
 | IV. Memory safety on constrained hardware | Pass | No new native dependency; iterative ranking uses arithmetic estimation, while bounded tier-2 reconciliation reuses the request's native context and has an explicit maximum pass count. Pixel-dependent re-inference remains single-flight. |
 | V. Minimal, readable TypeScript | Pass | Classification and fusion are small pure functions layered onto existing interfaces (`HybridContextSources`, `ContextBudgetPolicy`); no new abstraction layer beyond what the spec requires. |
 | VI. TDD for core systems (NON-NEGOTIABLE) | Pass | Spec Section 12's five focus areas (routing, token-budget, image-reference, cross-chat isolation, fusion/fallback) get failing tests before implementation, per `tasks.md` (to be generated by `/speckit-tasks`). |
@@ -132,7 +142,7 @@ These values are fixed here and in `data-model.md`/`research.md`, pinned by test
 - **RRF constant `k`**: `60`, a standard default; revisit only via recorded evaluation, same governance as the cosine threshold.
 - **Schema version**: Phase 7 bumps `SCHEMA_VERSION` from `3` to `4` for the `excluded_from_cross_chat` column.
 
-## Implementation Phases
+## Historical Implementation Phases 0–9 (completed baseline; superseded for new work)
 
 Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` phases once `/speckit-tasks` runs.
 
@@ -150,13 +160,18 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
 ### Phase 2 — Image identity, reference resolution, and original-pixel follow-ups
 
 - Wire `ImageEvidencePolicy.evaluateImageEvidenceAvailability` into `ContextOrchestrator` for every image-related classification.
-- Implement pixel-dependent detection (extends the existing `VISUAL_REFERENCE_PATTERN`-style regex approach) and the actual re-inference trigger: a pixel-dependent request with an available original asset issues a new vision-inference call through the Qwen path via the existing single-flight queue, producing a new versioned evidence row (spec FR-008/FR-009).
-- Implement deterministic ordinal/descriptive resolution across two or more images; tied, weak, or missing matches default to the active image without guessing and record that resolution in diagnostics (spec FR-012a, `research.md` §8).
+- Historical implementation used regex-led pixel signals and a direct Qwen
+  reinspection path. Wave B replaces semantic ownership with `TurnPlan`.
+- Historical implementation mapped tied/weak/missing image matches to the active
+  image. That behavior is superseded: Wave B leaves them unresolved and requests
+  clarification with no selected image/evidence.
 - Preserve existing older-image resolution and missing-original handling (spec FR-010–FR-012); extend, don't replace.
 
 ### Phase 3 — Minimal-context request routing
 
-- Switch `ContextOrchestrator` from "always assemble" to classification-gated selection: independent text questions short-circuit to current-request-only (no recent-turn floor to protect, since none is owed); follow-ups, image classifications, and long-context-retrieval requests resolve only the sources their classification requires (spec FR-001–FR-006).
+- Historical implementation switched to a current-request-only independent hard
+  skip. Wave A adds bounded exact/direct recovery; Wave E replaces the classifier
+  gate with field-level plan requirements.
 - Diagnostics added in Phase 1 now reflect actual (not merely observed) selection.
 
 ### Phase 4 — Model-aware token budgeting
@@ -201,10 +216,10 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
 ## Architecture Revision Decisions (authoritative)
 
 1. **One validated `TurnPlan` is the sole semantic authority.** It contains
-   intent, modality, dependency, references, active topics/entities, memory
-   operations, retrieval scope, vision strategy, context requirements,
-   generation requirements, confidence, and fallback. Downstream modules
-   execute it and report capability/asset outcomes without reclassification.
+   the Wave A MVP fields defined in `unified-turn-planning.md`. Topic/entity and
+   fine-grained ranking enrichment may arrive later without introducing another
+   plan. Downstream modules execute it and report capability/asset outcomes
+   without reclassification.
 2. **Planning is tiered, not regex-primary.** Deterministic application state is
    evaluated first; semantic topic/entity/retrieval signals second; constrained
    structured-model fallback only for ambiguity; deterministic validation last.
@@ -213,14 +228,17 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
    switch.** Irrelevant material is still excluded, but uncertainty in one field
    cannot erase an attached image, explicit reference, explicit memory write, or
    independently relevant retrieval source.
+   Before authority transfer, a bounded exact/direct recovery protects those
+   sources from the completed legacy hard skip.
 4. **A derived conversation-state ledger supports natural dependencies.** It
    tracks topics, entities, comparisons, images, artifacts, unresolved
    references, decisions, and explicit memories while canonical messages remain
    authoritative in SQLite.
 5. **Memory is layered and provenance bearing.** Explicit user memories are
    immediately readable; episodic units, summaries, facts, image evidence, and
-   optional cross-chat memory retain source IDs/revisions and distinct
-   reliability.
+   optional cross-chat memory retain source IDs/revisions and ordinal
+   reliability. General message editing is not introduced; revisions cover
+   lifecycle/status/version invalidation.
 6. **Typed retrieval units replace message-only retrieval assumptions.** User
    messages, completed answers, code blocks, memories, facts, decisions,
    summaries, and image evidence share stable provenance/revision metadata.
@@ -228,7 +246,8 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
    `EmbeddingProvider` boundary owns descriptors, query/document policies,
    readiness, cancellation, normalization, source revisions, and versioned
    index migration. The production dimension is selected only after benchmarking
-   at least 256 and 512.
+   at least 256 and 512. Planner authority does not depend on approval or index
+   readiness; lexical-only is a supported authoritative runtime mode.
 8. **Hybrid retrieval is multi-signal and always preserves lexical exactness.**
    Semantic, lexical, entity, provenance, reliability, scope, and recency signals
    rank eligible units. Semantic retrieval is not gated solely by an
@@ -240,14 +259,27 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
 10. **Vision execution is planned once.** Strategies are no vision, reuse
     evidence, inspect original, inspect plus structured extraction, or compare
     multiple evidence sets. Image pixels, structured evidence, and assistant
-    prose are separate sources; refusals never become image authority.
+    prose are separate sources; refusals never become image authority. The MVP
+    evidence shape is summary/objects/text/numeric values/optional associations/
+    uncertainty/status; spatial scene graphs are deferred.
 11. **Context assembly is provider-aware and provenance preserving.** It protects
     current input and required images/references, ranks and deduplicates eligible
     sources, preserves generation headroom, and verifies the final prompt using
     the active provider's native tokenizer.
 12. **Authority moves only after shadow evidence.** Legacy and proposed plans are
-    compared through diagnostics and golden fixtures until controlled activation;
-    semantic regex authority is removed only after the new planner is proven.
+    compared through diagnostics and golden fixtures until controlled activation.
+    Shadow never changes execution; controlled mode gives named classes wholly to
+    the new planner; authoritative mode bypasses legacy semantics. No turn mixes
+    authorities, and semantic regex authority is removed only after proof.
+13. **Tier 3 fills only unresolved fields.** Its deterministic invocation gate,
+    constrained candidate IDs, bounded schema/rationale codes, `0.80` acceptance
+    threshold, 96-token/8-second budgets, cancellation/suspension handling, and
+    conservative fallback are fixed by contract. Golden scenarios never invoke
+    it.
+14. **Ledger publication is synchronous with turn completion.** Canonical turn
+    persistence precedes validated derivation; the ledger is updated/rebuilt and
+    published before the next turn can plan. Versioned caches rebuild safely on
+    cold start.
 
 ## Revised Contract Map
 
@@ -286,77 +318,100 @@ contracts/
 - **Queue boundary**: enforces single flight and executes planned operations; it
   never selects a different modality or image strategy.
 
-## Revised Rollout Phases
+## Revised Rollout Waves
 
-The legacy Phases 0–9 above document implemented work and retain their historical
-task states. New implementation proceeds in these incremental phases:
+The legacy Phases 0–9 above remain historical. Remaining Spec 007 work ships in
+five independently gated waves; exact tasks are in `tasks.md`.
 
-### Phase 10 — Specification and typed contracts
+### Wave A — Single authority foundation
 
-Validate the revised data model and contracts against existing repository
-boundaries. No production behavior changes.
+- **Entry**: corrected typed contracts and a captured legacy diagnostic baseline.
+- **Deliver**: `TurnPlan` MVP, validator, Tier-3 unresolved-field contract,
+  `shadow | controlled | authoritative` semantics, sanitized diagnostics, golden
+  deterministic fixtures, and the temporary independent-routing recovery.
+- **Feature gates**: shadow diagnostics and recovery are independently disabled
+  by default; controlled classes use an explicit allowlist.
+- **Exit**: every fixture validates, protected exact/direct sources survive a
+  false independent label, all goldens prove Tier 3 was not invoked, and mocked
+  Tier-3 failures take deterministic fallback.
+- **Rollback**: disable gates and execute the complete legacy turn.
+- **Tests/device**: focused plan/validator/mode/recovery/Tier-3 contract tests;
+  physical cancellation, app-suspension, timeout, lease-release, and next-turn
+  readiness before controlled Tier-3 use.
 
-### Phase 11 — Shadow turn planning
+### Wave B — Vision continuity
 
-Generate validated `TurnPlan` records beside the current routing decision. The
-legacy path remains authoritative.
+- **Entry**: Wave A validator plus a named image-class controlled gate.
+- **Deliver**: for each explicitly enabled image scenario class, the validated
+  `TurnPlan` controls the complete turn: reference resolution, image selection,
+  context-source selection, context assembly, vision strategy,
+  generation-task projection, and inference execution. Legacy semantic routing
+  is bypassed for that entire turn. Also deliver first-class image entities, MVP
+  structured evidence/status, persistence, active-image follow-ups,
+  reinspection, comparison, and refusal-contamination prevention.
+- **Feature gate**: only the named image turn classes move as complete turns.
+- **Exit**: image goldens and extraction/missing-asset failures pass with separate
+  IDs/provenance and no unresolved reference selecting an image; a controlled
+  image-turn test proves zero legacy semantic decisions. This does not migrate
+  global context assembly for non-enabled classes; that remains Wave E.
+- **Rollback**: disable the image class and execute the complete legacy turn.
+- **Tests/device**: focused reference, strategy, status, persistence, refusal, and
+  multi-image tests; physical pixel reinspection/comparison/persistence checks.
 
-### Phase 12 — Planner diagnostics and golden scenarios
+### Wave C — Ledger and explicit memory
 
-Persist sanitized plan comparisons, field confidence, signal provenance,
-validation changes, and material deltas. Add automated golden fixtures for text
-dependency, explicit memory, image continuity/reinspection/comparison, retrieval
-negatives, provider switching, and embedding migration.
+- **Entry**: Wave A plan/provenance contracts and canonical turn-completion hooks.
+- **Deliver**: versioned ledger/cache rebuild, next-turn publication ordering,
+  active topics/entities/comparisons/images/code, immediate explicit memories,
+  conservative read/write detection, correction/supersession, ordinal
+  reliability, and lifecycle invalidation.
+- **Feature gates**: ledger reads and durable writes are separate.
+- **Exit**: the next turn sees the last completed turn, cold start rebuilds, false
+  writes remain absent, and exact recall works without compaction/embeddings.
+- **Rollback**: disable derived reads/writes; canonical data remains intact and
+  supports later rebuild.
+- **Tests/device**: focused transition, restart, corruption, correction,
+  provenance/reliability, deletion/retry/regeneration tests; physical immediate
+  recall and restart validation.
 
-### Phase 13 — Image execution under the new plan
+### Wave D — EmbeddingGemma and semantic retrieval
 
-Make the vision executor consume shadow/controlled plans, represent every image
-as an entity, guarantee reusable structured evidence or canonical pixel
-availability, and exclude refusal prose from reinspection authority.
+- **Entry**: typed retrieval units and the provider/index contract. Wave E does
+  not depend on this entry or exit.
+- **Deliver**: artifact/runtime approval, 256/512 benchmark, provider adapter,
+  restart-safe indexing, shadow ranking, controlled same-chat activation,
+  separately gated cross-chat semantics, and version migration.
+- **Feature gates**: provider readiness, same-chat semantics, and cross-chat
+  semantics are independent.
+- **Exit**: quality/device gates pass and lexical fallback succeeds through
+  building, pause, failure, staleness, process death, and migration.
+- **Rollback**: deactivate the new index/provider atomically and continue
+  lexical-only; retire the prior index later.
+- **Tests/device**: focused descriptor, vector compatibility, backfill,
+  cancellation, atomic activation, deletion, scope, and fallback tests; physical
+  quality/memory/latency/battery/pause/restart/offline validation.
 
-### Phase 14 — Conversation-state ledger
+### Wave E — Authority transfer and cleanup
 
-Derive and persist active topics/entities/comparisons/images/artifacts,
-unresolved references, and decisions with source revisions.
+- **Entry**: Waves A–C exit and authority-transfer evidence. Wave D may be
+  unavailable, building, active, or complete.
+- **Deliver**: global authoritative ownership, complete legacy semantic bypass,
+  obsolete semantic-regex removal, final diagnostics/physical validation, then
+  rollback-gate removal.
+- **Feature gates**: global authority first; rollback removal only after final
+  physical acceptance.
+- **Exit**: all supported turns have exactly one new `planOwner`; goldens and
+  regressions pass in lexical-only mode and, if approved, semantic mode.
+- **Rollback**: until final acceptance, return the whole turn to legacy. Mixed
+  legacy/new execution is prohibited.
+- **Tests/device**: focused owner/bypass/provider-substitution/lexical-only tests;
+  complete airplane-mode, missing-asset, cancellation, restart, device-resource,
+  Spec 006/007, and representative 6–8GB physical matrix.
 
-### Phase 15 — Immediate explicit memory writes
-
-Persist explicit memory units synchronously with the source message and make
-them directly/lexically readable before summaries or embeddings exist.
-
-### Phase 16 — EmbeddingGemma indexing
-
-Approve the artifact/runtime, benchmark at least 256 and 512 dimensions,
-implement the provider boundary and restart-safe versioned background indexing,
-and preserve lexical fallback.
-
-### Phase 17 — Shadow semantic retrieval
-
-Compute semantic candidates and multi-signal ranks for diagnostics while the
-legacy/lexical selection remains authoritative.
-
-### Phase 18 — Controlled semantic-retrieval activation
-
-Enable semantic ranking by feature gate for validated scopes/devices, with
-instant lexical fallback and index rollback.
-
-### Phase 19 — New planner becomes authoritative
-
-After golden and physical thresholds pass, execute the validated `TurnPlan` for
-context, memory, retrieval, vision, generation, queue dispatch, and recovery.
-Retain an emergency rollback window to the legacy path.
-
-### Phase 20 — Remove obsolete semantic regex routing
-
-Delete or reduce legacy semantic classifiers to deterministic syntax parsing;
-remove duplicate semantic decisions from downstream modules only after Phase 19
-is stable.
-
-### Phase 21 — Final physical-device validation
-
-Run the complete golden matrix, airplane-mode checks, memory/index migrations,
-provider substitution, cancellation, resource contention, missing assets, and
-Spec 006/007 regressions on representative 6–8GB devices.
+Dependency graph: `A → B → E` and `A → C → E`; `A → D` is independent of
+`B/C → E`. Wave D may activate before or after authority transfer. No task may
+simultaneously change planning, vision, memory, retrieval, generation, queue,
+and grounding.
 
 ## Revised Constitution Check
 
@@ -394,9 +449,18 @@ Spec 006/007 regressions on representative 6–8GB devices.
   capability descriptor.
 - The legacy plan allows the queue/runtime and generation planner to own semantic
   decisions separately. They now execute the validated plan.
-- Historical task text reports 53 of 59 tasks but duplicates task ID T056; this
-  revision continues numbering at T059 without altering either historical
-  checkbox.
+- The prior sequential rollout placed EmbeddingGemma before planner authority.
+  Wave E now depends on Waves A–C, not Wave D; lexical-only authority is required
+  acceptance coverage.
+- The constrained planner was previously open-ended. Its partial-output schema,
+  deterministic gate/post-processing, budgets, confidence threshold, resource
+  policy, cancellation/suspension behavior, and fallback are now binding.
+- `sourceRevision` previously implied possible general message edits. Spec 007
+  now limits invalidation to creation/deletion/conversation deletion, attempts,
+  supersession, evidence reinference, version changes, and rebuilds.
+- The later duplicate historical `T056` is corrected to `T111` without changing
+  either completed state; remaining work retains T059–T110 and continues after
+  T111.
 
 ## Complexity Tracking
 

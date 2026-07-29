@@ -101,9 +101,9 @@ A user asks a question with no genuine reference to anything earlier — no pron
 
 **Acceptance Scenarios**
 
-1. Given a conversation with prior unrelated turns, durable facts, a rolling summary, and an unrelated attached image, when the user asks a question classified as an independent text question, then the router includes none of the following: prior turns, the rolling summary, durable facts, retrieved items, or image evidence — only the current request enters context.
+1. Given a conversation with prior unrelated turns, durable facts, a rolling summary, and an unrelated attached image, when the user asks a self-contained question, then the validated plan selects no irrelevant prior source. An incorrect legacy independent classification cannot suppress an exact explicit-memory match, exact same-chat lexical match, directly referenced entity, attached image, explicit image reference, explicit user fact, or active comparison target.
 2. Given the same conversation, if the question instead contains a genuine reference to prior context (e.g., "and what about the second one", "does that still apply"), it is classified as a text follow-up, not an independent question, and may receive recent turns.
-3. The exported diagnostics for an independent-question turn show zero non-current-request sources even considered, not merely zero selected.
+3. Diagnostics distinguish eligible/considered sources from selected sources. Irrelevant sources are not selected, while the bounded independent-routing recovery in FR-086 may consider protected exact/direct candidates before planner authority transfers.
 
 ---
 
@@ -161,7 +161,7 @@ A user has attached multiple images across a conversation and asks about an earl
 1. Given two or more images in one conversation, when the user unambiguously references an earlier image (by an ordinal, description, or other disambiguating detail), then the request is classified as an older-image reference and the router resolves evidence/original for that specific image, never a different one.
 2. Given the referenced image's original file is missing but its evidence still exists, when the follow-up is not pixel-dependent, then stored evidence answers the question and the response does not claim to have re-inspected the original.
 3. Given the referenced image's original file is missing and the follow-up is also classified as pixel-dependent, then the response reports the original as unavailable rather than answering from stale evidence.
-4. Given two or more images exist and the reference could plausibly mean more than one of them with no uniquely strongest ordinal or descriptive match, then the router treats the request as a same-image follow-up against the conversation's current active image rather than guessing, and diagnostics record that the reference was ambiguous and how it was resolved.
+4. Given two or more images exist and the reference could plausibly mean more than one of them with no uniquely strongest deterministic or semantically supported match, then the reference remains `unresolved-reference` and execution requests clarification. No image, pixels, or stored evidence is presented as belonging to the requested image until resolution succeeds.
 
 ---
 
@@ -223,7 +223,7 @@ A user receives an answer that would otherwise loop, run long, or pad unnecessar
 - The cross-chat setting is toggled mid-conversation: the change applies starting with the very next request, not retroactively to context already assembled for an in-flight generation.
 - A conversation is marked excluded from cross-chat while cross-chat is globally enabled: it behaves as fully isolated in both directions (neither contributing to nor receiving cross-chat content).
 - An image is deleted (and its evidence removed per Spec 006 lifecycle rules) after a follow-up references it: the router treats it as unavailable, matching existing missing-file handling — never substituting a different image.
-- An image reference is genuinely ambiguous among two or more prior images after deterministic ordinal/descriptive matching finds no uniquely strongest result: the router resolves to the current active image and records the fallback, never an arbitrarily chosen older image (Story 6, Section 5).
+- An image reference is genuinely ambiguous among two or more prior images after candidate construction finds no uniquely supported result: the planner records `unresolved-reference` and requires clarification. It does not select an image, pixels, or evidence. The active image is selected only when the request semantically refers to that active visual entity and no other candidate is materially plausible.
 - A pixel-dependent request arrives while the single-flight inference queue is busy: it queues normally like any other inference request; it receives no special priority.
 - Fusing lexical and semantic candidates produces overlapping results for the same source message: the router dedupes by source message, keeping the higher-ranked fused result; an exact match on a number, price, date, or identifier is never dropped by fusion (Section 6).
 - A voice transcript is garbled or ambiguous: the router treats it as ordinary text; no confidence signal changes routing in this feature (see Open Questions).
@@ -239,27 +239,30 @@ A user receives an answer that would otherwise loop, run long, or pad unnecessar
   - **independent text question** — no genuine reference to prior turns, facts, summaries, or images;
   - **text follow-up** — a genuine reference to the immediately preceding exchange or nearby recent turns;
   - **new image question** — the current message itself carries a newly attached image;
-  - **same-image follow-up** — refers to the conversation's current/active image without attaching a new one (including an ambiguous older-image reference resolved per FR-012a);
+  - **same-image follow-up** — refers to the conversation's current/active image without attaching a new one, with no material ambiguity among multiple image candidates;
   - **older-image reference** — unambiguously references an earlier, non-active image;
   - **pixel-dependent visual request** — OCR/text-reading, counting, price-reading, label-reading, or other detailed-visual-inspection language; may combine with any image classification above;
   - **long-context retrieval request** — the conversation exceeds the response mode's recent-turn floor and the question plausibly concerns earlier content;
   - **cross-chat-eligible request** — the cross-chat setting is enabled, the current conversation is not excluded, and the request is otherwise eligible for expanded scope (Section 7).
 
   A single request MAY carry more than one applicable classification at once (e.g., an older-image reference that is also pixel-dependent); the source-selection rules in Sections 5–8 key off the full applicable combination, not a single exclusive label.
-- **FR-003**: A request classified as an independent text question MUST receive no prior turns, no rolling-summary content, no durable facts, no retrieved items (same-chat or cross-chat), and no image evidence — only the current request enters context — unless the request also carries another classification (e.g., it is simultaneously a new image question) that independently requires one of those sources.
-- **FR-004**: For any request classified as a text follow-up, long-context retrieval request, or any image classification, the current request and applicable recent exact turns (up to the response mode's floor) MUST always take priority over every retrieved or summarized source; recent exact turns are never displaced by retrieval. A request classified purely as an independent text question has no recent-turn floor at all — FR-003 already reduces recent turns to zero for that request, so there is no floor to protect or to reduce (see FR-030 and Superseded Requirements).
+- **FR-003 (HISTORICAL; absolute behavior superseded by FR-061 and FR-086)**: The completed first architecture gave a pure independent classification only the current request. That absolute hard skip MUST NOT remain authoritative: before unified-planner authority, the bounded recovery in FR-086 protects exact/direct sources; afterward, each `TurnPlan` field independently determines eligibility. Irrelevant context still MUST NOT be selected.
+- **FR-004 (HISTORICAL; independent-turn clause superseded by FR-086)**: Current request and applicable required recent turns retain priority over retrieved or summarized sources. The former rule that a pure independent classification has no opportunity to recover any prior source is superseded; required exact/direct candidates survive through FR-086 and later through the authoritative `TurnPlan`.
 - **FR-005**: Retrieval (lexical, semantic, or cross-chat) MUST be added to context only when at least one candidate meets the existing relevance threshold (lexical overlap greater than zero, or cosine similarity at or above `COSINE_SIMILARITY_THRESHOLD`); the router MUST NOT inject filler content when no candidate qualifies.
-- **FR-006**: Router source-selection decisions MUST be deterministic — identical stored state, request text, response mode, cross-chat setting, and embedding version MUST produce identical classification, source selection, and ordering.
+- **FR-006 (clarified)**: Application-state evaluation, ledger evaluation, exact/lexical retrieval, candidate construction and ordering, plan validation, safe fallback, context ranking, and post-processing MUST be deterministic for identical versioned inputs. A constrained model result is not required to be byte-for-byte deterministic; its invocation gate, schema validation, bounded-enum interpretation, and post-processing MUST be deterministic (FR-091–FR-093).
 
 ## 5. Image-Reference Requirements
 
 - **FR-007**: The router MUST invoke image-evidence-availability resolution (extending `ImageEvidencePolicy.evaluateImageEvidenceAvailability`, which exists today but is not called from `ContextOrchestrator`) for every request carrying a new-image, same-image, older-image, or pixel-dependent classification, rather than leaving that decision unused.
 - **FR-008**: "Use the original image" MUST mean the correct original local image file is passed through the Qwen multimodal vision path (via the existing `llama.rn` inference pipeline) again, producing fresh visual evidence for the current request. Selecting an image's ID, or reusing previously stored evidence text without re-running vision inference, is never sufficient to satisfy a pixel-dependent request.
 - **FR-009**: A request classified as pixel-dependent MUST trigger the original-image re-inference behavior in FR-008 when the original asset is available, even when sufficient stored evidence already exists.
-- **FR-010**: A follow-up question MUST resolve to the correct image — the active/current image by default for a same-image follow-up, or the specific image identified by an unambiguous older-image reference — and MUST NOT silently substitute a different image.
+- **FR-010**: A follow-up MUST resolve to the correct image: the active image
+  only for an unambiguous semantic reference to the active visual entity, or the
+  specific uniquely resolved older image. It MUST NOT silently substitute a
+  different image.
 - **FR-011**: When the required original image is unavailable and the request is pixel-dependent, the router MUST cause the response to report the original as unavailable rather than answering from stale evidence or a substituted image.
 - **FR-012**: When the required image is unavailable and the request is not pixel-dependent, stored evidence MAY answer the question if it is sufficient, consistent with existing Spec 006 evidence-reuse behavior.
-- **FR-012a**: When an image reference could plausibly mean more than one prior image and the request contains no disambiguating detail (an ordinal, a description, or similar), the router MUST NOT guess among the older images. It MUST resolve the request as a same-image follow-up against the conversation's current active image, and diagnostics MUST record that the reference was ambiguous and how it was resolved (FR-037). This is the only case in which an "older-image reference" classification is deliberately not applied despite reference language being present.
+- **FR-012a (SUPERSEDED at this original requirement location)**: The earlier requirement mapped unresolved image ambiguity to the active image. That behavior is prohibited. An ambiguous reference with multiple materially plausible candidates MUST produce `unresolved-reference` with `clarificationRequired: true`, MUST select no image, and MUST present no original pixels or stored evidence as belonging to the requested image until resolution succeeds. Selecting the active image is valid only when the request semantically refers to the active visual entity and is not ambiguous between multiple candidates (see FR-049 and FR-087).
 
 ## 6. Semantic and Hybrid Retrieval Requirements
 
@@ -294,7 +297,7 @@ Cross-chat retrieval remains in scope for this feature but is delivered as a lat
 - **FR-027**: The router's token-budget accounting and the existing downstream hard trim against the real Qwen context window MUST be reconciled into one consistent measurement, so the router never selects a source set that the downstream trim would still need to silently cut.
 - **FR-028**: The current request text and any explicitly referenced or active image evidence MUST be protected within the token budget and MUST NOT be evicted to make room for any retrieved, summarized, or cross-chat source.
 - **FR-029**: The existing per-response-mode budget tiers (Low/Medium/High) MUST continue to bound router output, re-expressed in token terms rather than characters; cross-chat retrieval MUST share the same mode-scoped retrieval limit rather than adding a separate, unbounded allowance.
-- **FR-030**: When assembled context would exceed the token budget, the router MUST evict lower-priority sources first in this order: cross-chat retrieved items, then same-chat retrieved items, then durable facts, then older-range summary entries, then — only for a request that has a recent-turn floor to begin with (i.e., not a pure independent text question, per FR-004) — the recent-turn floor itself. The current request and protected image evidence (FR-028) are never evicted under any circumstance. A pure independent text question has no recent-turn floor and therefore nothing in this eviction chain beyond "current request only" ever applies to it.
+- **FR-030 (independent-turn clause superseded by FR-086)**: When assembled context exceeds budget, evict optional sources in this order: cross-chat retrieved items, same-chat retrieved items, durable facts, older-range summaries, then optional recent turns. The current request, attached/explicitly referenced images, direct references, and other `TurnPlan.requiredContextSources` are never evicted. The former “pure independent means current request only” absolute is superseded; exact/direct recovery candidates remain independently eligible.
 
 ## 9. Answer-Quality Requirements
 
@@ -310,7 +313,12 @@ Cross-chat retrieval remains in scope for this feature but is delivered as a lat
 
 Routing diagnostics are the first phase of this feature (Phase 1, Section 14): they MUST be added before router behavior changes, so the team can observe what the router would decide alongside what today's fixed-assembly pipeline actually does, before switching behavior.
 
-- **FR-037**: Turn diagnostics (`ContextSelectionDiagnostics` / `DiagnosticsBundleBuilder`) MUST record: the full set of applicable request classifications (Section 4), which of the eight sources were considered versus selected, the retrieval mode actually used (fused hybrid / lexical-fallback / none) and the reason, the image-evidence decision (use-original-via-reinference / use-evidence / original-unavailable / evidence-unavailable) plus whether the request was judged pixel-dependent, whether an image reference was ambiguous and how it was resolved (FR-012a), and whether cross-chat scope was active (once Phase 7 ships).
+- **FR-037 (extended)**: Turn diagnostics MUST record authority mode, exact plan
+  owner/ID/version, legacy classification when applicable, eligible/considered/
+  selected sources, retrieval mode/reason, vision strategy/evidence status,
+  resolved or `unresolved-reference` image candidates, cross-chat scope, and
+  constrained-planner gate/invocation/latency/result/fallback. No ambiguity
+  resolution may identify an image unless unique resolution succeeded.
 - **FR-038**: Diagnostics export MUST continue to sanitize local paths, exclude images by default, and disclose included conversation content exactly as today, extended to cover any cross-chat conversation identifiers introduced once Section 7 ships.
 - **FR-039**: Diagnostics MUST remain exportable from persistence repositories rather than bounded UI caches, so router decisions for evicted or older turns stay inspectable after the fact, consistent with existing beta diagnostics behavior.
 - **FR-040**: If and when the optional grounding/hallucination assessment (FR-036) is added, its verdict MUST appear in per-turn diagnostics alongside the existing truncated/looping verdict; until then, diagnostics MAY omit this field entirely without being considered incomplete.
@@ -326,7 +334,10 @@ Manual conversation scenarios in the app, cross-checked against exported diagnos
 - **MV-005**: Same-image general follow-up — a non-pixel-dependent follow-up about the active image reuses stored evidence (no reprocessing); a follow-up with no visual language does not re-attach evidence at all.
 - **MV-006**: Same-image OCR/count/price follow-up — a pixel-dependent follow-up about the active image causes the original image to be re-run through the Qwen vision path (visible as a fresh evidence record tied to a new inference in diagnostics), not answered from the old evidence text, when the original is still available.
 - **MV-007**: Older-image reference — with two or more images in one chat, an unambiguous reference to an earlier one resolves to that specific image in the answer and diagnostics, never a different one.
-- **MV-008**: Ambiguous image reference — with two or more plausible images and no uniquely strongest match, the router does not guess; it resolves as a same-image follow-up against the active image, and diagnostics record the ambiguity and its resolution.
+- **MV-008**: Ambiguous image reference — with two or more plausible images and
+  no uniquely supported match, diagnostics record `unresolved-reference`/
+  clarification, select no image/evidence, and make no target-specific visual
+  claim until resolution succeeds.
 - **MV-009**: Missing original image — a pixel-dependent question about an image whose original file is gone reports the original as unavailable; a non-pixel-dependent question about the same missing-original image may still be answered from sufficient stored evidence.
 - **MV-010**: Unrelated question after an image — asking an unrelated, independent question immediately after an image turn produces no image evidence in that answer or its diagnostics.
 - **MV-011**: Repetition and overly long output — a loop-prone prompt/fixture stops noticeably earlier than the hard limit and is still cleaned up; an independent short-answer question does not receive a padded, mode-length answer; a genuinely detailed question is not artificially shortened.
@@ -342,8 +353,8 @@ Manual conversation scenarios in the app, cross-checked against exported diagnos
 
 Automated tests are required only for small, deterministic, high-risk logic. Coverage is focused on exactly these five areas — no others:
 
-- **Request routing**: classification into the eight categories (including combinations and the ambiguous-reference default), the independent-question zero-context rule, and deterministic repeatability of source selection given identical input/state/mode/embedding-version.
-- **Image-reference and missing-image selection**: use-original-via-reinference vs. use-evidence vs. original-unavailable vs. evidence-unavailable, across available/missing asset and pixel-dependent/not-pixel-dependent combinations, the ambiguous-reference default (FR-012a), and that "use original" actually triggers a fresh vision-inference call rather than a label-only decision.
+- **Request routing**: legacy classification combinations, the bounded independent-routing recovery, authority-mode ownership, and deterministic repeatability of tiers 1/2 candidate construction and tier-4 validation.
+- **Image-reference and missing-image selection**: use-original-via-reinference vs. use-evidence vs. original-unavailable vs. evidence-unavailable, across available/missing asset and pixel-dependent/not-pixel-dependent combinations, `unresolved-reference`/clarification behavior (FR-012a), and that "use original" actually triggers a fresh vision-inference call rather than a label-only decision.
 - **Token-budget protection and eviction**: current request and active/referenced image evidence are never evicted; the reserved-capacity buckets (FR-026a) are respected; eviction order (cross-chat → same-chat retrieved → durable facts → summary entries → recent-turn floor where one exists) is enforced; the token-based measurement stays consistent with the downstream hard trim.
 - **Lexical/semantic fusion and fallback**: fallback to lexical-only when embeddings are missing/stale/incompatible/still building/failing; correct fusion and deduplication when both lexical and semantic candidates are available, including that fusion never drops an exact match on a name, number, price, date, or identifier (FR-019a).
 - **Cross-chat isolation**: off-by-default with zero leakage and zero cross-chat queries while disabled, per-conversation exclusion enforced in both directions, and immediate effect when the global setting or an exclusion flag is toggled.
@@ -363,10 +374,14 @@ All of the above are validated through manual conversation scenarios and exporte
 ## 13. Open Questions
 
 - Exact token-budget numbers per response mode (Low/Medium/High) and per reserved bucket (FR-026a), now that measurement moves from characters to tokens, need recalibration against the existing evaluation harness (`src/evaluation`) rather than being fixed in this spec.
-- The precise set of words/patterns that count as a "genuine reference to prior context" for the independent-question-vs-follow-up boundary is deferred to planning; the policy itself (ambiguous cases default conservatively to follow-up) is decided (Section 3 edge cases).
+- The former open question about a definitive semantic regex vocabulary is
+  closed by FR-043–FR-047: patterns may construct deterministic candidates but
+  are not the primary semantic authority.
 - Whether task-sensitive output limits (FR-032) should be a small fixed set of tiers or a continuous function of classification plus mode is deferred to planning.
 - Whether the optional grounding/hallucination assessment (Phase 8), if ever built, should surface any visible signal to the user, or remain diagnostics-only indefinitely, is still open — and is explicitly not a blocking question for this feature's core delivery.
-- The production embedding artifact's own approval (model identity, license, hash, dimensions, latency, memory, device-compatibility verification) remains a separate, still-pending gate that this spec does not resolve; Section 6's semantic-retrieval requirements activate once that approval lands.
+- EmbeddingGemma is the first provider to evaluate, but its artifact/runtime,
+  dimensions, latency, memory, and device approval remain pending. This gate
+  controls semantic activation only, not planner authority.
 
 ## 14. Implementation Phasing (Non-Binding Sequencing)
 
@@ -388,7 +403,7 @@ This section states exactly where this feature overrides prior behavior establis
 
 - **Character-based context budgeting** (Spec 006 `CharacterContextBudgetPolicy`, `contextBudgetUnits` in raw characters) is superseded by token-aware budgeting with reserved capacity buckets (Section 8). The `ContextBudgetPolicy` interface itself is reused, not replaced.
 - **The assumption that a visual follow-up can always be answered from stored evidence text** is superseded for pixel-dependent requests (Section 5): those now require the original image to be re-run through the Qwen vision path, not answered from evidence alone. Non-pixel-dependent follow-ups continue to reuse evidence exactly as Spec 006 intended.
-- **An unconditional recent-turn floor applied to every request** is superseded: a request classified purely as an independent text question has no recent-turn floor to protect (FR-003, FR-004, FR-030). The floor remains fully protected, exactly as before, for every other classification.
+- **An unconditional recent-turn floor applied to every request** remains superseded. Required recent context is now a plan field; the independent label alone neither forces recent context nor prevents FR-086 exact/direct recovery.
 - **Evidence-only handling for pixel-dependent visual questions** (where existing evidence, once present, was treated as sufficient regardless of question type) is superseded by the pixel-dependent re-inference requirement (Section 5) — evidence sufficiency no longer overrides a pixel-dependent classification.
 - **The removed selected-past-chat behavior** (Spec 006 Phase 13's full removal of the per-message alternate-conversation picker) remains removed and is not reintroduced. This feature's cross-chat mechanism (Section 7) is a distinct, later-phase, global-opt-in-with-exclusion design — it supersedes only the *absence* of any cross-chat path, not the decision to remove the old picker UX, which stands.
 - **Fixed, non-tunable generation/post-processing behavior** (Spec 006's requirement that `AnswerPostProcessor` and generation parameters stay exactly as shipped) is superseded: targeted, runtime-verified improvements are now permitted (Section 9) — but only as improvements to the same safety net, not a redesign of it.
@@ -404,7 +419,7 @@ This feature is an incremental extension of Spec 006, not a rewrite. The followi
 - Summaries and durable facts, including their fixed compaction triggers and isolated-Qwen-request generation.
 - Per-conversation Low/Medium/High response modes, including their existing model and generation-limit contract (Section 9 only adds a classification-aware layer on top).
 - App-wide single-flight inference (`InferenceQueue`/`DeviceResourcePolicy`); this feature adds no second queue and no concurrent inference path.
-- Qwen3-VL running through `llama.rn` as the sole inference runtime.
+- Qwen3-VL running through `llama.rn` as the unchanged current main inference provider; application architecture depends on the model-independent provider boundary in FR-069–FR-072.
 - Offline voice transcription (whisper.rn, record-then-transcribe, gated behind `VOICE_INPUT_ENABLED`).
 - Local-only, zero-network privacy for every stage of capture, preprocessing, inference, retrieval, and persistence (Constitution I).
 - Existing History, diagnostics export, model download/verification, generation cancellation, and interrupted-answer recovery flows.
@@ -414,7 +429,7 @@ This feature is an incremental extension of Spec 006, not a rewrite. The followi
 
 - **Context Router / Routing Decision**: the per-request decision of which of the eight sources to include, extending `ContextOrchestrator`.
 - **Request Classification**: one or more of independent text question / text follow-up / new image question / same-image follow-up / older-image reference / pixel-dependent visual request / long-context retrieval request / cross-chat-eligible request, computed from deterministic signals; combinable, not mutually exclusive.
-- **Image-Reference Resolution**: the specific image (or "current active image" default, for an ambiguous reference) an image-related request resolves to, plus an ambiguity flag (FR-012a).
+- **Image-Reference Resolution**: either a uniquely supported image identity or an explicit `unresolved-reference`/clarification result. The active image is not an ambiguity fallback (FR-012a).
 - **Retrieval Candidate / Retrieved Item**: existing entities (`RetrievalCandidate`, `RetrievedItem`), now fused across lexical and semantic sources with an exact-match guarantee, and, once Phase 7 ships, scoped across non-excluded chats.
 - **Image-Evidence Decision**: use-original-via-reinference / use-evidence / original-unavailable / evidence-unavailable, plus a pixel-dependent flag, produced by the extended `ImageEvidencePolicy`; "use-original" always means a fresh Qwen vision-inference call on the original file.
 - **Token Budget**: the router's context-selection accounting, measured in model tokens (or a calibrated token-equivalent estimate) with five reserved capacity buckets (system instructions, current input, image input, selected context, generated output), reconciled with the existing hard Qwen context-window trim.
@@ -427,12 +442,12 @@ This feature is an incremental extension of Spec 006, not a rewrite. The followi
 
 - The router is an extension of `ContextOrchestrator`, not a replacement; existing budget-policy, evidence-repository, retriever, and fact/summary source interfaces are reused (`HybridContextSources`).
 - Token-budget measurement prefers a native tokenizer call through the existing llama.rn/Qwen runtime binding where it can be used safely (confirmed available as `tokenize()`; see `research.md`), and otherwise falls back to a calibrated token-estimate heuristic with safety headroom — the exact mix is a planning-time decision, verified against current llama.rn capabilities before implementation (Constitution IX).
-- Independent-vs-follow-up classification relies on deterministic lexical/pattern signals (pronouns, continuation phrases, their absence); ambiguous cases default conservatively to follow-up to avoid breaking a legitimate continuation.
+- Deterministic lexical/pattern signals remain candidate inputs and syntax parsers, not the primary semantic authority. Ambiguous dependency is handled by ledger/retrieval evidence and, only when its deterministic gate permits, the constrained planning tier.
 - Fusion of lexical and semantic retrieval combines both signal types into one ranked list, with an explicit exact-match guarantee for names/numbers/prices/dates/identifiers, rather than letting semantic scoring override or hide a precise match.
 - Semantic retrieval activation stays behind the pre-existing embedding-artifact approval gate; this feature closes the "component exists but is never wired at query time" gap and adds fusion, but does not itself approve or select the embedding model, and no part of this feature assumes that approval has already happened.
 - Cross-chat memory is a single global opt-in setting plus a per-conversation exclusion flag (not a per-message picker), matching the simplest, least-leaky design and deliberately avoiding the picker UX removed in Spec 006 Phase 13; it is explicitly sequenced after routing, image continuity, token budgeting, and same-chat semantic retrieval are stable (Phase 7).
 - The grounding/hallucination assessment is explicitly deferred, optional, and diagnostics-only (Phase 8); nothing in Phases 1–7 depends on it, it never rewrites or suppresses an answer, and it remains a deterministic heuristic over already-available evidence/retrieved text rather than an additional model-inference pass.
-- Request classification uses existing deterministic signals (message text patterns, attachment presence, explicit references, conversation length, settings state) — no new on-device classifier model is introduced by this feature.
+- Planning uses deterministic application/ledger/exact signals first and may use a constrained structured call through the existing main provider only for the bounded ambiguous tail defined in FR-091–FR-093; ordinary turns do not incur this call.
 - Voice-transcribed text is treated identically to typed text once it reaches the router; transcription confidence/quality is out of scope.
 - All routing, retrieval, and (if built) grounding logic runs entirely on-device with zero network calls, consistent with the project's non-negotiable privacy architecture.
 - This feature builds on and does not regress any Spec 006 functional requirement or success criterion; where this spec is silent, Spec 006's behavior stands (see Preserved Foundations).
@@ -448,11 +463,12 @@ instruction to continue adding regex patches.
 
 - **FR-041**: Every submitted, continued, retried, or regenerated turn MUST
   produce exactly one validated structured planning result, named `TurnPlan` in
-  this specification. It represents user intent; text, image, or multimodal
-  modality; conversation dependency; resolved and unresolved references; active
-  entities and topics; memory reads and writes; retrieval scope; vision
-  execution; required context sources; generation requirements; confidence; and
-  safe fallback behavior.
+  this specification. Wave A MVP fields are authority mode, turn intent,
+  modality, conversation dependency, resolved/unresolved references, required
+  context sources, memory read/write requirements, vision strategy, generation
+  task kind, confidence, and safe fallback. Active topic/entity detail,
+  fine-grained retrieval scoring hints, and output-format enrichment are optional
+  later fields and MUST NOT create another authority.
 - **FR-042**: Request classification, context orchestration, generation
   planning, vision execution, `InferenceQueue`, refusal recovery, and grounding
   assessment MUST execute the validated `TurnPlan` and MUST NOT independently
@@ -464,12 +480,21 @@ instruction to continue adding regex patches.
 - **FR-044**: Deterministic state includes current attachments, available prior
   assets, active conversation, continue/retry/regenerate action, settings,
   feature gates, and provider/artifact readiness.
-- **FR-045**: Semantic signals include embedding similarity, active-topic and
-  entity similarity, eligible retrieval evidence, ledger state, and recent
-  dependency state. No one signal is authoritative by itself.
-- **FR-046**: Constrained model fallback MUST return validated structured
-  planning output, MAY initially use the current Qwen provider, MUST run only for
-  ambiguous requests, and MUST NOT be required for every turn.
+- **FR-045**: Semantic signals include active-topic/entity similarity, eligible
+  exact and lexical evidence, ledger state, and recent dependency state.
+  Embedding similarity is additive when an approved provider/index is ready; it
+  is never required for planner authority or safe operation. No one signal is
+  authoritative by itself.
+- **FR-045a**: In the supported lexical-only authoritative mode, active-topic and
+  active-entity matching MAY use conversation-state ledger identities, canonical
+  labels, known aliases, exact lexical matches, code identifiers, direct
+  references, and active comparison state. This mode MUST NOT introduce new
+  semantic regex routing; embeddings add semantic similarity only when available.
+- **FR-046**: Constrained model fallback returns only unresolved planning fields
+  under FR-091–FR-093; it never recreates the complete plan. The current Qwen
+  provider MAY initially supply this capability, but ordinary independent
+  questions, clear image turns, explicit memory reads/writes, retry, regenerate,
+  and continuation MUST NOT invoke it.
 - **FR-047**: Regex MAY parse deterministic syntax such as identifiers,
   explicit ordinals, file paths, dates, code identifiers, and structured output.
   Regex MUST NOT remain the primary authority for semantic intent,
@@ -481,8 +506,10 @@ instruction to continue adding regex patches.
   uncertain intent/dependency decision.
 - **FR-049**: A plan requiring image pixels MUST NOT silently fall back to
   text-only generation. A plan with multiple plausible image targets MUST keep
-  the reference unresolved and request clarification or use only evidence valid
-  for all candidates; it MUST NOT guess or silently default to the active image.
+  the reference unresolved, select no image, and request clarification. No
+  pixels or stored evidence may be represented as belonging to the requested
+  image until resolution succeeds. It MUST NOT guess or silently default to the
+  active image.
 
 The full shape and invariants are defined in
 [`contracts/unified-turn-planning.md`](./contracts/unified-turn-planning.md).
@@ -494,8 +521,12 @@ The full shape and invariants are defined in
   comparison targets, active image entities, referenced code/documents,
   unresolved references, recent explicit decisions, and explicit memory writes.
 - **FR-051**: The ledger MUST NOT replace canonical SQLite messages. Every
-  derived entry retains source-message provenance and source revision and is
-  invalidated or rebuilt when its source changes, is superseded, or is deleted.
+  derived entry retains source-message provenance and `sourceRevision`, defined
+  here as a content/status/version hash rather than a general editing API.
+  Invalidation/rebuild covers creation, deletion, conversation deletion, retry,
+  regeneration, superseded assistant attempts, evidence reinference,
+  model/index-version changes, and derived-record rebuilds. General
+  source-message editing is out of scope.
 - **FR-052**: The memory architecture MUST distinguish immediate working
   memory, the conversation-state ledger, explicit durable memories, episodic
   retrieval units, segment summaries, structured image evidence, and optional
@@ -507,10 +538,14 @@ The full shape and invariants are defined in
 - **FR-054**: Compaction and segment summarization MUST support ordinary short
   and medium conversations through bounded segment policies; they MUST NOT be
   the activation mechanism for explicit memory.
-- **FR-055**: User-stated facts, user decisions, structured image evidence,
-  completed assistant answers, and low-trust assistant attempts MUST have
-  distinct reliability classes. Assistant-generated claims MUST NOT
-  automatically become durable facts.
+- **FR-055**: Reliability is ordinal, from highest to lowest: direct user-stated
+  fact/explicit decision; confirmed structured evidence from source pixels;
+  deterministically extracted exact content with provenance; confirmed durable
+  derived fact; completed grounded assistant answer; ordinary assistant answer;
+  uncertain assistant answer; refusal-like/failed/interrupted/cancelled/
+  superseded attempt. Higher reliability may break relevance ties; low
+  reliability cannot override an exact higher-reliability fact. Semantic
+  similarity alone cannot promote an assistant claim into a durable fact.
 - **FR-056**: Failed, cancelled, interrupted, refusal-like, superseded, or
   unsupported assistant attempts MUST NOT rank as trusted factual evidence or
   become authoritative image evidence.
@@ -597,15 +632,16 @@ See
 - **FR-074**: Every image MUST be a first-class image entity with stable
   identity, source-message provenance, asset URI/availability state, content
   revision, and evidence links.
-- **FR-075**: Structured image evidence MUST support multiple objects, object
-  attributes, extracted text, numeric values, price-to-object and text-to-object
-  associations, counts, spatial relationships, uncertainty, and source image
-  identity.
-- **FR-076**: A normal image turn MUST leave reusable structured evidence even
-  when its visible answer used a direct-image path. If full extraction is
-  deferred for latency, the plan records pending evidence work and guarantees
-  that a follow-up can inspect the original asset rather than relying on
-  assistant prose.
+- **FR-075**: Wave B structured image evidence MVP MUST contain image identity
+  and source message, a short summary, visible objects, extracted text, numeric
+  values (including prices, dates, counts, and serial-like values), optional
+  text/value-to-object associations, uncertainty, and status
+  (`complete | partial | failed | stale`). Spatial relationships and a full
+  scene graph are optional later extensions, not MVP acceptance requirements.
+- **FR-076**: A normal image turn MUST attempt and persist the Wave B evidence
+  record even when its visible answer used a direct-image path. Partial/failed
+  extraction is persisted truthfully, and canonical pixel availability remains
+  the follow-up path; assistant prose is never the only reusable visual source.
 - **FR-077**: Canonical image pixels, derived structured evidence, and prior
   assistant prose are distinct sources. Previous refusals, image-unavailable
   claims, or unsupported visual prose MUST NOT be treated as authoritative
@@ -613,6 +649,11 @@ See
 - **FR-078**: Multi-image comparisons MUST preserve separate image identities,
   evidence sets, provenance, and uncertainties through context assembly and
   generation.
+- **FR-078a**: Malformed or incomplete extraction becomes `partial` or `failed`,
+  never silently `complete`. Original-pixel reinspection remains possible. A
+  text-only formatting retry cannot claim new visual facts without pixels.
+  Diagnostics record complete/partial/failed/stale status and whether evidence
+  was reused or freshly inspected.
 
 The extended contract is
 [`contracts/image-continuity.md`](./contracts/image-continuity.md).
@@ -648,6 +689,110 @@ The extended contract is
   and persistence remain on-device and zero-network. Model and embedding work
   obey the single-flight resource policy and degrade without crashes.
 
+### 15.9 Architectural-review corrections
+
+- **FR-086 — Early independent-routing recovery**: Before unified-planner
+  authority, a narrow recovery step MUST run before the completed legacy
+  independent-question hard skip. It protects exact explicit-memory matches,
+  exact same-chat lexical matches, directly referenced entities, attached
+  images, explicit image references, explicit user facts, and active comparison
+  targets. It does not broadly infer intent, add semantic regexes, or select
+  merely related context. It is a temporary blast-radius reduction removed when
+  the new planner becomes authoritative.
+- **FR-087 — Authority modes**:
+  - In `shadow`, legacy routing executes the complete turn. The new planner is
+    diagnostics-only and changes no visible behavior, context/image selection,
+    memory write, or inference execution. It MUST NOT insert a live Tier-3 call
+    into the shadow turn; it records `wouldInvoke` for separate validation.
+  - In `controlled`, only explicitly named scenario classes or feature-gated
+    turn types use the validated new plan for the entire turn. For a controlled
+    image-related class, that complete turn includes reference resolution,
+    image selection, context-source selection, context assembly, vision
+    strategy, generation-task projection, and inference execution. Legacy
+    semantic routing is bypassed for the entire turn and remains available only
+    as a full-turn rollback. Wave B tests MUST prove a controlled image turn
+    makes zero legacy semantic decisions.
+  - In `authoritative`, the new planner controls every supported turn and legacy
+    semantic routing is not consulted. Legacy code may remain temporarily behind
+    a full-turn rollback gate until physical validation passes.
+- **FR-088 — One turn, one authority**: No single turn may be executed by two
+  semantic authorities. A turn MUST NOT combine new-planner vision with legacy
+  context, generation, memory, retrieval, refusal-recovery, queue, or grounding
+  decisions. Every diagnostic record includes `authorityMode` and exact
+  `planOwner`.
+- **FR-089 — Planner authority without embeddings**: Authority transfer MUST
+  be possible with deterministic application state, ledger state, recent
+  dependency context, exact/lexical retrieval, explicit memories, deterministic
+  reference resolution, and validated constrained fallback when permitted.
+  EmbeddingGemma approval, indexing, or semantic activation is not an entry
+  condition. Lexical-only is a fully supported runtime mode; cross-chat semantic
+  activation remains separately gated.
+- **FR-090 — Embedding migration operation**: Migration builds a new versioned
+  index while lexical fallback remains available, validates the new index,
+  atomically activates it, and retires the previous index later. Compatibility
+  keys remain provider/model ID, artifact hash, dimensions, prompt-policy
+  version, normalization, and source revision.
+- **FR-091 — Constrained-planner input and output**: Tier 3 receives a
+  deterministically ordered set of candidate reference IDs and only the
+  unresolved field requests. Its validated output contains: the candidate IDs
+  received; selected IDs or unresolved status; intent clarification when
+  requested; memory-read versus memory-write interpretation; requested context
+  scope; confidence in `[0,1]`; bounded rationale codes; and
+  `clarificationRequired`. It cannot add an ID it was not given or replace
+  already resolved fields. Initial rationale codes are
+  `reference-language-match`, `candidate-description-match`,
+  `recent-dependency-match`, `ledger-entity-match`, `memory-command-semantics`,
+  `memory-question-semantics`, `context-scope-language`, and
+  `insufficient-evidence`.
+- **FR-092 — Constrained-planner gate and resource policy**: Tier 3 MAY run only
+  when deterministic state, ledger state, exact/lexical evidence, and
+  deterministic reference resolution leave at least two materially plausible
+  interpretations whose difference would change an image target, memory
+  operation, context scope, or answer task. It MUST NOT run for ordinary
+  independent questions, clear image turns, explicit memory writes, explicit
+  memory recalls, retry, regenerate, or continuation. It runs serially before
+  answer generation under the existing single-flight device-resource policy,
+  supports cancellation and app suspension, uses at most 96 generated tokens,
+  and has an 8-second execution timeout after acquiring its resource lease.
+  Queue wait and Tier-3 execution latency are diagnosed separately from normal
+  context-assembly latency.
+- **FR-093 — Constrained-planner fallback and testing**: Output is accepted only
+  after deterministic schema/candidate validation and confidence at or above the
+  versioned initial threshold `0.80`. Unavailable, cancelled, suspended,
+  timed-out, malformed, or lower-confidence results use a conservative
+  deterministic fallback: preserve attachments, direct references, exact
+  memory candidates, and current input; keep ambiguous image references
+  unresolved and request clarification; never create an uncertain durable
+  memory; and use lexical-only context when safe. Golden scenarios MUST resolve
+  without Tier 3 and assert it was not invoked. Separate bounded contract tests
+  use mocked structured outputs for cancellation, timeout, malformed output,
+  candidate injection, and low confidence.
+- **FR-094 — Explicit-memory interpretation**: Memory writes are detected from
+  explicit user command/action semantics, structured planner output,
+  deterministic validation, user-stated factual content, and current memory
+  scope settings—not primarily from open-ended regex. “Remember my rent is
+  $1,689”, “Save my unit as 3427-014”, and “My move-in date is August 10;
+  remember it” are writes. “Do you remember my rent?” and “Remember when we
+  discussed graphs?” are reads. “I remember that algorithm” is neither an
+  automatic read nor write. An uncertain write MUST NOT silently create durable
+  memory; it remains conversation-scoped or requests clarification. A confirmed
+  correction supersedes the prior memory while retaining both source
+  provenances and making only the newest eligible value active.
+- **FR-095 — Ledger ordering and restart**: For each completed turn the system
+  MUST (1) persist the completed canonical turn, (2) derive validated execution
+  results, (3) update or rebuild the ledger, and (4) publish that ledger before
+  planning the next turn. The next turn MUST NOT see state one completed turn
+  behind. Persisted ledger state is a versioned cache; missing, incompatible,
+  stale, or corrupt state is rebuilt from canonical messages and persisted
+  structured records. Corruption cannot alter canonical history. Deletion,
+  retry, regeneration, superseded attempts, and evidence reinference invalidate
+  affected derived entries before the next plan.
+- **FR-096 — Cross-chat exclusions and explicit memories**: A durable memory
+  created in a conversation remains immediately available inside that source
+  conversation. If that conversation is excluded from cross-chat, neither the
+  source message nor its derived memory may contribute to another conversation,
+  and the excluded conversation cannot receive cross-chat sources.
+
 ## 16. Revised Golden Validation Scenarios
 
 - **GV-001 Text dependency**: Provide recursive and iterative code; ask which is
@@ -677,25 +822,124 @@ The extended contract is
 - **GV-008 Embedding migration**: Change embedding provider, version, or
   dimensions. Lexical fallback remains available while the new versioned index
   builds; canonical messages and memories remain untouched.
+- **GV-009 Memory-write negatives**: “Do you remember my rent?” and “Remember
+  when we discussed graphs?” are reads; “I remember that algorithm” is neither.
+  None creates a durable write. A user correction supersedes the prior memory
+  with both source provenances retained.
 
-## 17. Revised Rollout Sequence
+GV-001 through GV-009 MUST resolve without invoking Tier 3, and automated golden
+tests MUST assert `constrainedPlannerInvoked === false`.
 
-1. Specification and typed contracts.
-2. Shadow `TurnPlan` generation.
-3. Planner diagnostics and golden scenarios.
-4. Image execution under the new plan.
-5. Conversation-state ledger.
-6. Immediate explicit memory writes.
-7. EmbeddingGemma indexing through `EmbeddingProvider`.
-8. Shadow semantic retrieval.
-9. Controlled semantic-retrieval activation.
-10. New planner becomes authoritative.
-11. Obsolete semantic regex routing and duplicate semantic authority are removed.
-12. Final physical-device validation.
+Wave A golden tests use deterministic fixtures with injected or mocked state:
+ledger state, active entities, image-reference candidates, explicit-memory
+candidates, and lexical retrieval candidates. They assert the expected
+`TurnPlan`, fallback, authority mode, and `constrainedPlannerInvoked === false`.
+They do not claim end-to-end vision execution, ledger persistence,
+explicit-memory persistence, or semantic-retrieval execution; those behaviors
+are validated by Waves B, C, and D respectively.
 
-Each stage has a separately testable checkpoint and rollback to the prior
-authoritative behavior until Stage 10. Stages 2–9 do not silently replace the
-legacy path.
+### Mandatory failure and lifecycle scenarios
+
+- The immediately following turn sees the just-completed ledger update; an
+  existing conversation is never treated as a first turn merely because its
+  ledger cache is missing.
+- Cold start rebuilds a missing/stale ledger; corrupt ledger data does not alter
+  canonical messages.
+- Tier 3 cancellation, timeout, malformed output, low confidence, app
+  suspension, and candidate-ID injection all take the FR-093 fallback.
+- Process death during background indexing resumes from persisted progress while
+  lexical retrieval remains available.
+- Structured image extraction failure records partial/failed evidence and
+  retains original-pixel reinspection.
+- A comparison with one missing image identifies that side; a deleted asset with
+  retained evidence is marked stale and is not represented as freshly inspected.
+- Fresh pixel inspection excludes a previous assistant refusal as factual
+  evidence.
+- An exact lexical match recovers an explicit memory/fact when legacy routing
+  incorrectly labels the turn independent.
+- A source conversation excluded after creating a user memory cannot contribute
+  that memory to cross-chat retrieval.
+
+## 17. Revised Rollout Waves
+
+### Wave A — Single authority foundation
+
+Entry: corrected contracts and current legacy diagnostics baseline. Deliver:
+`TurnPlan` MVP/validator, precise authority modes, shadow diagnostics, bounded
+independent-routing recovery, Tier-3 contract, and deterministic golden
+scenarios using injected/mocked ledger, entity, image-candidate,
+explicit-memory, and lexical-retrieval state. Wave A asserts plans, fallbacks,
+authority modes, and no Tier-3 invocation; it does not claim end-to-end vision,
+ledger persistence, explicit-memory persistence, or semantic retrieval. Gate:
+planner/authority gates default off. Exit: every supported fixture yields a valid
+shadow plan; recovery protects all FR-086 sources; golden tests prove no Tier-3
+call. Rollback: disable recovery/shadow gates and execute the complete legacy
+turn. Focused tests cover plan schema/validation, modes, recovery, Tier-3 mocked
+failures, and one-turn-one-authority. Physical validation is required for
+Tier-3 cancellation/suspension/resource release before any controlled Tier-3
+use.
+
+### Wave B — Vision continuity
+
+Entry: Wave A validator and controlled-mode whole-turn ownership for named image
+classes. For each enabled image class, the validated plan owns reference
+resolution, image selection, context-source selection, context assembly, vision
+strategy, generation-task projection, and inference execution. Legacy semantic
+routing is bypassed for the entire turn; the no-single-turn/two-authorities
+invariant remains mandatory. Deliver image entities, all five vision strategies,
+MVP structured evidence, persistence, follow-ups, reinspection, comparison, and
+refusal exclusion. Gate: named image scenario classes only. Exit: image
+golden/failure scenarios pass with separate identities and evidence status, and
+the controlled-image authority test observes zero legacy semantic decisions.
+Rollback: disable the image class gate and execute the complete legacy turn.
+Focused tests cover whole-turn ownership, reference resolution, extraction
+status, missing assets, refusal exclusion, and multi-image separation. Physical
+device validation is required for fresh-pixel inspection, persistence,
+reinspection, and comparison.
+
+### Wave C — Ledger and explicit memory
+
+Entry: Wave A plan/provenance contracts and canonical persistence hooks. Deliver
+the versioned ledger, immediate memory writes, conservative detection, recall,
+reliability, cold-start rebuild, ordering, deletion, retry/regeneration, and
+supersession. Gates: ledger-read and durable-memory-write gates are separate.
+Exit: the next turn sees the completed ledger update; memory goldens and false
+write negatives pass without compaction/embeddings. Rollback: disable ledger
+reads/writes and rebuild later from canonical data; canonical messages are never
+rolled back. Focused tests cover transitions, restart, corrections, provenance,
+reliability, and invalidation. Physical validation covers restart and immediate
+next-turn behavior.
+
+### Wave D — EmbeddingGemma and semantic retrieval
+
+Entry: typed retrieval units and provider-independent embedding contract; it
+does not require or block Wave E. Deliver artifact approval, provider adapter,
+256/512 benchmark, versioned index/backfill, shadow semantic ranking, controlled
+activation, and migration. Gates: provider, same-chat semantic, and cross-chat
+semantic gates are independent. Exit: approved device evidence and quality gates
+pass; lexical fallback passes every lifecycle state. Rollback: atomically
+deactivate the new index/provider and continue lexical-only. Focused tests cover
+descriptor compatibility, cancellation, stale vectors, restart-safe backfill,
+atomic activation, and scope. Physical validation covers memory/latency/battery,
+process death, pause for visible inference, and offline operation.
+
+### Wave E — Authority transfer and cleanup
+
+Entry: Waves A–C exit criteria and authority-transfer evidence; Wave D is
+optional and may be unavailable, building, active, or completed. Deliver
+authoritative mode, legacy bypass, semantic-regex removal, final diagnostics,
+physical validation, then rollback-gate removal. Gates: global authority gate,
+then rollback-removal gate. Exit: all supported turns have one new plan owner;
+goldens/regressions pass in lexical-only mode and, if approved, semantic mode.
+Rollback: until final physical acceptance, switch the whole turn back to legacy;
+never mix paths. Focused tests cover authority ownership, provider substitution,
+lexical-only operation, and absence of duplicate semantic decisions. Physical
+validation is mandatory before disabling and later removing the rollback gate.
+
+Wave D may occur before or after Wave E authority transfer. Embedding approval is
+never on the critical path to planner authority. No wave contains a task that
+simultaneously changes planning, vision, memory, retrieval, generation, queue,
+and grounding.
 
 ## 18. Superseded Spec 007 Decisions
 
@@ -729,9 +973,10 @@ The following earlier Spec 007 decisions are explicitly superseded:
 
 ## 19. Success Criteria
 
-- **SC-001**: All eight golden scenarios produce the expected plan, selected
+- **SC-001**: All nine golden scenarios produce the expected plan, selected
   context, provenance, and fallback results in automated contract fixtures; no
-  scenario depends on final-answer wording.
+  scenario depends on final-answer wording and every fixture asserts Tier 3 was
+  not invoked.
 - **SC-002**: In the golden corpus, 100% of explicitly attached images and
   explicit memory writes survive unrelated low-confidence planner fields.
 - **SC-003**: No ambiguous multi-image reference is silently mapped to an image
@@ -748,6 +993,13 @@ The following earlier Spec 007 decisions are explicitly superseded:
 - **SC-008**: Final physical-device validation completes in airplane mode with
   zero inference-path network calls and no crash across planner failure, missing
   assets, embedding failure, cancellation, and provider-capability mismatch.
+- **SC-009**: Planner authority transfer passes all authority/golden fixtures
+  with the embedding provider unavailable and lexical-only retrieval active.
+- **SC-010**: Every executed turn records one `authorityMode` and one
+  `planOwner`; no fixture observes mixed legacy/new semantic ownership.
+- **SC-011**: Tier-3 contract tests prove the deterministic gate, 96-token/8s
+  budgets, cancellation/suspension handling, schema rejection, confidence
+  threshold, candidate confinement, and conservative fallback.
 
 ## 20. Open Implementation Questions
 
@@ -756,15 +1008,23 @@ The following earlier Spec 007 decisions are explicitly superseded:
   requirements?
 - Which of at least 256 and 512 dimensions provides the best measured
   quality/resource tradeoff for Locra's golden retrieval corpus?
-- What constrained structured-planning schema and confidence calibration should
-  the current Qwen provider use for genuinely ambiguous turns?
 - What bounded segment policy triggers early conversation summaries without
   duplicating or delaying explicit durable memory?
 - Which structured image-evidence extraction policy balances first-turn latency
   against guaranteed follow-up reuse on 6–8GB devices?
-- How are canonical source edits represented in the current immutable-message
-  model: superseding revision, deletion only, or a future explicit edit feature?
 - What thresholds combine semantic, entity, provenance, reliability, scope, and
   recency signals before controlled semantic retrieval becomes authoritative?
 - What evidence threshold is sufficient to move from shadow planning to the new
   authoritative planner, and what rollback window is required afterward?
+
+### Closed by this revision
+
+- Tier-3 minimum schema, invocation gate, resource/generation/latency budgets,
+  confidence threshold, and conservative failure behavior are defined in
+  FR-091–FR-093. Model-output calibration may be benchmarked without changing the
+  contract.
+- Arbitrary canonical source-message editing is not part of Spec 007.
+  `sourceRevision` and invalidation cover the lifecycle events listed in FR-051.
+- Initial numeric hybrid-ranking weights remain a benchmark task; the ordinal
+  reliability and exact-fact precedence rules in FR-055 are mandatory before
+  calibration.

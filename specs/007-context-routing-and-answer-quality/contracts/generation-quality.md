@@ -20,7 +20,8 @@ interface GenerationPlan {
 }
 ```
 
-- Classification changes the soft target for normal visible prose.
+- `TurnPlan.generationTaskKind` plus the user-selected response mode projects the
+  soft target; generation code does not reclassify task shape.
 - Normal factual answers, explanations, follow-ups, comparisons, image
   descriptions, unbounded visual extraction, long synthesis, and continuations
   retain the response-mode hard safety maximum: Low 320, Medium 640, High 1024.

@@ -7,11 +7,18 @@ description: "Task list for Context Routing and Answer Quality"
 **Input**: Design documents from `specs/007-context-routing-and-answer-quality/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md
 
-**Tests**: INCLUDED but intentionally focused, per spec Section 12: only the five named high-risk areas (request routing, image-reference and missing-image selection, token-budget protection and eviction, lexical/semantic fusion and fallback, cross-chat isolation) get failing-test-first coverage (Constitution VI). Generation-quality work (Phase 5) and the optional grounding heuristic (Phase 8) are explicitly **not** in that list — they are implemented and validated manually/via the evaluation harness, not via new required unit tests (spec Section 12 exclusions). No tests are added anywhere for exact answer wording, OCR/counting accuracy, tone, visual correctness, or general response quality.
+**Tests**: Historical Phases 1–9 preserve their original focused-test policy.
+Waves A–E add failing-test-first coverage for new planning, authority, recovery,
+vision evidence, ledger/memory, embedding lifecycle, retrieval, and migration
+contracts. Tests do not assert exact answer wording, OCR/counting accuracy, tone,
+or general response quality.
 
-**Organization**: Grouped by the 10 user stories from spec.md; phase numbers match `plan.md`'s Implementation Phases and spec Section 14's canonical 9-phase sequencing exactly (Setup precedes Phase 1 and is not itself numbered in that list).
+**Organization**: Completed/historical work remains in Phases 1–9. All remaining
+architecture work is grouped into independently shippable Waves A–E.
 
-**Gates**: Phase 6 (same-chat semantic/hybrid retrieval) is **⛔ GATED** behind the pre-existing embedding-artifact approval (model identity, license, hash, dimensions, latency, memory, device compatibility) established in Spec 006 — the same gate that already blocks `EmbeddingService`/`EmbeddingBackfill` today. Gated tasks ship code that remains inert (lexical-fallback only) until that approval lands.
+**Gates**: Embedding work remains artifact-gated, but planner authority is not.
+Wave E must pass in lexical-only mode. Same-chat and cross-chat semantic
+activation have separate gates.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -41,7 +48,7 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 **⚠️ CRITICAL**: No later phase may begin until this phase is complete.
 
 - [X] T004 [P] Add the `RequestClassification` type (including `imageReferenceAmbiguous`) and extend `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` in `src/inference/ContextOrchestrator.ts` (and `src/types/models.ts` if needed) per `data-model.md`, without changing existing selection behavior yet.
-- [X] T005 [P] Write failing tests for `RequestClassifier` in `tests/unit/inference/RequestClassifier.test.ts`: all 8 classification flags, `isIndependentTextQuestion`/`isTextFollowUp` mutual exclusivity, combinability of image/pixel/long-context/cross-chat-eligible flags, the conservative ambiguous-short-reply-defaults-to-follow-up rule, and the `imageReferenceAmbiguous` flag forcing `isSameImageFollowUp = true` / `isOlderImageReference = false` (contracts/request-routing.md, spec FR-012a).
+- [X] T005 [P] **HISTORICAL — ambiguous-to-active expectation superseded by Wave A/B.** Write the original `RequestClassifier` tests, including the then-current ambiguity conversion. Preserve this completed state as baseline evidence; T059/T074 replace the active requirement with `unresolved-reference`.
 - [X] T006 Implement `src/inference/RequestClassifier.ts` (`classifyRequest`) to make T005 pass. (depends on T005)
 - [X] T007 Wire `classifyRequest` into `ContextOrchestrator.orchestrate()` in **observation-only** mode: record actual retrieval/source behavior separately from proposed Phase 3 routing, plus the real image decision and ambiguity resolution, without applying the Phase 3 hard skip. (depends on T004, T006)
 - [X] T008 [P] Extend `src/diagnostics/DiagnosticsBundleBuilder.ts` and `src/diagnostics/DiagnosticsTraceStore.ts` to export the new classification/retrievalMode/imageDecision/imageReferenceAmbiguous/crossChatActive/groundingVerdict(`null`) fields per `contracts/diagnostics.md`.
@@ -54,22 +61,27 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 **User Stories**: US4 (new image), US5 (same-image follow-up), US6 (older-image and ambiguous-image reference), US7 (pixel-dependent re-inference) — Priorities P1/P1/P2/P1.
 
-**Goal**: New image questions get evidenced; same-image follow-ups reuse evidence without reprocessing; unambiguous older-image references resolve to the correct image; a genuinely ambiguous reference defaults to the active image instead of guessing; pixel-dependent requests re-run the correct original image through the Qwen vision path.
+**Historical Goal (ambiguity clause superseded)**: New/same/older image behavior
+and pixel reinspection shipped under the first architecture. Its
+ambiguity-to-active behavior is retained only as legacy comparison; Wave B
+requires unresolved clarification with no image/evidence selection.
 
-**Independent Test**: Attach an image and ask about it (evidenced); ask a non-visual follow-up (no re-attach); attach a second image and reference the first (correct resolution); attach a third and ask ambiguously (defaults to active, flagged in diagnostics); ask a pixel-dependent follow-up (fresh re-inference, visible as a new evidence timestamp).
+**Historical Independent Test**: The original test expected active-image
+fallback for ambiguity. That expectation is superseded by T074 and must not be
+used as controlled/authoritative acceptance.
 
 ### Tests for Image Continuity ⚠️ (write first, must fail)
 
 - [X] T009 [P] [US7] Write failing tests extending `tests/unit/inference/ImageEvidencePolicy.test.ts`: pixel-dependent + asset available → `use-original`; pixel-dependent + asset missing → `original-unavailable`; non-pixel-dependent + evidence available → `use-evidence`; all input combinations from `data-model.md`.
 - [X] T010 [P] [US6] Write failing tests extending `tests/unit/persistence/EvidenceRepository.test.ts`: `resolveReferencedImageEvidence` keyed by `RequestClassification.referencedImageId` never returns a different image's evidence.
-- [X] T011 [P] [US6] Write failing tests for the ambiguous-image-reference default in `tests/unit/inference/ContextOrchestrator.test.ts` (or a dedicated file): with two or more plausible images and no uniquely strongest ordinal/description match, the resolved decision matches a same-image follow-up against the current active image, `referencedImageId` is not guessed, and diagnostics record the ambiguity and fallback resolution (spec FR-012a).
+- [X] T011 [P] [US6] **HISTORICAL — behavior superseded.** Test the original ambiguous-active fallback. Preserve the completed result as legacy regression evidence; Wave B tests require no selected image/evidence and clarification.
 
 ### Implementation for Image Continuity
 
 - [X] T012 [US4] Wire `evaluateImageEvidenceAvailability` into `ContextOrchestrator` for `isNewImageQuestion`, aligning with the existing `messageHasImage`/active-image-turn handling. (depends on T006, T009)
 - [X] T013 [US5] Extend orchestrator wiring for `isSameImageFollowUp`: reuse stored evidence, no reprocessing, and no evidence attached when the follow-up carries no visual/reference signal. (depends on T012)
 - [X] T014 [US6] Extend orchestrator wiring for an unambiguous `isOlderImageReference`: resolve via `referencedImageId` through `EvidenceRepository.resolveReferencedImageEvidence`; missing-original + non-pixel-dependent → `use-evidence`; missing-original + pixel-dependent → `original-unavailable`. (depends on T010, T012)
-- [X] T015 [US6] Implement the ambiguous-image-reference default: when `imageReferenceAmbiguous` is true, resolve as `isSameImageFollowUp` against the active image and never call the referenced-image resolver with a guessed ID; record the resolution in diagnostics. (depends on T011, T014; make T011 pass)
+- [X] T015 [US6] **HISTORICAL — behavior superseded.** Implemented the original ambiguous-active fallback. Preserve the completed state only for legacy comparison; controlled/authoritative turns must bypass it.
 - [X] T016 [US7] Implement the `use-original` re-inference trigger in `src/inference/InferenceService.ts` + `src/persistence/EvidenceRepository.ts`: issue a new vision-inference call through the Qwen path via the existing single-flight `InferenceQueue`/`DeviceResourcePolicy`, persist a new versioned evidence row linked to the same `image_asset_id`. Applies identically whether the pixel-dependent request targets the active image or an unambiguously referenced older image. (depends on T009, T012, T014)
 - [X] T017 [US7] Replace the Phase 1 observation-only `imageDecision`/`imageReferenceAmbiguous` diagnostics placeholders with the real, behaviorally-selected decision for every image classification. (depends on T015, T016)
 
@@ -87,13 +99,13 @@ Single Expo/React Native app. Source under `src/`; focused unit tests under `tes
 
 ### Tests for Minimal-Context Routing ⚠️ (write first, must fail)
 
-- [X] T018 [P] [US1] Write failing tests extending `tests/unit/inference/ContextOrchestrator.test.ts`: an independent-question classification yields zero prior turns/summary/facts/retrieval/image evidence **considered**, even when all of them exist and would otherwise qualify, and confirm no recent-turn floor is applied at all for this classification (not merely reduced to zero).
+- [X] T018 [P] [US1] **HISTORICAL — absolute hard-skip expectation superseded by T062/T070.** Preserve the completed baseline test; new recovery tests protect exact/direct sources from a false independent label.
 - [X] T019 [P] [US2] Write failing tests for follow-up scoping: recent turns included up to the mode's floor; no unrelated retrieval/summary pulled in absent a supporting classification.
 - [X] T020 [P] [US3] Write failing tests for long-context-retrieval-request selection (facts/summary/same-chat retrieval included when relevant, excluded for an independent question in the same long conversation) and for deterministic repeatability of selection given identical input/state/mode/embedding-version.
 
 ### Implementation for Minimal-Context Routing
 
-- [X] T021 [US1] Implement the hard-skip gate in `ContextOrchestrator.orchestrate()`: for `isIndependentTextQuestion` with no co-occurring image/long-context classification, short-circuit before querying the evidence repository, retriever, or fact/summary sources, and before any recent-turn-floor logic runs. (depends on T018; make T018 pass)
+- [X] T021 [US1] **HISTORICAL — absolute behavior superseded by FR-086.** The completed hard skip remains only behind the legacy path; T070 adds bounded exact/direct recovery until authoritative planning replaces it.
 - [X] T022 [US2] Implement follow-up-scoped source resolution: recent-turn inclusion gated on `isTextFollowUp`, unchanged priority order otherwise. (depends on T019, T021)
 - [X] T023 [US3] Implement long-context-retrieval-request source resolution: facts/summary/same-chat retrieval gated on `isLongContextRetrievalRequest`. (depends on T020, T022)
 
@@ -176,7 +188,9 @@ Generation quality remains outside the five required automated-test areas, but d
 
 ### Implementation for Retrieval Fusion
 
-- [X] T039 **⛔ GATED (embedding manifest)** [US3] Run deterministic classification before query-vector generation. Call `EmbeddingService.embed([currentRequestText])` under its existing device-resource lease only for eligible same-chat long-context or explicit cross-chat-memory retrieval, with retry/regenerate parity and lexical fallback on error. Independent questions, ordinary non-retrieval follow-ups, continuations without retrieval classification, and an inactive manifest make zero embedding calls (spec FR-015; remains inert until approval).
+- [X] T039 **HISTORICAL / ⛔ GATED — binary classification sequencing superseded
+  by Wave D.** Preserve the completed inert implementation as baseline; T103
+  moves embedding eligibility to plan/candidate scope and keeps lexical fallback.
 - [X] T040 **⛔ GATED (embedding manifest)** [US3] Implement RRF fusion (`k = 60`) in `src/retrieval/HybridRetriever.ts`, replacing "semantic overrides lexical" with combined-ranking fusion, dedup, and tie-break. (make T038's non-exact-match assertions pass)
 - [X] T041 **⛔ GATED (embedding manifest)** [US3] Implement the exact-match guarantee (spec FR-019a) as a deterministic post-fusion step: retain proper and multi-word names even at query position zero, plus verbatim numbers/prices/dates/identifiers, while excluding generic sentence-opening commands before applying the limit. (depends on T040; make T038 pass)
 
@@ -233,141 +247,240 @@ Generation quality remains outside the five required automated-test areas, but d
 - [ ] T053 Run the final airplane-mode validation (MV-017): confirm zero network calls across classification, image re-inference, token budgeting, retrieval fusion (if active), cross-chat scope resolution (if active), and generation controls.
 - [ ] T054 Run the Spec 006 physical-device regression checklist (History pagination/search, model download/verify, generation cancellation, checkpoint/recovery, durable images) per spec MV-018; confirm zero regression.
 - [ ] T055 [P] Execute `quickstart.md` Phases 1–9 end-to-end on a physical device and record results/deviations.
-- [X] T056 Update `AGENTS.md`/`README.md` only if this feature changes a previously documented architecture claim (e.g., character-based → token-based budgeting); otherwise skip.
+- [X] T111 **TASK-ID CORRECTION: formerly the second duplicate T056.** Update `AGENTS.md`/`README.md` only if this feature changes a previously documented architecture claim (e.g., character-based → token-based budgeting); otherwise skip. Completed state is unchanged.
 
 ---
 
-## Architecture Revision Tasks (2026-07-28)
+## Architecture Revision Implementation Waves (corrected 2026-07-28)
 
-The tasks below implement the authoritative revision in spec Sections 15–20 and
-plan Phases 10–21. All are intentionally unchecked. Existing completed task
-states above are historical and unchanged. The legacy ledger contains two
-different completed tasks labeled T056; this revision does not renumber history
-and therefore continues from the existing maximum ID, T058, at T059.
+All implementation and physical tasks below remain unchecked. Historical
+completed states above are preserved. The second historical duplicate `T056`
+was corrected minimally to `T111`; remaining architecture work retains
+T059–T110 and then continues at T112.
 
-## Phase 10: Specification and Typed Contract Foundations
+## Wave A — Single Authority Foundation (T059–T073)
 
-**Goal**: Translate the approved contracts into compile-time boundaries without
-changing production routing authority.
+**Entry**: corrected Spec 007 contracts and a legacy diagnostic baseline.
+**Gates**: shadow diagnostics and independent recovery are separate, default-off
+gates; controlled classes require an explicit allowlist.
+**Rollback**: disable those gates and execute the complete legacy turn.
 
-- [ ] T059 [P] Write failing contract/type tests for `TurnPlan` validation, field-level fallback, required-image preservation, and unresolved-reference handling in `tests/unit/planning/TurnPlan.test.ts`.
-- [ ] T060 [P] Write failing provider-contract tests for embedding query/document separation, descriptors, cancellation, and readiness in `tests/unit/embedding/EmbeddingProvider.test.ts`.
-- [ ] T061 [P] Write failing provider-contract tests for main-model capabilities, native tokenization, image requirements, and provider substitution in `tests/unit/model/MainInferenceProvider.test.ts`.
-- [ ] T062 Implement the minimal typed planning contracts and deterministic validator in `src/planning/types.ts` and `src/planning/TurnPlanValidator.ts` to satisfy T059 without changing the live path.
-- [ ] T063 [P] Implement model-independent embedding interfaces/descriptors in `src/embedding/EmbeddingProvider.ts` to satisfy T060; do not install or activate an artifact.
-- [ ] T064 [P] Implement main inference provider interfaces/capability descriptor and a current-Qwen adapter boundary in `src/model/MainInferenceProvider.ts` to satisfy T061 without changing the production model.
+- [ ] T059 [P] Write failing `TurnPlan` MVP tests for authority mode/owner, intent,
+  modality, dependency, resolved/unresolved references, context requirements,
+  memory operations, vision strategy, generation task, confidence, and fallback
+  in `tests/unit/planning/TurnPlan.test.ts`.
+- [ ] T060 [P] Write failing authority-mode tests proving shadow is diagnostics
+  only, controlled ownership is whole-turn by named class, authoritative mode
+  bypasses legacy semantics, and rollback switches the whole turn in
+  `tests/unit/planning/PlannerActivation.test.ts`.
+- [ ] T061 [P] Write bounded Tier-3 contract tests for deterministic invocation
+  gating, candidate confinement, partial-field output, rationale enums,
+  `0.80` threshold, 96-token/8-second budgets, cancellation, timeout, app
+  suspension, malformed output, and conservative fallback in
+  `tests/unit/planning/ConstrainedPlannerFallback.test.ts`.
+- [ ] T062 [P] Write failing independent-routing recovery tests for every FR-086
+  protected exact/direct source plus unrelated negatives in
+  `tests/unit/inference/IndependentRoutingRecovery.test.ts`.
+- [ ] T063 [P] Add GV-001–GV-009 Wave A fixtures and contract tests using
+  deterministic injected/mocked ledger state, active entities, image-reference
+  candidates, explicit-memory candidates, and lexical retrieval candidates.
+  Assert the expected `TurnPlan`, fallback, authority mode, and
+  `constrainedPlanner.invoked === false`; do not claim end-to-end vision,
+  ledger persistence, explicit-memory persistence, or semantic-retrieval
+  execution. Place them in `tests/contract/spec007-turn-planning-golden.test.ts`.
+- [ ] T064 [P] Write failing main-provider capability/substitution tests,
+  including structured extraction, tokenizer, image capability, cancellation,
+  and no storage/planning-schema change, in
+  `tests/unit/model/MainInferenceProvider.test.ts`.
+- [ ] T065 Implement MVP planning types in `src/planning/types.ts`; do not add
+  optional enrichment fields as Wave A blockers. (depends on T059)
+- [ ] T066 Implement deterministic validation/post-processing in
+  `src/planning/TurnPlanValidator.ts`, including unresolved-image/no-silent-
+  text-only and uncertain-memory-write rejection. (depends on T059, T065)
+- [ ] T067 Implement authority-mode/plan-owner resolution and whole-turn rollback
+  semantics in `src/planning/PlannerActivation.ts`. (depends on T060)
+- [ ] T068 Implement shadow tier orchestration in `src/planning/TurnPlanner.ts`
+  using state, ledger/recent state, and lexical-only topic/entity signals:
+  ledger identities, canonical labels, known aliases, exact lexical matches,
+  code identifiers, direct references, and active comparison state. Optional
+  injected embedding signals are additive; the implementation must work with
+  embeddings unavailable and must not add semantic regex routing. (depends on T066)
+- [ ] T069 Implement the constrained unresolved-field adapter/validator in
+  `src/planning/ConstrainedPlannerFallback.ts`; run serially under the existing
+  resource policy before answer generation. (depends on T061, T064)
+- [ ] T070 Implement the temporary bounded independent-routing recovery ahead of
+  the legacy hard skip, without broad semantic regex classification.
+  (depends on T062)
+- [ ] T071 Wire shadow planning and separate derived diagnostics into the turn
+  lifecycle so no visible behavior, source/image selection, memory write, or
+  inference execution changes. (depends on T067–T070)
+- [ ] T072 Extend diagnostics with authority mode, exact plan owner, executed
+  plan ID/version, shadow delta, recovery, Tier-3 gate/latency/result, and
+  sanitization; add focused serialization tests first.
+- [ ] T073 Record Wave A shadow/controlled entry evidence and physically validate
+  Tier-3 cancellation, suspension, timeout, resource release, and next-turn
+  readiness; do not activate controlled mode without this evidence.
 
-## Phase 11: Shadow Turn Planning
+**Exit**: MVP plans validate, recovery protects every exact/direct class,
+goldens require no Tier 3, mocked Tier-3 failures are conservative, and every
+turn records exactly one semantic owner.
 
-**Goal**: Produce one validated proposed plan beside legacy routing; legacy
-behavior remains authoritative.
+## Wave B — Vision Continuity (T074–T083)
 
-- [ ] T065 Write failing tier-order and deterministic-state tests in `tests/unit/planning/TurnPlanner.test.ts`, including attachment/action/settings/provider-readiness precedence and no model fallback for unambiguous turns.
-- [ ] T066 Write failing ambiguous-request tests in `tests/unit/planning/ConstrainedPlannerFallback.test.ts` for validated structured output, cancellation, malformed output, no guessed image, and field-level safe fallback.
-- [ ] T067 Implement shadow `TurnPlanner` tier orchestration in `src/planning/TurnPlanner.ts` using deterministic state and injected semantic signals; keep legacy `RequestClassifier` output comparison-only.
-- [ ] T068 Implement the constrained structured-planning fallback adapter and validator in `src/planning/ConstrainedPlannerFallback.ts`, initially compatible with the current Qwen provider but invoked only for unresolved ambiguity.
-- [ ] T069 Wire shadow planning into the existing turn lifecycle in `src/inference/turnLifecycleMachine.ts` so it cannot change selected context, modality, queue dispatch, or visible answers.
+**Entry**: Wave A validator/ownership and an explicitly named image-class
+controlled gate. **Rollback**: disable the class and execute the complete legacy
+turn. **Physical gate**: fresh-pixel, persistence, reinspection, and comparison
+checks before expanding controlled classes.
 
-## Phase 12: Planner Diagnostics and Golden Scenarios
+- [ ] T074 [P] Write failing reference tests for uniquely resolved active/older
+  images, unresolved multi-candidate ambiguity, no selected pixels/evidence, and
+  clarification in `tests/unit/vision/ImageReferenceResolver.test.ts`.
+- [ ] T075 [P] Write failing five-strategy executor tests for capability failure,
+  missing/deleted assets, cancellation, and no replanning in
+  `tests/unit/vision/VisionExecutor.test.ts`.
+- [ ] T076 [P] Write failing MVP evidence tests for image/source identity,
+  summary, objects, text, prices/dates/counts/serials, optional associations,
+  uncertainty, `complete|partial|failed|stale`, and malformed extraction in
+  `tests/unit/persistence/StructuredImageEvidenceRepository.test.ts`.
+- [ ] T077 Implement first-class image-entity persistence and asset
+  availability/revision handling in `src/persistence/ImageEntityRepository.ts`.
+- [ ] T078 Implement MVP structured-evidence persistence/versioning and
+  reinference invalidation in
+  `src/persistence/StructuredImageEvidenceRepository.ts`. (depends on T076)
+- [ ] T079 Implement plan-driven vision strategy execution; the queue executes
+  the selected strategy without choosing image/modality itself.
+  (depends on T075, T077)
+- [ ] T080 Implement normal-turn evidence persistence or guaranteed canonical
+  pixel continuity, including partial/failed diagnostics and no text-only visual
+  fact retry. (depends on T078, T079)
+- [ ] T081 Implement active-image pronoun follow-up and fresh-pixel reinspection,
+  excluding prior refusal/unsupported prose as factual authority.
+- [ ] T082 Implement provenance-separated multi-image comparison with explicit
+  one-missing-side behavior and no identity/evidence merging.
+- [ ] T083 Enable only explicitly named image scenario classes in controlled
+  mode. Add a failing-then-passing controlled-image authority test proving that
+  the validated `TurnPlan` owns the complete turn—reference resolution, image
+  selection, context-source selection, context assembly, vision strategy,
+  generation-task projection, and inference execution—and that zero legacy
+  semantic decisions occur in
+  `tests/integration/controlled-image-turn-authority.test.ts`. Do not migrate
+  global context assembly for other classes; rollback remains whole-turn.
+  Complete the focused automated and physical Wave B matrix.
 
-**Goal**: Make plan quality and legacy differences measurable before behavior
-changes.
+**Exit**: GV-003–GV-005 and image failure cases pass; unresolved ambiguity never
+selects an image, evidence status is truthful, and image identities remain
+separate.
 
-- [ ] T070 [P] Add failing diagnostics serialization/sanitization tests in `tests/unit/diagnostics/TurnPlanDiagnostics.test.ts`.
-- [ ] T071 [P] Add the eight golden architecture fixtures (GV-001–GV-008) with plan/context/provenance expectations in `src/evaluation/golden/spec007TurnPlanning.ts` and contract tests in `tests/contract/spec007-turn-planning-golden.test.ts`.
-- [ ] T072 Extend diagnostics persistence/export with planner mode, validated plan, field confidence, signal provenance, validation changes, legacy deltas, provider/index descriptors, and execution outcomes in `src/diagnostics/DiagnosticsBundleBuilder.ts`.
-- [ ] T073 Define and record measurable shadow-to-controlled and controlled-to-authoritative gates in `src/evaluation/spec007PlannerGates.ts`; do not activate the new planner.
+## Wave C — Ledger and Explicit Memory (T084–T094)
 
-## Phase 13: Image Execution Under the New Plan
+**Entry**: Wave A plan/provenance contracts and canonical turn-completion hooks.
+**Gates**: ledger reads and durable memory writes are separate. **Rollback**:
+disable derived reads/writes; canonical data remains and supports later rebuild.
 
-**Goal**: Execute one planned vision strategy, preserve image identity, and
-guarantee reusable evidence or canonical pixel continuity.
+- [ ] T084 [P] Write failing ledger transition/order/rebuild tests for topics,
+  entities, comparisons, images, code/documents, unresolved references,
+  decisions, immediately-following-turn publication, missing/stale/corrupt cache,
+  and existing-conversation-not-first-turn behavior.
+- [ ] T085 [P] Write failing explicit-memory semantics tests for the six required
+  write/read/neither examples, false-write negatives, immediate exact recall,
+  current scope, and no compaction/embedding dependency.
+- [ ] T086 [P] Write failing reliability/provenance tests for all eight ordinal
+  classes, exact higher-reliability precedence, and ineligible attempt exclusion.
+- [ ] T087 Implement versioned ledger types/cache validation and deterministic
+  transitions/rebuild in `src/memory/ConversationStateLedger.ts`.
+- [ ] T088 Persist derived ledger cache and deletion cascade behind the canonical
+  repository boundary; corrupt cache cannot mutate canonical history.
+- [ ] T089 Enforce completion ordering: canonical turn → validated results →
+  ledger update/rebuild → publication before next planning.
+- [ ] T090 Supply ordered ledger candidates to planning for comparison,
+  pronoun/entity/image/code, and decision references without making the ledger
+  an answer authority.
+- [ ] T091 Implement conservative explicit-memory read/write/neither
+  interpretation and immediate source-provenance persistence; uncertain writes
+  remain scoped or clarify.
+- [ ] T092 Implement user correction/supersession, retry/regeneration,
+  superseded-attempt, evidence-reinference, and source/conversation deletion
+  invalidation; general message editing remains out of scope.
+- [ ] T093 Implement ordinal reliability metadata and typed exact/lexical recall,
+  including cross-chat exclusion after memory creation.
+- [ ] T094 Revise/test bounded short/medium segment summarization independently
+  of explicit memory, then complete physical next-turn/restart/immediate-recall
+  validation.
 
-- [ ] T074 [P] Write failing vision-plan contract tests for all five strategies, image capability failure, missing assets, cancellation, and no semantic replanning in `tests/unit/vision/VisionExecutor.test.ts`.
-- [ ] T075 [P] Write failing structured-evidence tests for multiple objects, text/numeric/object associations, counts, spatial relationships, uncertainty, provenance, and multi-image separation in `tests/unit/persistence/StructuredImageEvidenceRepository.test.ts`.
-- [ ] T076 Implement first-class image-entity and structured-evidence persistence boundaries with source revision/invalidation in `src/persistence/ImageEntityRepository.ts` and `src/persistence/StructuredImageEvidenceRepository.ts`.
-- [ ] T077 Implement the plan-driven vision executor in `src/inference/VisionExecutor.ts`; `InferenceQueue` executes the chosen strategy without choosing direct-image versus evidence paths itself.
-- [ ] T078 Ensure normal direct-image turns persist reusable evidence or a guaranteed pending/canonical-pixel reinspection path, and exclude prior refusal/unsupported prose from reinspection context in `src/inference/VisionExecutor.ts`.
-- [ ] T079 Implement provenance-separated multi-image comparison assembly in `src/inference/ContextBuilder.ts`.
+**Exit**: the next turn sees the last completed state; cold start rebuilds;
+false writes are absent; corrections/supersession are correct; exact recall works
+with embeddings unavailable.
 
-## Phase 14: Conversation-State Ledger
+## Wave D — EmbeddingGemma and Semantic Retrieval (T095–T104)
 
-**Goal**: Track structured active conversation state as derived, invalidatable
-state over canonical messages.
+**Entry**: typed retrieval-unit and model-independent embedding contracts. This
+wave does not block Wave E. **Gates**: provider readiness, same-chat semantic,
+and cross-chat semantic activation are separate. **Rollback**: atomically
+deactivate the new index/provider and continue lexical-only.
 
-- [ ] T080 Write failing ledger transition/rebuild tests for topics, entities, comparisons, images, code/documents, unresolved references, and decisions in `tests/unit/memory/ConversationStateLedger.test.ts`.
-- [ ] T081 Implement ledger types, deterministic transitions, source revisions, and rebuild/invalidation in `src/memory/ConversationStateLedger.ts`.
-- [ ] T082 Add derived ledger persistence and conversation-delete cascade behavior behind the existing SQLite persistence boundary in `src/persistence/ConversationStateRepository.ts`.
-- [ ] T083 Supply ledger candidates to shadow planning for “Which one?”, “its prices”, “previous one”, and “What did I decide?” without making the ledger itself authoritative in `src/planning/TurnPlanner.ts`.
+- [ ] T095 [P] Write failing provider contract tests for query/document
+  separation, descriptor compatibility keys, readiness, cancellation, and
+  lexical-only planner independence.
+- [ ] T096 Implement `EmbeddingProvider` interfaces/descriptors only; do not
+  install or activate an artifact. (depends on T095)
+- [ ] T097 Verify EmbeddingGemma artifact/runtime/license/hash, New Architecture,
+  NDK, cancellation, latency, memory, battery, and offline compatibility; record
+  approval/rejection before installation/activation.
+- [ ] T098 Benchmark at least 256 and 512 dimensions on golden retrieval units
+  and representative devices; record quality/resource results.
+- [ ] T099 Write failing lifecycle tests for feature gates, restart-safe progress,
+  process death, pause for visible inference, cancellation, stale compatibility,
+  build-new/validate/atomic-activate/retire-later migration, deletion cascade,
+  and lexical fallback.
+- [ ] T100 Implement the approved EmbeddingGemma adapter behind the provider;
+  keep disabled without an approved descriptor. (depends on T096–T098)
+- [ ] T101 Implement typed retrieval-unit derivation/invalidation for all eight
+  unit types with ordinal reliability and provenance.
+- [ ] T102 Implement versioned restart-safe index/backfill, stale detection,
+  process-death resume, new-index validation, and atomic activation.
+- [ ] T103 Implement shadow multi-signal ranking and separately gated controlled
+  same-chat/cross-chat activation with immediate lexical fallback.
+- [ ] T104 Validate shadow/controlled semantic retrieval, migration, scope,
+  failure, memory/latency/battery, pause/restart, and offline physical behavior;
+  record numeric ranking calibration without making it planner-authority entry.
 
-## Phase 15: Immediate Explicit Memory Writes
+**Exit**: approved semantic quality/device gates pass and lexical fallback works
+through every lifecycle state. Wave E may already be authoritative in
+lexical-only mode.
 
-**Goal**: Make user-directed memories available immediately, without compaction
-or embedding dependencies.
+## Wave E — Authority Transfer and Cleanup (T105–T110, T112–T113)
 
-- [ ] T084 Write failing tests for synchronous explicit-memory persistence, direct/lexical recall before compaction/indexing, reliability, provenance, invalidation, and deletion in `tests/unit/memory/ExplicitMemoryService.test.ts`.
-- [ ] T085 Implement explicit-memory types/service and source-provenance writes in `src/memory/ExplicitMemoryService.ts`.
-- [ ] T086 Persist the explicit memory and retrieval unit in the source-message completion workflow through `src/persistence/MemoryRepository.ts`, with no wait for compaction, summary, backfill, or restart.
-- [ ] T087 Revise segment-summary trigger policy for useful short/medium conversation segments without coupling it to explicit memory in `src/memory/SegmentSummaryPolicy.ts`, with failing policy tests first in `tests/unit/memory/SegmentSummaryPolicy.test.ts`.
+**Entry**: Waves A–C exits and authority-transfer evidence. Wave D may be
+unavailable, building, active, or complete. **Gates**: global authority first;
+rollback removal only after final physical acceptance. **Rollback**: switch the
+complete turn to legacy; mixed authority is prohibited.
 
-## Phase 16: EmbeddingGemma Indexing
+- [ ] T105 Write failing end-to-end authority tests proving every consumer uses
+  one plan ID/owner, controlled/authoritative turns make zero legacy semantic
+  decisions, and lexical-only authority works with no approved embedding index.
+- [ ] T106 Switch context-source requirements and generation task projection to
+  the validated plan without touching vision/memory/retrieval ownership in the
+  same task. (depends on T105)
+- [ ] T107 Switch queue dispatch, refusal recovery, and grounding to validate and
+  report the same plan ID without reclassifying modality/intent/reference.
+- [ ] T108 Implement global authoritative mode, plan-version persistence, and
+  full-turn legacy rollback; add mocked main-provider substitution coverage.
+- [ ] T109 Inventory and remove obsolete semantic regex authority/duplicate
+  decisions after authoritative stability, retaining deterministic syntax,
+  ordinal, identifier, date, path, and output-schema validation.
+- [ ] T110 Run GV-001–GV-009 plus all lifecycle/failure cases on representative
+  6–8GB physical devices in lexical-only mode and any separately approved
+  semantic mode; record one-owner evidence.
+- [ ] T112 Run final airplane-mode zero-network validation, existing
+  T034/T052–T055/T058 hardware work independently, and Spec 006/legacy Spec 007
+  regressions; do not close historical tasks without their own evidence.
+- [ ] T113 After the rollback window and physical acceptance, remove the rollback
+  gate and record the final authority/removal decision, provider descriptors,
+  device matrix, deviations, and rollback outcome.
 
-**Goal**: Add the first semantic provider and versioned indexes only after
-artifact/runtime/dimension approval.
-
-- [ ] T088 Verify the proposed EmbeddingGemma artifact/runtime/license/hash, Android New Architecture, NDK 26 build requirements, cancellation, latency, memory, battery, and offline behavior; record the approval or rejection in `specs/007-context-routing-and-answer-quality/research.md` before installing or activating anything.
-- [ ] T089 Benchmark at least 256 and 512 dimensions on GV retrieval units and representative 6–8GB devices; record quality, latency, memory, storage, backfill time, and battery results in `specs/007-context-routing-and-answer-quality/embedding-dimension-benchmark.md`.
-- [ ] T090 Write failing lifecycle tests for feature gating, readiness, restart-safe progress, pause-for-inference, cancellation, stale detection, side-by-side migration, activation rollback, deletion cascade, and lexical fallback in `tests/unit/embedding/EmbeddingIndexLifecycle.test.ts`.
-- [ ] T091 Implement the approved EmbeddingGemma adapter behind `EmbeddingProvider` in `src/embedding/EmbeddingGemmaProvider.ts`; keep it disabled without the approved descriptor.
-- [ ] T092 Implement versioned, restart-safe index lifecycle/backfill and stale-vector detection in `src/embedding/EmbeddingIndexLifecycle.ts` and the existing persistence boundary.
-
-## Phase 17: Shadow Semantic Retrieval
-
-**Goal**: Measure semantic/topic/entity signals without changing selected
-production context.
-
-- [ ] T093 Write failing typed-unit hybrid-ranking tests covering lexical, semantic, entity, provenance, reliability, scope, recency, exact values, deduplication, and low-trust attempt exclusion in `tests/unit/retrieval/SemanticRetriever.test.ts`.
-- [ ] T094 Implement typed retrieval-unit derivation and invalidation for user messages, completed answers, code, explicit memories, facts, decisions, summaries, and image evidence in `src/retrieval/RetrievalUnitService.ts`.
-- [ ] T095 Implement multi-signal shadow ranking through `EmbeddingProvider` in `src/retrieval/SemanticRetriever.ts`, preserving current lexical selection as authoritative and exporting rank deltas.
-
-## Phase 18: Controlled Semantic-Retrieval Activation
-
-**Goal**: Activate semantic ranking only behind measured gates and immediate
-lexical rollback.
-
-- [ ] T096 Add controlled-activation, failure, stale-index, migration, rollback, and no-binary-independent-gate tests in `tests/integration/semantic-retrieval-activation.test.ts`.
-- [ ] T097 Implement device/scope feature-gated semantic selection with lexical fallback and index-version rollback in `src/retrieval/RetrievalCoordinator.ts`.
-- [ ] T098 Validate controlled semantic retrieval against GV-001, GV-002, GV-003, GV-006, and GV-008; record precision/error/resource results in `specs/007-context-routing-and-answer-quality/validation-semantic-shadow.md`.
-
-## Phase 19: New Planner Becomes Authoritative
-
-**Goal**: Make downstream systems execute the validated plan after gates pass,
-while retaining a bounded rollback window.
-
-- [ ] T099 Write failing end-to-end authority tests proving context orchestration, vision, generation, queue, recovery, and grounding consume one plan and do not reclassify in `tests/integration/turn-plan-authority.test.ts`.
-- [ ] T100 Switch context assembly, vision, memory operations, retrieval, generation projection, queue dispatch, refusal recovery, and grounding to consume the validated `TurnPlan` in `src/inference/ContextOrchestrator.ts`, `src/inference/VisionExecutor.ts`, `src/retrieval/RetrievalCoordinator.ts`, `src/inference/GenerationTuning.ts`, `src/inference/InferenceQueue.ts`, and `src/inference/GroundingAssessment.ts`.
-- [ ] T101 Implement authoritative/legacy-rollback feature state and plan-version persistence in `src/planning/PlannerActivation.ts`.
-- [ ] T102 Verify mocked main-provider substitution leaves plan, ledger, memory, retrieval units, embedding indexes, evidence, storage, and diagnostics unchanged in `tests/contract/main-provider-switch.test.ts`.
-
-## Phase 20: Remove Obsolete Semantic Regex Routing
-
-**Goal**: Remove duplicate semantic authority only after the new planner is
-stable.
-
-- [ ] T103 Inventory all remaining semantic decisions in request classification, context orchestration, generation planning, vision execution, queue dispatch, refusal recovery, and grounding; record removals in `specs/007-context-routing-and-answer-quality/semantic-routing-removal-audit.md`.
-- [ ] T104 Remove legacy semantic regex authority and duplicate reclassification from `src/inference/RequestClassifier.ts`, `src/inference/ContextOrchestrator.ts`, `src/inference/ImageEvidencePolicy.ts`, `src/inference/GenerationTuning.ts`, and `src/inference/GroundingAssessment.ts`, retaining deterministic syntax/ordinal/identifier/date/path/output-validation parsing.
-- [ ] T105 Remove the emergency legacy rollback only after the documented rollback window and authoritative acceptance gates pass in `src/planning/PlannerActivation.ts`; retain historical readers in `src/diagnostics/DiagnosticsBundleBuilder.ts`.
-
-## Phase 21: Final Physical-Device Validation
-
-**Goal**: Validate the complete architecture on representative constrained
-Android devices; no new work in this phase is pre-checked.
-
-- [ ] T106 Run GV-001–GV-008 end to end on representative 6–8GB physical devices and record plans, selected sources, provenance, visible outcome, latency, memory, and battery observations in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
-- [ ] T107 Validate missing image/model/embedding artifacts, planner malformed output, provider capability mismatch, cancellation, restart during backfill, index migration, and queue contention; record clean degradation/no-substitution evidence in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
-- [ ] T108 Run final airplane-mode zero-network validation across planning, model fallback, embeddings, retrieval, memory, vision, generation, persistence, deletion, and migration; record results in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
-- [ ] T109 Run the existing open T034/T052–T055/T058 hardware matrices plus Spec 006/legacy Spec 007 regressions and record each result in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`; do not close any historical physical task without its own evidence.
-- [ ] T110 Record the final authority/removal decision, embedding descriptor/dimensions, main-provider descriptor, device matrix, deviations, and rollback outcome in `specs/007-context-routing-and-answer-quality/validation-final-architecture.md`.
+**Exit**: every supported turn has one new plan owner; goldens/regressions pass
+without embeddings; obsolete semantic authority and the temporary recovery are
+removed; physical validation supports rollback-gate removal.
 
 ## Dependencies & Execution Order
 
@@ -384,28 +497,21 @@ Android devices; no new work in this phase is pre-checked.
 - **Phase 8 (grounding)**: Depends on Phases 1–7 being stable.
 - **Phase 9 (final manual device validation)**: Depends on all implemented phases.
 
-### Architecture Revision Phase Dependencies
+### Architecture Revision Wave Dependencies
 
-- **Phase 10** starts from the revised specification/contracts and changes no
-  behavior.
-- **Phase 11** depends on Phase 10 typed validation/provider boundaries.
-- **Phase 12** depends on shadow plans from Phase 11 and blocks behavioral use of
-  the new plan until golden diagnostics exist.
-- **Phase 13** depends on Phase 12 and changes only vision execution under a
-  controlled plan gate.
-- **Phase 14** depends on the core plan/diagnostic shape; it may overlap Phase 13
-  after Phase 12 because it owns separate files/state.
-- **Phase 15** depends on ledger/provenance foundations from Phase 14.
-- **Phase 16** depends on provider contracts and artifact/runtime approval; it
-  does not depend on semantic activation.
-- **Phase 17** depends on typed units from Phases 13–15 and a ready Phase 16
-  provider/index; it remains shadow-only.
-- **Phase 18** depends on measured Phase 17 results and preserves lexical
-  rollback.
-- **Phase 19** depends on all golden/controlled gates from Phases 12–18.
-- **Phase 20** depends on Phase 19 stability and the documented rollback window.
-- **Phase 21** depends on all implemented phases and never substitutes automated
-  validation for physical-device evidence.
+- **Wave A** starts from corrected contracts and supplies the plan/owner
+  foundation.
+- **Wave B** depends on Wave A validation and controlled whole-turn ownership for
+  named image classes.
+- **Wave C** depends on Wave A plan/provenance contracts and canonical completion
+  hooks; it may proceed independently of Wave B.
+- **Wave D** depends on Wave A provider-independent contracts plus its own
+  artifact approval. It does not block planner authority.
+- **Wave E** depends on Waves A–C and authority-transfer evidence. Wave D may be
+  unavailable, building, active, or complete.
+- Dependency graph: `A → B → E`, `A → C → E`, and independent `A → D`.
+- Cross-chat semantic activation is separately gated even if same-chat semantic
+  retrieval is active.
 
 ### User Story Dependencies
 
@@ -416,6 +522,11 @@ Unlike a typical spec where stories are independent from a foundational phase on
 - Tests MUST be written and FAIL before implementation, for the five phases that have required tests (Constitution VI, spec Section 12). Phase 5 and Phase 8 do not have a required-tests subsection by design.
 - Diagnostics/type extensions before behavioral wiring (Phase 1 pattern, reused at each phase where a diagnostics field goes from placeholder to real).
 - Story complete (checkpoint passes) before moving to the next phase.
+- For Waves A–E, focused tests fail before implementation; entry/exit conditions,
+  feature gates, rollback, and required physical evidence must be recorded at
+  each wave checkpoint.
+- No task may simultaneously change planning, vision, memory, retrieval,
+  generation, queue behavior, and grounding.
 
 ### Parallel Opportunities
 
@@ -427,6 +538,11 @@ Unlike a typical spec where stories are independent from a foundational phase on
 - T024–T028 (Phase 4 tests) run in parallel; T029–T033 are largely sequential (same files/shared constant), though T032 (buckets) and T033 (recalibration) can overlap once T029/T031 land.
 - T035 and T036 automated implementation are complete; T036's native acceptance remains dependent on the still-open physical-device T034, and T037 depends on the implemented T036 path.
 - T042/T043 (Phase 7 tests) run in parallel; T044/T045 run in parallel, T046 depends on both, T047/T048 run in parallel after T046.
+- Wave A test tasks T059–T064 may proceed in parallel; implementation follows
+  their explicit dependencies.
+- Wave B test tasks T074–T076 may proceed in parallel. Wave C test tasks
+  T084–T086 may proceed in parallel. Wave D contract/lifecycle research can
+  overlap Wave B/C after Wave A without blocking Wave E.
 
 ---
 
@@ -464,6 +580,18 @@ This feature's spec explicitly mandates a phase order (Section 14) that does **n
 6. Phase 7 (cross-chat) → validate MV-014, only after Phases 1–6 are confirmed stable in production use.
 7. Phase 8 (grounding) → validate `quickstart.md` Phase 8, only after Phases 1–7 are confirmed stable.
 8. Phase 9 → full manual validation matrix, airplane-mode check, and regression pass.
+
+### Architecture Revision Delivery
+
+1. Wave A ships shadow planning, temporary exact/direct recovery, and ownership
+   diagnostics without changing any turn from the shadow plan.
+2. Waves B and C ship independently controlled whole-turn classes with separate
+   rollback gates.
+3. Wave D may ship before or after authority transfer and always preserves
+   lexical fallback.
+4. Wave E proves lexical-only authority first, transfers all supported turns,
+   then removes obsolete semantics and finally the rollback gate after physical
+   acceptance.
 
 ---
 

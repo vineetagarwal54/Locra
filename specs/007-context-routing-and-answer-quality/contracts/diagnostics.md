@@ -1,86 +1,109 @@
-# Contract: Router Diagnostics (Phase 1, ships before behavior changes)
+# Contract: Turn Planning and Context Diagnostics
 
-> **Architecture revision (2026-07-28)**: Diagnostics compare legacy routing
-> with proposed/validated `TurnPlan` during shadow rollout. Legacy fields remain
-> readable for historical records.
-
-**Module**: extended `src/inference/ContextOrchestrator.ts` (`ContextSelectionDiagnostics`), `src/diagnostics/DiagnosticsBundleBuilder.ts`, `src/diagnostics/DiagnosticsTraceStore.ts`
-
-## ContextSelectionDiagnostics (extended)
+Diagnostics expose sanitized execution ownership and evidence. They do not
+expose hidden prompts/reasoning, raw model IDs, pixels, or secrets.
 
 ```ts
-export interface ContextSelectionDiagnostics {
-  // existing fields unchanged: recentTurnsConsidered, recentTurnsSelected,
-  // mediaEvidenceCandidates, factCandidates, summaryCandidates, budget
-  readonly classification: RequestClassification;             // NEW
-  readonly retrievalMode: 'fused' | 'lexical-fallback' | 'none'; // NEW
-  readonly retrievalModeReason: string;                         // NEW, actual reason, e.g. 'semantic-inactive-no-candidate'
-  readonly retrievalQueried: boolean;                           // NEW — actual runtime call state
-  readonly retrievalCandidatesReturned: number;                // NEW — actual retriever output count
-  readonly retrievalItemsSelected: number;                     // NEW — actual selected retrieval count
-  readonly actualSources: {                                    // NEW — actual current implementation
-    readonly recentTurns: { readonly queried: boolean; readonly selected: number };
-    readonly imageEvidence: { readonly queried: boolean; readonly selected: number };
-    readonly retrieval: { readonly queried: boolean; readonly selected: number };
-    readonly durableFacts: { readonly queried: boolean; readonly selected: number };
-    readonly summary: { readonly queried: boolean; readonly selected: number };
-  };
-  readonly proposedRouting: {                                  // NEW — recorded Phase 3 prediction
-    readonly wouldSkipRetrieval: boolean;
-    readonly reason: string;
-  };
-  readonly imageDecision: ImageEvidenceDecision | 'not-applicable'; // NEW
-  readonly imageReferenceAmbiguous: boolean;                    // NEW, spec FR-012a
-  readonly imageReferenceResolution: 'not-applicable' | 'new-image' | 'active-image' | 'explicit-ordinal' | 'unique-description' | 'ambiguous-active-fallback';
-  readonly crossChatActive: boolean;                            // NEW, actual per-turn scope use
-  readonly crossChatQueried: boolean;                           // expanded scope actually queried
-  readonly crossChatItemsSelected: number;                     // selected items from another chat
-  readonly estimatedPromptTokens: number | null;               // tier-1 final-prompt estimate
-  readonly finalNativePromptTokens: number | null;             // verified formatted prompt count
-  readonly groundingVerdict: 'supported' | 'unsupported' | null; // NEW, diagnostics-only; null when not applicable
+interface TurnArchitectureDiagnostics {
+  readonly turnId: string;
+  readonly authorityMode: 'shadow' | 'controlled' | 'authoritative';
+  readonly planOwner: string;
+  readonly executedPlanId: string;
+  readonly executedPlanVersion: string;
+  readonly legacyClassification: RequestClassification | null;
+  readonly shadowPlan: SanitizedTurnPlan | null;
+  readonly planDelta: readonly PlanDelta[];
+  readonly independentRecovery: IndependentRecoveryDiagnostic;
+  readonly referenceResolution: ReferenceResolutionDiagnostic;
+  readonly constrainedPlanner: ConstrainedPlannerDiagnostic;
+  readonly selectedSources: readonly SourceSelectionDiagnostic[];
+  readonly vision: VisionExecutionDiagnostic;
+  readonly retrieval: RetrievalDiagnostic;
+  readonly validationChanges: readonly ValidationChange[];
+  readonly fallback: string;
+  readonly executionOutcome: string;
 }
 ```
 
-- **MUST** ship in Phase 1, before any routing *behavior* change lands, so classification and would-be source selection are observable against today's fixed-assembly behavior for comparison (spec Section 10 intro, Section 14 Phase 1).
-- **MUST** keep Phase 1 observation-only: `retrievalMode`, `retrievalModeReason`, `retrievalQueried`, and the returned/selected counts describe what the current runtime actually queried and selected. They MUST NOT claim `independent-question-skip` while retrieval still ran.
-- **MUST** retain `proposedRouting` as a distinct prediction field; actual runtime
-  query and selection behavior is always reported by the retrieval/source fields.
-- **MUST** record `imageDecision` even when the answer is `'not-applicable'`.
-- **MUST** record `imageReferenceAmbiguous: true` whenever an image reference was defaulted to the active image per FR-012a, so the ambiguous-reference default is always disclosed, never silent.
-- **MUST** set `groundingVerdict` only from the deterministic Phase 8 assessment;
-  use selected context plus the current turn's fresh `hiddenEvidence`, and use
-  `null` only when no image/retrieved evidence makes assessment applicable.
-  Older pre-Phase-8 records may omit it without being considered incomplete.
+## Authority fields
 
-## TurnPlan diagnostic extension
+- `shadow`: `planOwner` identifies the versioned legacy router; `executedPlanId`
+  points to the legacy execution record. The new plan is present only in
+  `shadowPlan`. Tier 3 records `wouldInvoke` but is not called live inline.
+- `controlled`/`authoritative`: `planOwner` identifies the new planner and
+  `executedPlanId` is its validated plan. Legacy classification is diagnostic or
+  absent and cannot own a sub-operation.
+- Every semantic consumer records the same executed plan ID/version. A mismatch
+  is an invariant violation.
 
-Each shadow or authoritative turn records:
+## Reference resolution enum
 
-- plan/schema version and planner mode (`shadow`, `controlled`,
-  `authoritative`, `legacy-rollback`);
-- sanitized validated `TurnPlan`;
-- planning tiers/signals used and field-level confidence;
-- unresolved references and safe fallback;
-- deterministic validation changes/rejections;
-- legacy classification/selection summary and material differences;
-- execution outcomes for memory, retrieval, vision, context assembly, provider
-  capability, generation, and queue completion;
-- embedding provider/index descriptor and lexical fallback reason;
-- selected source IDs/revisions and reliability.
+```ts
+type ImageReferenceResolution =
+  | 'not-applicable'
+  | 'new-image'
+  | 'active-image'
+  | 'explicit-ordinal'
+  | 'unique-description'
+  | 'unresolved-reference'
+  | 'clarification-required'
+  | 'asset-unavailable';
+```
 
-Diagnostics distinguish planning decisions from execution failures. They remain
-sanitized, exclude raw pixels/internal prompts by default, and do not expose
-hidden reasoning or unredacted local paths.
+The legacy ambiguity-to-active enum is prohibited. `active-image` means the request
+unambiguously referred to the active visual entity; it is not an ambiguity
+fallback. Unresolved diagnostics include ordered candidate IDs but no selected
+image/evidence ID.
 
-## DiagnosticsBundleBuilder / DiagnosticsExportService (extended)
+## Constrained planner diagnostics
 
-- **MUST** continue to sanitize local paths, exclude images by default, and disclose included conversation content exactly as today (Spec 006 FR-A06), extended to cover cross-chat conversation identifiers once Phase 7 ships (spec FR-038).
-- **MUST** remain exportable from persistence repositories, not bounded UI caches, so router decisions on evicted/older turns stay inspectable (spec FR-039) — unchanged principle from Spec 006.
+Always record:
 
-## Invariants
+- `invoked`;
+- deterministic gate outcome/reason;
+- requested unresolved fields and candidate IDs;
+- resource queue wait and execution latency separately;
+- output token count and timeout/cancellation/suspension status;
+- schema/candidate validation result;
+- confidence and threshold;
+- bounded rationale codes;
+- accepted/rejected and conservative fallback.
 
-- Every turn processed by `ContextOrchestrator` produces one
-  `ContextSelectionDiagnostics` record with all fields populated. Historical
-  observation-only Phase 1 records may show sources queried/selected for an
-  independent question; `proposedRouting` remains distinct from those actuals.
-- Diagnostics are additive: no existing field is removed or repurposed; existing consumers of `ContextSelectionDiagnostics` (e.g., `ContextBuilder.ts`'s use of `formatMediaEvidence`/`formatMemoryFact`) continue to compile against the extended type.
+Golden diagnostics must show `invoked: false`.
+
+## Vision and evidence diagnostics
+
+Record image IDs, asset availability, authoritative strategy, whether pixels
+were inspected, and evidence status/action:
+
+- status: `complete | partial | failed | stale | not-applicable`;
+- action: `reused | freshly-inspected | freshly-structured | not-produced`.
+
+Fresh reinspection records refusal-like prior attempts as excluded, never as
+selected factual evidence.
+
+## Retrieval and reliability diagnostics
+
+Record exact/lexical/semantic/entity/provenance/reliability/scope/recency signals,
+eligible/considered/selected counts, provider/index descriptor when used, and
+`fused | lexical-fallback | none`. The ordinal reliability class and exclusion
+reason are visible for each candidate. Ineligible attempts cannot be selected as
+trusted factual evidence.
+
+## Shadow persistence
+
+Shadow diagnostics may be persisted separately as derived records. They cannot
+update visible context, image choice, memory, ledger execution results, answer
+generation, or canonical messages. Shadow record failure cannot fail the legacy
+turn.
+
+## Required audits
+
+- No single turn has two `planOwner` values across consumers.
+- Controlled classes bypass all legacy semantic decisions.
+- Authoritative turns do not consult legacy semantics.
+- Full-turn rollback changes owner for the whole turn.
+- Exact/direct recovery records why a false independent label did not suppress a
+  source.
+- App suspension/cancellation leaves a terminal planner diagnostic and releases
+  the single-flight resource.

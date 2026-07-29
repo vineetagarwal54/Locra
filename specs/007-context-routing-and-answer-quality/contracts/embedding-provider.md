@@ -3,6 +3,12 @@
 Application planning, memory, and retrieval code depend on this boundary, not
 directly on EmbeddingGemma or a Qwen runtime.
 
+Planner authority is independent of this provider. An unavailable, unapproved,
+building, stale, or failed embedding runtime leaves deterministic planning,
+ledger state, recent dependency, exact/lexical retrieval, explicit memories,
+deterministic reference resolution, and permitted constrained fallback fully
+operational. Lexical-only is a supported authoritative runtime mode.
+
 ## Provider contract
 
 ```ts
@@ -51,7 +57,8 @@ determine source reliability.
   runtime, New Architecture, NDK, memory, latency, and device approval.
 - Indexes are versioned independently of canonical conversation data.
 - Backfill is background, restart-safe, idempotent, and resumable from persisted
-  progress.
+  progress. Process death may lose only the uncommitted batch and resumes from
+  the last committed cursor.
 - Indexing yields or pauses for visible inference and other higher-priority
   device work under the single-flight resource policy.
 - Lexical retrieval remains available while indexing is incomplete, paused,
@@ -59,9 +66,10 @@ determine source reliability.
 - Vectors are stale when the embedding model, artifact, dimensions,
   prompt-policy version, normalization policy, or source revision differs from
   the active index descriptor.
-- A provider/index migration builds a new version beside the readable old index;
-  activation switches only after validation. Canonical messages and memories are
-  never rewritten or lost because an embedding model changes.
+- Migration operationally builds a new index version while lexical fallback
+  remains available, validates it, atomically activates it, and retires the
+  previous index later. Canonical messages and memories are never rewritten or
+  lost because an embedding model changes.
 - Conversation deletion cascades to all related retrieval units and vectors.
 - Cancellation is cooperative and leaves restart-safe progress; it does not
   corrupt the active index.
@@ -74,3 +82,13 @@ golden retrieval corpus and representative physical devices, evaluating
 retrieval quality, latency, memory, storage, backfill time, and battery impact.
 The selected value is recorded in the provider/index descriptor and may later be
 migrated through the lifecycle above.
+
+## Activation independence
+
+- Planner `authoritative` mode MUST be validated with no approved embedding
+  provider and with `lexical-fallback`.
+- Same-chat semantic activation has its own gate.
+- Cross-chat semantic activation has a separate gate and may remain disabled
+  after same-chat activation.
+- Changing the main chat/vision provider does not stale or rebuild this index.
+  Only an embedding compatibility-key change does.

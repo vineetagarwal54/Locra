@@ -86,18 +86,29 @@ This revision changed specification artifacts only. No production source, test,
 database migration, model artifact, dependency, or configuration file was
 changed, and no new automated or physical validation is claimed.
 
-New implementation work is listed unchecked as T059–T110. The existing task
-file also contains two historical completed tasks labeled T056; their text and
-checkboxes are preserved, and new numbering starts after the existing maximum
-T058 rather than rewriting task history.
+New implementation work is listed unchecked in Waves A–E. The later historical
+duplicate `T056` was corrected minimally to `T111`; its completed state and text
+remain historical. No task ID collision remains, and new work continues through
+T113.
 
 Required future automated coverage includes:
 
 - `TurnPlan` schema/validation and field-level fallback;
-- tiered planning and constrained fallback validation;
-- eight golden architecture scenarios;
+- tiered planning and the bounded partial-field constrained fallback;
+- nine golden architecture scenarios that assert Tier 3 was not invoked;
+- Wave A golden fixtures use injected/mocked ledger, entity, image-candidate,
+  explicit-memory, and lexical-retrieval state and assert expected plan,
+  fallback, authority mode, and `constrainedPlannerInvoked === false`; they do
+  not claim end-to-end vision, persistence, or semantic-retrieval execution;
+- shadow/controlled/authoritative ownership and one-turn-one-authority;
+- controlled Wave B image turns own reference resolution, image selection,
+  context-source selection/assembly, vision, generation projection, and
+  inference execution with zero legacy semantic decisions;
+- early exact/direct independent-routing recovery;
 - ledger transitions, provenance, revision invalidation, and deletion cascade;
+- immediately-following-turn ledger publication and cold-start rebuild;
 - immediate explicit memory availability before compaction/indexing;
+- explicit-memory false-write negatives and correction/supersession;
 - typed-unit reliability and multi-signal retrieval;
 - EmbeddingProvider readiness/cancellation/index lifecycle and 256/512
   dimension evaluation inputs;
@@ -105,6 +116,27 @@ Required future automated coverage includes:
 - plan-driven single/multi-image execution and refusal-exclusion;
 - one-plan authority across context, vision, generation, queue, recovery, and
   grounding.
+
+## Specification correction audit (2026-07-28)
+
+This later correction remains specification-only. It does not re-run or replace
+the 2026-07-26 production test record above and claims no new automated or
+physical implementation result.
+
+The corrected architecture:
+
+- prohibits ambiguous image-to-active fallback and uses
+  `unresolved-reference`/clarification with no selected image/evidence;
+- makes planner authority independent of EmbeddingGemma approval and requires a
+  lexical-only authority path;
+- defines Tier-3 input/output, invocation gate, 96-token/8-second budgets,
+  cancellation/suspension, `0.80` acceptance, and deterministic fallback;
+- limits `sourceRevision` invalidation to the immutable-message lifecycle rather
+  than introducing general editing;
+- defines shadow, controlled, and authoritative modes with exactly one semantic
+  owner per turn;
+- reorganizes all remaining implementation into Waves A–E with separate gates,
+  rollback, tests, and physical acceptance.
 
 The complete future physical matrix is recorded in
 [manual-validation-checklist.md](./manual-validation-checklist.md).

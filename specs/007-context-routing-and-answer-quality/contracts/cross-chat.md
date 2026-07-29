@@ -40,9 +40,11 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 ## HybridRetriever scope resolution (extended)
 
 - Cross-chat eligibility is independent of the same-chat long-context threshold.
-  In a new, short, or long chat, only explicit memory-seeking or
-  prior-conversation language may request expanded scope.
-- When `crossChatMemoryEnabled` is true and that intent is present, the effective
+  In a new, short, or long chat, a validated memory-read/context-scope
+  requirement may request expanded scope using deterministic/ledger/exact
+  evidence and, when separately enabled, semantic evidence. Regex phrases are
+  not the primary authority.
+- When `crossChatMemoryEnabled` is true and that validated scope is present, the effective
   `conversationIds` passed into `HybridRetriever.search` **MUST** expand from
   `[currentConversationId]` to eligible, non-excluded local conversations,
   provided the current conversation itself is not excluded (spec FR-021/FR-022).
@@ -66,6 +68,9 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 - Explicit durable memories are available immediately inside their source
   conversation without cross-chat activation and become cross-chat eligible only
   when global and conversation policies permit.
+- If a source conversation is excluded after creating an explicit memory, its
+  source message and derived memory remain locally available inside that
+  conversation but cannot contribute to any other conversation.
 - Cross-chat planning applies provenance, reliability, semantic, lexical,
   entity, and recency ranking over typed units.
 - Assistant refusal/failed attempt content never becomes trusted cross-chat
@@ -77,3 +82,6 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 - Zero cross-chat items ever appear in diagnostics for any turn while the global setting is off (spec FR-025) — directly testable via the existing diagnostics export.
 - Diagnostics separately record whether expanded cross-chat scope was queried and
   how many selected retrieval items came from another conversation.
+- Cross-chat semantic activation is gated separately from exact/lexical
+  cross-chat behavior and from planner authority. An unapproved embedding
+  provider never blocks same-chat planning or lexical-only authoritative turns.

@@ -38,8 +38,10 @@ until every required result has been observed on hardware.
 - [ ] **MV-007:** With at least two images, reference an older image by ordinal and
   by a unique description. Confirm the intended older image is selected.
 - [ ] **MV-008:** With two plausible images, then with three plausible images, use
-  a generic reference. Confirm ambiguity is recorded, no older image is guessed,
-  and any active-image fallback is explicitly shown in diagnostics.
+  a generic reference. Confirm `unresolved-reference`/clarification is recorded,
+  no image/evidence is selected, and no visual claim is made until resolution.
+  Then unambiguously refer to the active visual entity and confirm `active-image`
+  is allowed only in that non-ambiguous case.
 - [ ] **MV-009:** Remove an original image file. Confirm a pixel-dependent question
   reports `original-unavailable`, while a non-pixel question may reuse sufficient
   stored evidence.
@@ -65,10 +67,11 @@ until every required result has been observed on hardware.
   continuation has full mode headroom and does not repeat displayed text.
 - [ ] **MV-013:** The production embedding artifact is still separately gated.
   Until it is approved, confirm lexical fallback works and no semantic-runtime
-  claim is made, and confirm independent/ordinary follow-up submissions make zero
-  embedding calls. After separate approval, verify eligible same-chat/cross-chat
-  requests embed, retry/regenerate parity, fused exact-plus-semantic retrieval,
-  and failure/stale/backfill lexical fallback.
+  claim is made and all submissions make zero embedding calls. After separate
+  approval, verify only plans with eligible semantic candidates call the
+  provider; an “independent” label alone neither forces nor forbids that call.
+  Verify same-chat/cross-chat gates, fused exact-plus-semantic retrieval, and
+  failure/stale/backfill lexical fallback.
 - [ ] **MV-014:** Confirm cross-chat memory is off by default. Enable it and verify
   explicit memory-seeking retrieval from both a new chat and a short chat;
   ordinary independent questions remain same-chat-only. Verify attributed local
@@ -118,13 +121,23 @@ until every required result has been observed on hardware.
 - [ ] **T055:** Execute every phase in `quickstart.md` end to end and record all
   deviations plus a before/after comparison against the T001 baseline fixtures.
 
-## Architecture revision golden matrix (Phases 11–21)
+## Architecture revision golden matrix (Waves A–E)
 
 Record both the legacy result and shadow/authoritative `TurnPlan`, including
 field confidence, source provenance, selected retrieval units, image IDs,
 provider/index descriptors, fallback, and execution result. Do not mark any new
 task complete from a desktop/mock result when the task requires physical
 hardware.
+
+For every golden scenario below, confirm diagnostics record one authority mode,
+one exact plan owner, and `constrainedPlanner.invoked: false`.
+
+For Wave A, these are deterministic planning fixtures with injected/mocked
+ledger state, active entities, image-reference candidates, explicit-memory
+candidates, and lexical retrieval candidates. They validate the expected plan,
+fallback, authority mode, and no Tier-3 invocation only. They do not claim
+end-to-end vision, ledger persistence, explicit-memory persistence, or semantic
+retrieval execution; those claims belong to Waves B, C, and D.
 
 ### GV-001 — Text dependency
 
@@ -193,15 +206,36 @@ hardware.
 
 - [ ] Build an active index, then change provider/version/dimensions or prompt
   policy.
-- [ ] Confirm existing vectors become stale by descriptor and a side-by-side
-  index builds from restart-safe progress.
+- [ ] Confirm existing vectors become stale by descriptor, a new index version
+  builds from restart-safe progress, validation precedes atomic activation, and
+  the previous index is retired later.
 - [ ] Confirm lexical retrieval remains available during build, pause,
   cancellation, restart, and failure.
 - [ ] Confirm canonical messages/memories are unchanged and conversation deletion
   cascades to both old/new derived units and vectors.
 
+### GV-009 — Explicit-memory write negatives and correction
+
+- [ ] Ask “Do you remember my rent?” and confirm a memory read, not a write.
+- [ ] Ask “Remember when we discussed graphs?” and confirm a memory read.
+- [ ] Say “I remember that algorithm.” and confirm neither automatic read nor
+  durable write.
+- [ ] Correct a stored rent value. Confirm the new memory supersedes the old,
+  both source provenances remain, and normal recall returns only the active value.
+
 ## Planner authority and semantic-decision audit
 
+- [ ] In shadow mode, confirm legacy executes the complete turn and the shadow
+  plan changes no context/image/memory/inference behavior.
+- [ ] In controlled mode, confirm only an explicitly named class uses the new
+  plan and every semantic consumer for that turn bypasses legacy routing. For a
+  controlled image class, verify the plan owns reference resolution, image
+  selection, context-source selection, context assembly, vision strategy,
+  generation-task projection, and inference execution; record zero legacy
+  semantic decisions for the complete turn.
+- [ ] In authoritative mode, confirm legacy semantics are not consulted. Exercise
+  rollback and confirm the entire turn—not individual subsystems—returns to
+  legacy ownership.
 - [ ] Confirm context orchestration, generation planning, vision execution,
   `InferenceQueue`, refusal recovery, and grounding all receive the same
   validated plan ID/version.
@@ -209,9 +243,41 @@ hardware.
   dependency, retrieval scope, or memory operations.
 - [ ] Confirm low confidence in intent does not remove an attachment, direct
   reference, explicit memory write, or required current input.
-- [ ] Confirm ambiguous image references request clarification or use only
-  common evidence; the active image is never silently guessed.
+- [ ] Disable embeddings and confirm authoritative lexical-only topic/entity
+  matching still uses ledger identities, canonical labels, known aliases, exact
+  lexical matches, code identifiers, direct references, and active comparison
+  state, without introducing semantic regex routing.
+- [ ] Confirm ambiguous image references request clarification, select no
+  image/evidence, and make no target-specific visual claim; the active image is
+  never an ambiguity fallback.
 - [ ] Confirm deterministic regex remains only for syntax/validation.
+
+## Failure, restart, and immediately-following-turn matrix
+
+- [ ] Complete a turn that establishes a comparison/image/entity/decision, then
+  submit the next turn immediately. Confirm the new ledger state is already
+  visible and is not one turn behind.
+- [ ] Restart with missing, stale, incompatible, and corrupt ledger caches.
+  Confirm rebuild from canonical data and no canonical-history mutation.
+- [ ] Open an existing conversation with no ledger cache. Confirm it is not
+  planned as a first turn.
+- [ ] Simulate Tier-3 cancellation, 8-second timeout, malformed output, candidate
+  injection, confidence below `0.80`, and app suspension. Confirm deterministic
+  conservative fallback, resource release, and next-turn readiness.
+- [ ] Force structured image-evidence extraction to return malformed/incomplete
+  data. Confirm `partial`/`failed`, original-pixel reinspection availability, and
+  no new visual fact from a text-only formatting retry.
+- [ ] Delete one asset in a two-image comparison. Confirm the missing side is
+  identified and not substituted. Retain older evidence and confirm it is marked
+  `stale`, not freshly inspected.
+- [ ] Freshly inspect pixels after a prior assistant refusal. Confirm the refusal
+  is excluded as factual evidence.
+- [ ] Interrupt background indexing with process death. Confirm restart-safe
+  progress and uninterrupted lexical retrieval.
+- [ ] Exclude a source conversation after creating an explicit memory. Confirm
+  local recall still works there but the memory is absent from cross-chat.
+- [ ] Force a false legacy independent classification for an exact memory/fact
+  query. Confirm exact lexical recovery prevents the old hard skip.
 
 ## Final architecture physical validation
 
@@ -219,8 +285,10 @@ hardware.
   recorded 6–8GB device matrix before selecting production dimensions.
 - [ ] Confirm background indexing pauses for visible inference and resumes after
   restart without corrupting the active index.
-- [ ] Confirm constrained model planning is called only for ambiguous fixtures
-  and is cancelled/released cleanly.
+- [ ] Confirm golden scenarios never call constrained planning. For separately
+  mocked ambiguous Tier-3 fixtures, confirm only unresolved fields are requested,
+  the call is serial/single-flight, stays within 96 tokens/8 seconds, and
+  cancellation/suspension releases the resource cleanly.
 - [ ] Run the complete architecture in airplane mode and verify zero network
   calls across planning, embeddings, retrieval, memory, vision, generation,
   persistence, deletion, and migration.

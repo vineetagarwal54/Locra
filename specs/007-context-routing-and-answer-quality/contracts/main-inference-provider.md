@@ -55,3 +55,8 @@ interface MainModelCapabilities {
   provenance.
 - Changing the main provider does not require re-embedding memories. Re-embedding
   is required only when the active embedding provider/index descriptor changes.
+- When this provider supplies constrained planning, it receives only the
+  unresolved-field schema and deterministic candidate IDs, runs serially before
+  answer generation under the same resource policy, honors the 96-token/8-second
+  budgets plus cancellation/app suspension, and cannot become the complete-plan
+  authority. Capability absence takes the deterministic conservative fallback.

@@ -36,15 +36,15 @@ search(input: HybridSearchInput): RetrievedItem[];
   as What/When/Where/Explain/Find/Show/Tell/Compare rather than discarding the
   first capitalized match.
 
-## Query-time embedding (new wiring)
+## Query-time embedding
 
-- Deterministic classification **MUST** run before query-vector generation.
-  `EmbeddingService.embed([text])` may run only when same-chat long-context
-  retrieval or explicit cross-chat-memory retrieval is eligible and the approved
-  runtime is active. Retry and regenerate use the same sequence; continuations
-  embed only when their actual classification requires retrieval.
-- Independent questions, ordinary non-retrieval follow-ups, and an inactive
-  manifest make zero embedding calls.
+- Deterministic candidate construction and scope filtering run before
+  query-vector generation. The validated plan may request a vector only when the
+  approved provider/index is ready and semantic scoring can affect eligible
+  candidates.
+- An inactive provider/index makes zero embedding calls and remains a fully
+  supported lexical-only mode. Planner authority does not depend on query
+  embeddings.
 - Query embedding generation **MUST** acquire the same `DeviceResourcePolicy` `'embedding'` lease already used by `EmbeddingService.embed`, respecting the existing single-flight exclusivity with answer generation, compaction, recording, and transcription.
 
 ## Embedding-manifest gate (unchanged)
@@ -64,11 +64,29 @@ entity/topic similarity, provenance/reliability, allowed scope, and recency.
 Failed, cancelled, interrupted, refusal-like, superseded, or unsupported
 assistant attempts are excluded from trusted factual ranking.
 
+In lexical-only mode, active-topic and active-entity signals are constructed
+from conversation-state ledger identities, canonical labels, known aliases,
+exact lexical matches, code identifiers, direct references, and active
+comparison state. No new semantic regex router is introduced; embeddings are an
+optional additive signal.
+
+Reliability is ordinal: direct user fact/decision; confirmed pixel evidence;
+deterministically extracted exact content; confirmed durable derived fact;
+grounded completed assistant answer; ordinary assistant answer; uncertain
+assistant answer; ineligible attempt. Higher reliability may break relevance
+ties. Lower reliability cannot override an exact higher-reliability fact.
+Semantic similarity cannot promote an assistant claim into a durable fact.
+Final numerical weights/threshold calibration is a benchmark task.
+
 Semantic retrieval is never disabled solely because a legacy classifier labeled
 a question independent. The planner can still select zero units when none are
 relevant. Lexical exact-value retrieval remains available during every embedding
 index state and migration. Provider/index lifecycle details are authoritative in
 [`embedding-provider.md`](./embedding-provider.md).
+
+Before planner authority, the narrow independent-routing recovery may request
+only exact explicit-memory, exact same-chat lexical, direct entity/user-fact, or
+active-comparison candidates. It is not a semantic classifier.
 
 ## Invariants
 

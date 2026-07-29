@@ -54,8 +54,12 @@ export interface ContextBudgetPolicy {
 
 - Current request text and any explicitly referenced or active image evidence are
   reserved first and **never** evicted for another source (spec FR-028).
-- When assembled context exceeds the token budget, eviction order is: cross-chat retrieved items → same-chat retrieved items → durable facts → older-range summary entries → **the recent-turn floor, but only for a request that has one to begin with** (spec FR-030). A request classified purely as an independent text question has **no recent-turn floor at all** (spec FR-003/FR-004) — there is nothing in this eviction chain to reach for that request beyond "current request only." This corrects the Spec-006-era assumption that a recent-turn floor is unconditionally protected for every request; see spec Superseded Requirements.
-- Current request and protected image evidence are never evicted under any circumstance, for any classification.
+- When assembled context exceeds budget, optional eviction order is cross-chat
+  items → same-chat items → durable facts → older-range summaries → optional
+  recent turns. A legacy independent label does not remove exact/direct sources
+  protected by FR-086 or authoritative `TurnPlan` requirements.
+- Current request, attached/explicitly referenced images, direct references, and
+  every required plan source are never evicted for an optional source.
 - Protected image evidence may force eviction or deterministic compaction of
   lower-priority context, but final diagnostic `usedUnits` MUST NOT exceed
   `maximumUnits`.
