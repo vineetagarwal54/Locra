@@ -1,5 +1,9 @@
 # Contract: Lexical/Semantic Fusion and Hybrid Retrieval
 
+> **Architecture revision (2026-07-28)**: RRF remains a signal, but retrieval now
+> operates over typed units and combines entity, provenance, reliability, scope,
+> and recency signals. Eligibility is supplied by `TurnPlan`.
+
 **Module**: extended `src/retrieval/HybridRetriever.ts` | Consumers: `inference/ContextOrchestrator.ts`
 
 ## Pinned constants (versioned; change only via recorded evaluation)
@@ -47,6 +51,24 @@ search(input: HybridSearchInput): RetrievedItem[];
 
 - Semantic retrieval (query embedding + `HybridRetriever`'s use of semantic candidates) **MUST** remain inert — falling back to lexical-only — until the pre-existing embedding-artifact approval (manifest hash, license, device-compatibility verification) is granted, exactly as `EmbeddingService`/`EmbeddingBackfill` behave today (spec FR-016). This feature does not grant that approval.
 - `EmbeddingBackfill` **MUST** continue to run under the exclusive resource policy and MUST NOT block answering; requests use lexical-only fallback while backfill is incomplete (spec FR-017).
+
+## Typed-unit and multi-signal extension
+
+Eligible unit types are user messages, completed assistant answers, code blocks,
+explicit memories, durable facts, decisions, summary segments, and structured
+image evidence. Each unit has stable ID, conversation scope, source-message IDs,
+type, text, reliability, source revision, timestamps, and eligibility status.
+
+The final rank combines lexical exactness, semantic similarity, active
+entity/topic similarity, provenance/reliability, allowed scope, and recency.
+Failed, cancelled, interrupted, refusal-like, superseded, or unsupported
+assistant attempts are excluded from trusted factual ranking.
+
+Semantic retrieval is never disabled solely because a legacy classifier labeled
+a question independent. The planner can still select zero units when none are
+relevant. Lexical exact-value retrieval remains available during every embedding
+index state and migration. Provider/index lifecycle details are authoritative in
+[`embedding-provider.md`](./embedding-provider.md).
 
 ## Invariants
 

@@ -1,5 +1,9 @@
 # Contract: Token-Aware Context Budgeting
 
+> **Architecture revision (2026-07-28)**: Budgeting protects `TurnPlan` required
+> sources and verifies with the active `MainInferenceProvider` tokenizer. Qwen
+> constants below describe the current provider, not permanent architecture.
+
 **Module**: new token-based `ContextBudgetPolicy` implementation in `src/inference/ContextOrchestrator.ts` (replacing `CharacterContextBudgetPolicy` as the runtime default) + extended `src/inference/ContextWindow.ts`
 
 ## Pinned constants (versioned; change only via recorded evaluation)
@@ -55,6 +59,17 @@ export interface ContextBudgetPolicy {
 - Protected image evidence may force eviction or deterministic compaction of
   lower-priority context, but final diagnostic `usedUnits` MUST NOT exceed
   `maximumUnits`.
+
+## Provider-independent assembly extension
+
+- Current request, required image entities, direct references, and other
+  `requiredContextSources` are protected independently of legacy classification.
+- Provider switching replaces context/token/generation limits and tokenizer
+  behavior through `MainModelCapabilities`; it does not change selection,
+  provenance, ledger, memory, or retrieval schemas.
+- Assembly preserves generation headroom and performs bounded final
+  provider-native verification before inference. Failure to prove a fit produces
+  a safe fallback, not silent removal of a required image/reference.
 
 ## Invariants
 

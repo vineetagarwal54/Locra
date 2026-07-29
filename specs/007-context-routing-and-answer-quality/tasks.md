@@ -237,6 +237,138 @@ Generation quality remains outside the five required automated-test areas, but d
 
 ---
 
+## Architecture Revision Tasks (2026-07-28)
+
+The tasks below implement the authoritative revision in spec Sections 15–20 and
+plan Phases 10–21. All are intentionally unchecked. Existing completed task
+states above are historical and unchanged. The legacy ledger contains two
+different completed tasks labeled T056; this revision does not renumber history
+and therefore continues from the existing maximum ID, T058, at T059.
+
+## Phase 10: Specification and Typed Contract Foundations
+
+**Goal**: Translate the approved contracts into compile-time boundaries without
+changing production routing authority.
+
+- [ ] T059 [P] Write failing contract/type tests for `TurnPlan` validation, field-level fallback, required-image preservation, and unresolved-reference handling in `tests/unit/planning/TurnPlan.test.ts`.
+- [ ] T060 [P] Write failing provider-contract tests for embedding query/document separation, descriptors, cancellation, and readiness in `tests/unit/embedding/EmbeddingProvider.test.ts`.
+- [ ] T061 [P] Write failing provider-contract tests for main-model capabilities, native tokenization, image requirements, and provider substitution in `tests/unit/model/MainInferenceProvider.test.ts`.
+- [ ] T062 Implement the minimal typed planning contracts and deterministic validator in `src/planning/types.ts` and `src/planning/TurnPlanValidator.ts` to satisfy T059 without changing the live path.
+- [ ] T063 [P] Implement model-independent embedding interfaces/descriptors in `src/embedding/EmbeddingProvider.ts` to satisfy T060; do not install or activate an artifact.
+- [ ] T064 [P] Implement main inference provider interfaces/capability descriptor and a current-Qwen adapter boundary in `src/model/MainInferenceProvider.ts` to satisfy T061 without changing the production model.
+
+## Phase 11: Shadow Turn Planning
+
+**Goal**: Produce one validated proposed plan beside legacy routing; legacy
+behavior remains authoritative.
+
+- [ ] T065 Write failing tier-order and deterministic-state tests in `tests/unit/planning/TurnPlanner.test.ts`, including attachment/action/settings/provider-readiness precedence and no model fallback for unambiguous turns.
+- [ ] T066 Write failing ambiguous-request tests in `tests/unit/planning/ConstrainedPlannerFallback.test.ts` for validated structured output, cancellation, malformed output, no guessed image, and field-level safe fallback.
+- [ ] T067 Implement shadow `TurnPlanner` tier orchestration in `src/planning/TurnPlanner.ts` using deterministic state and injected semantic signals; keep legacy `RequestClassifier` output comparison-only.
+- [ ] T068 Implement the constrained structured-planning fallback adapter and validator in `src/planning/ConstrainedPlannerFallback.ts`, initially compatible with the current Qwen provider but invoked only for unresolved ambiguity.
+- [ ] T069 Wire shadow planning into the existing turn lifecycle in `src/inference/turnLifecycleMachine.ts` so it cannot change selected context, modality, queue dispatch, or visible answers.
+
+## Phase 12: Planner Diagnostics and Golden Scenarios
+
+**Goal**: Make plan quality and legacy differences measurable before behavior
+changes.
+
+- [ ] T070 [P] Add failing diagnostics serialization/sanitization tests in `tests/unit/diagnostics/TurnPlanDiagnostics.test.ts`.
+- [ ] T071 [P] Add the eight golden architecture fixtures (GV-001–GV-008) with plan/context/provenance expectations in `src/evaluation/golden/spec007TurnPlanning.ts` and contract tests in `tests/contract/spec007-turn-planning-golden.test.ts`.
+- [ ] T072 Extend diagnostics persistence/export with planner mode, validated plan, field confidence, signal provenance, validation changes, legacy deltas, provider/index descriptors, and execution outcomes in `src/diagnostics/DiagnosticsBundleBuilder.ts`.
+- [ ] T073 Define and record measurable shadow-to-controlled and controlled-to-authoritative gates in `src/evaluation/spec007PlannerGates.ts`; do not activate the new planner.
+
+## Phase 13: Image Execution Under the New Plan
+
+**Goal**: Execute one planned vision strategy, preserve image identity, and
+guarantee reusable evidence or canonical pixel continuity.
+
+- [ ] T074 [P] Write failing vision-plan contract tests for all five strategies, image capability failure, missing assets, cancellation, and no semantic replanning in `tests/unit/vision/VisionExecutor.test.ts`.
+- [ ] T075 [P] Write failing structured-evidence tests for multiple objects, text/numeric/object associations, counts, spatial relationships, uncertainty, provenance, and multi-image separation in `tests/unit/persistence/StructuredImageEvidenceRepository.test.ts`.
+- [ ] T076 Implement first-class image-entity and structured-evidence persistence boundaries with source revision/invalidation in `src/persistence/ImageEntityRepository.ts` and `src/persistence/StructuredImageEvidenceRepository.ts`.
+- [ ] T077 Implement the plan-driven vision executor in `src/inference/VisionExecutor.ts`; `InferenceQueue` executes the chosen strategy without choosing direct-image versus evidence paths itself.
+- [ ] T078 Ensure normal direct-image turns persist reusable evidence or a guaranteed pending/canonical-pixel reinspection path, and exclude prior refusal/unsupported prose from reinspection context in `src/inference/VisionExecutor.ts`.
+- [ ] T079 Implement provenance-separated multi-image comparison assembly in `src/inference/ContextBuilder.ts`.
+
+## Phase 14: Conversation-State Ledger
+
+**Goal**: Track structured active conversation state as derived, invalidatable
+state over canonical messages.
+
+- [ ] T080 Write failing ledger transition/rebuild tests for topics, entities, comparisons, images, code/documents, unresolved references, and decisions in `tests/unit/memory/ConversationStateLedger.test.ts`.
+- [ ] T081 Implement ledger types, deterministic transitions, source revisions, and rebuild/invalidation in `src/memory/ConversationStateLedger.ts`.
+- [ ] T082 Add derived ledger persistence and conversation-delete cascade behavior behind the existing SQLite persistence boundary in `src/persistence/ConversationStateRepository.ts`.
+- [ ] T083 Supply ledger candidates to shadow planning for “Which one?”, “its prices”, “previous one”, and “What did I decide?” without making the ledger itself authoritative in `src/planning/TurnPlanner.ts`.
+
+## Phase 15: Immediate Explicit Memory Writes
+
+**Goal**: Make user-directed memories available immediately, without compaction
+or embedding dependencies.
+
+- [ ] T084 Write failing tests for synchronous explicit-memory persistence, direct/lexical recall before compaction/indexing, reliability, provenance, invalidation, and deletion in `tests/unit/memory/ExplicitMemoryService.test.ts`.
+- [ ] T085 Implement explicit-memory types/service and source-provenance writes in `src/memory/ExplicitMemoryService.ts`.
+- [ ] T086 Persist the explicit memory and retrieval unit in the source-message completion workflow through `src/persistence/MemoryRepository.ts`, with no wait for compaction, summary, backfill, or restart.
+- [ ] T087 Revise segment-summary trigger policy for useful short/medium conversation segments without coupling it to explicit memory in `src/memory/SegmentSummaryPolicy.ts`, with failing policy tests first in `tests/unit/memory/SegmentSummaryPolicy.test.ts`.
+
+## Phase 16: EmbeddingGemma Indexing
+
+**Goal**: Add the first semantic provider and versioned indexes only after
+artifact/runtime/dimension approval.
+
+- [ ] T088 Verify the proposed EmbeddingGemma artifact/runtime/license/hash, Android New Architecture, NDK 26 build requirements, cancellation, latency, memory, battery, and offline behavior; record the approval or rejection in `specs/007-context-routing-and-answer-quality/research.md` before installing or activating anything.
+- [ ] T089 Benchmark at least 256 and 512 dimensions on GV retrieval units and representative 6–8GB devices; record quality, latency, memory, storage, backfill time, and battery results in `specs/007-context-routing-and-answer-quality/embedding-dimension-benchmark.md`.
+- [ ] T090 Write failing lifecycle tests for feature gating, readiness, restart-safe progress, pause-for-inference, cancellation, stale detection, side-by-side migration, activation rollback, deletion cascade, and lexical fallback in `tests/unit/embedding/EmbeddingIndexLifecycle.test.ts`.
+- [ ] T091 Implement the approved EmbeddingGemma adapter behind `EmbeddingProvider` in `src/embedding/EmbeddingGemmaProvider.ts`; keep it disabled without the approved descriptor.
+- [ ] T092 Implement versioned, restart-safe index lifecycle/backfill and stale-vector detection in `src/embedding/EmbeddingIndexLifecycle.ts` and the existing persistence boundary.
+
+## Phase 17: Shadow Semantic Retrieval
+
+**Goal**: Measure semantic/topic/entity signals without changing selected
+production context.
+
+- [ ] T093 Write failing typed-unit hybrid-ranking tests covering lexical, semantic, entity, provenance, reliability, scope, recency, exact values, deduplication, and low-trust attempt exclusion in `tests/unit/retrieval/SemanticRetriever.test.ts`.
+- [ ] T094 Implement typed retrieval-unit derivation and invalidation for user messages, completed answers, code, explicit memories, facts, decisions, summaries, and image evidence in `src/retrieval/RetrievalUnitService.ts`.
+- [ ] T095 Implement multi-signal shadow ranking through `EmbeddingProvider` in `src/retrieval/SemanticRetriever.ts`, preserving current lexical selection as authoritative and exporting rank deltas.
+
+## Phase 18: Controlled Semantic-Retrieval Activation
+
+**Goal**: Activate semantic ranking only behind measured gates and immediate
+lexical rollback.
+
+- [ ] T096 Add controlled-activation, failure, stale-index, migration, rollback, and no-binary-independent-gate tests in `tests/integration/semantic-retrieval-activation.test.ts`.
+- [ ] T097 Implement device/scope feature-gated semantic selection with lexical fallback and index-version rollback in `src/retrieval/RetrievalCoordinator.ts`.
+- [ ] T098 Validate controlled semantic retrieval against GV-001, GV-002, GV-003, GV-006, and GV-008; record precision/error/resource results in `specs/007-context-routing-and-answer-quality/validation-semantic-shadow.md`.
+
+## Phase 19: New Planner Becomes Authoritative
+
+**Goal**: Make downstream systems execute the validated plan after gates pass,
+while retaining a bounded rollback window.
+
+- [ ] T099 Write failing end-to-end authority tests proving context orchestration, vision, generation, queue, recovery, and grounding consume one plan and do not reclassify in `tests/integration/turn-plan-authority.test.ts`.
+- [ ] T100 Switch context assembly, vision, memory operations, retrieval, generation projection, queue dispatch, refusal recovery, and grounding to consume the validated `TurnPlan` in `src/inference/ContextOrchestrator.ts`, `src/inference/VisionExecutor.ts`, `src/retrieval/RetrievalCoordinator.ts`, `src/inference/GenerationTuning.ts`, `src/inference/InferenceQueue.ts`, and `src/inference/GroundingAssessment.ts`.
+- [ ] T101 Implement authoritative/legacy-rollback feature state and plan-version persistence in `src/planning/PlannerActivation.ts`.
+- [ ] T102 Verify mocked main-provider substitution leaves plan, ledger, memory, retrieval units, embedding indexes, evidence, storage, and diagnostics unchanged in `tests/contract/main-provider-switch.test.ts`.
+
+## Phase 20: Remove Obsolete Semantic Regex Routing
+
+**Goal**: Remove duplicate semantic authority only after the new planner is
+stable.
+
+- [ ] T103 Inventory all remaining semantic decisions in request classification, context orchestration, generation planning, vision execution, queue dispatch, refusal recovery, and grounding; record removals in `specs/007-context-routing-and-answer-quality/semantic-routing-removal-audit.md`.
+- [ ] T104 Remove legacy semantic regex authority and duplicate reclassification from `src/inference/RequestClassifier.ts`, `src/inference/ContextOrchestrator.ts`, `src/inference/ImageEvidencePolicy.ts`, `src/inference/GenerationTuning.ts`, and `src/inference/GroundingAssessment.ts`, retaining deterministic syntax/ordinal/identifier/date/path/output-validation parsing.
+- [ ] T105 Remove the emergency legacy rollback only after the documented rollback window and authoritative acceptance gates pass in `src/planning/PlannerActivation.ts`; retain historical readers in `src/diagnostics/DiagnosticsBundleBuilder.ts`.
+
+## Phase 21: Final Physical-Device Validation
+
+**Goal**: Validate the complete architecture on representative constrained
+Android devices; no new work in this phase is pre-checked.
+
+- [ ] T106 Run GV-001–GV-008 end to end on representative 6–8GB physical devices and record plans, selected sources, provenance, visible outcome, latency, memory, and battery observations in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
+- [ ] T107 Validate missing image/model/embedding artifacts, planner malformed output, provider capability mismatch, cancellation, restart during backfill, index migration, and queue contention; record clean degradation/no-substitution evidence in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
+- [ ] T108 Run final airplane-mode zero-network validation across planning, model fallback, embeddings, retrieval, memory, vision, generation, persistence, deletion, and migration; record results in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`.
+- [ ] T109 Run the existing open T034/T052–T055/T058 hardware matrices plus Spec 006/legacy Spec 007 regressions and record each result in `specs/007-context-routing-and-answer-quality/manual-validation-checklist.md`; do not close any historical physical task without its own evidence.
+- [ ] T110 Record the final authority/removal decision, embedding descriptor/dimensions, main-provider descriptor, device matrix, deviations, and rollback outcome in `specs/007-context-routing-and-answer-quality/validation-final-architecture.md`.
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -251,6 +383,29 @@ Generation quality remains outside the five required automated-test areas, but d
 - **Phase 7 (cross-chat)**: Depends on Phases 1–6 being stable (spec Section 14: "built only once Phases 1–6 are stable"); requires Phase 6's `HybridRetriever` fusion code to exist (even while gated), since cross-chat scope wraps the same function.
 - **Phase 8 (grounding)**: Depends on Phases 1–7 being stable.
 - **Phase 9 (final manual device validation)**: Depends on all implemented phases.
+
+### Architecture Revision Phase Dependencies
+
+- **Phase 10** starts from the revised specification/contracts and changes no
+  behavior.
+- **Phase 11** depends on Phase 10 typed validation/provider boundaries.
+- **Phase 12** depends on shadow plans from Phase 11 and blocks behavioral use of
+  the new plan until golden diagnostics exist.
+- **Phase 13** depends on Phase 12 and changes only vision execution under a
+  controlled plan gate.
+- **Phase 14** depends on the core plan/diagnostic shape; it may overlap Phase 13
+  after Phase 12 because it owns separate files/state.
+- **Phase 15** depends on ledger/provenance foundations from Phase 14.
+- **Phase 16** depends on provider contracts and artifact/runtime approval; it
+  does not depend on semantic activation.
+- **Phase 17** depends on typed units from Phases 13–15 and a ready Phase 16
+  provider/index; it remains shadow-only.
+- **Phase 18** depends on measured Phase 17 results and preserves lexical
+  rollback.
+- **Phase 19** depends on all golden/controlled gates from Phases 12–18.
+- **Phase 20** depends on Phase 19 stability and the documented rollback window.
+- **Phase 21** depends on all implemented phases and never substitutes automated
+  validation for physical-device evidence.
 
 ### User Story Dependencies
 

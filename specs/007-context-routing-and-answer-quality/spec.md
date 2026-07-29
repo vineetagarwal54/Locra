@@ -4,19 +4,46 @@
 
 **Created**: 2026-07-26
 
-**Status**: Revised Draft (Audit Pass 2)
+**Status**: Architecture Revision Draft (2026-07-28)
 
 **Input**: User description: "Create a context router that selects the smallest useful context for each request, improving normal text conversations, long multi-turn conversations, new/follow-up image questions, OCR/counting/price/detailed-visual questions, voice-transcribed questions, optional cross-chat context sharing, and answer relevance/conciseness/grounding/repetition — incrementally, on top of the existing Spec 006 architecture."
 
 ## 1. Problem and Goals
 
-Spec 006 built a deterministic hybrid-context pipeline (`ContextOrchestrator`, `HybridRetriever`, `EmbeddingService`, `ImageEvidencePolicy`, `AnswerPostProcessor`) but four gaps limit answer quality today:
+**Architecture revision input (2026-07-28)**: Redesign Spec 007 as one
+coordinated, model-independent turn-planning, semantic-retrieval,
+conversation-memory, and multimodal-inference architecture, while preserving
+canonical SQLite messages and migrating incrementally from the current
+implementation. This revision is authoritative where it conflicts with the
+original input statement above.
+
+Spec 006 and the first Spec 007 implementation built a deterministic
+hybrid-context pipeline (`ContextOrchestrator`, `HybridRetriever`,
+`EmbeddingService`, `ImageEvidencePolicy`, `AnswerPostProcessor`). Physical
+device diagnostics then showed that the remaining failures are architectural,
+not isolated prompt defects:
 
 - **The router always assembles the same fixed set of sources.** `ContextOrchestrator.orchestrate()` unconditionally attempts recent turns, media evidence, same-chat retrieval, durable facts, and an older-range summary for every request, regardless of whether the request is independent and self-contained. There is no classification step that decides "this request needs none of that."
 - **Semantic retrieval is wired but inert in production.** `HybridRetriever` and `EmbeddingService` exist and are unit-tested, but no caller ever produces a query-time vector (`ContextOrchestrationOptions.queryVector` is never populated outside tests) and the runtime orchestrator is built with no embedding manifest. Every retrieval call in the shipped app silently falls back to lexical-only matching. Likewise, `ImageEvidencePolicy.evaluateImageEvidenceAvailability` — the pure function that should decide "re-run the original image through the Qwen vision path" vs. "reuse stored evidence" vs. "original unavailable" for pixel-dependent questions (OCR, counting, prices, detailed visual reads) — is fully tested but never called from `ContextOrchestrator`.
 - **Context budgeting is character-only, not model/token-aware.** `ContextOrchestrator`'s `CharacterContextBudgetPolicy` measures raw character counts (`contextBudgetUnits` of 4,000 / 7,000 / 11,000 for Low/Medium/High) to decide what the router includes, while a separate, later trimming pass (`ContextWindow.trimMessagesToContextWithReport`) estimates actual tokens (`Math.ceil(length / 3)`) against the real Qwen context window (`QWEN_CONTEXT_TOKEN_LIMIT` = 4096 tokens, minus the generation reserve). These two measurements are not calibrated against each other, and neither reserves distinct capacity for system instructions, current input, image input, selected context, and generated output — so the router can select a source set that fits its own character budget yet still gets silently re-trimmed downstream against the real token limit.
 - **Cross-chat context was removed, not deferred.** Spec 006 Phase 13 (T100) deliberately removed all alternate-conversation selection from the UI, requests, stores, retrieval budgets, and evaluation cases because the one-chat-at-a-time picker leaked complexity and correctness risk. There is currently no path — opt-in or otherwise — for relevant context to cross conversation boundaries.
 - **Answer-quality control stops at post-hoc repetition and truncation cleanup.** `AnswerPostProcessor` reliably catches literal looping and mid-sentence truncation after the fact, but generation itself has no task-sensitive length targeting beyond the three response modes, and nothing stops an emerging loop earlier during generation.
+- **Semantic authority is fragmented.** Request classification, context
+  orchestration, generation planning, vision execution, `InferenceQueue`,
+  refusal recovery, and grounding can independently infer intent, modality,
+  dependency, image strategy, and retrieval requirements. Their decisions can
+  disagree within one turn.
+- **A single classification error has excessive blast radius.** The current
+  independent-question gate can disable recent context, retrieval, facts,
+  summaries, image continuity, and explicit memory together.
+- **Memory and evidence arrive too late or with the wrong authority.** Explicit
+  user memories may wait for compaction, normal direct-image turns may leave no
+  reusable structured evidence, and refusal-like assistant prose can contaminate
+  later reinspection.
+- **Regex is carrying semantic responsibility it cannot reliably satisfy.**
+  Pronouns, comparisons, implicit memory recall, active-topic continuity, and
+  image references require semantic and stateful signals rather than another
+  pattern patch.
 
 **Goals** — improve, without a rewrite:
 
@@ -28,6 +55,24 @@ Spec 006 built a deterministic hybrid-context pipeline (`ContextOrchestrator`, `
 - Voice-transcribed questions are routed identically to typed text once transcribed.
 - Users who explicitly opt in can get relevant context shared across their own chats, with per-conversation exclusion and zero leakage when the setting is off (the default) — delivered as a later, self-contained phase once same-chat routing, image continuity, and token budgeting are stable.
 - Answers become more relevant, more concise for simple questions, longer only when the task needs it, less repetitive, and stop looping earlier — using runtime-verified generation controls — with deterministic grounding/hallucination checking available as a final, optional diagnostics-only phase.
+
+- Every turn produces one authoritative, validated structured plan (`TurnPlan`)
+  that downstream modules execute without independently reclassifying intent,
+  modality, dependency, references, retrieval scope, vision strategy, memory
+  operations, or generation requirements.
+- No single low-confidence semantic decision can erase an explicitly attached
+  image, direct reference, explicit durable-memory write, or another
+  independently established context requirement.
+- Explicit user memories become available immediately. Episodic units, segment
+  summaries, durable facts, conversation-state ledger entries, and structured
+  image evidence remain provenance-bearing derived layers over canonical SQLite
+  messages.
+- EmbeddingGemma is the first planned semantic provider behind a
+  model-independent `EmbeddingProvider` boundary and versioned index lifecycle.
+- The current Qwen3-VL runtime remains unchanged in this phase behind a
+  model-independent main inference boundary, so a later compatible provider can
+  be substituted without redesigning planning, memory, retrieval, evidence,
+  context ranking, storage, or diagnostics.
 
 ## 2. Non-Goals
 
@@ -41,6 +86,12 @@ Spec 006 built a deterministic hybrid-context pipeline (`ContextOrchestrator`, `
 - Selecting or approving the production embedding model artifact. That approval gate (manifest hash, license, device-compatibility verification) predates this feature and remains a separate, recorded decision this feature does not make and does not assume has already happened.
 - Shipping cross-chat retrieval (Section 7) or the deterministic grounding/hallucination assessment (Section 9, final phase) in the first delivery slice. Both remain in this feature's scope, but are explicitly sequenced as later, optional phases (Section 14) after routing, image continuity, token budgeting, and generation/repetition improvements are stable — neither may block or be a prerequisite for the earlier phases, and neither is part of this feature's core acceptance criteria or core required tests (Section 12).
 - A broad UI redesign, a new model marketplace, or any other feature not explicitly named in this specification. New UI is limited to a single global cross-chat-memory setting, a per-conversation cross-chat-exclusion control, and diagnostics fields already covered by the existing beta diagnostics export — all built from the existing design system (see Preserved Foundations).
+
+- Replacing the current production Qwen model in this phase. Only the
+  model-independent capability boundary, provider descriptor, and migration
+  validation are specified.
+- Treating EmbeddingGemma as an answer model, pixel-inspection model, source of
+  reliability, or sole retrieval mechanism.
 
 ## 3. Conversation Scenarios
 
@@ -385,3 +436,335 @@ This feature is an incremental extension of Spec 006, not a rewrite. The followi
 - Voice-transcribed text is treated identically to typed text once it reaches the router; transcription confidence/quality is out of scope.
 - All routing, retrieval, and (if built) grounding logic runs entirely on-device with zero network calls, consistent with the project's non-negotiable privacy architecture.
 - This feature builds on and does not regress any Spec 006 functional requirement or success criterion; where this spec is silent, Spec 006's behavior stands (see Preserved Foundations).
+
+## 15. Authoritative Architecture Revision (2026-07-28)
+
+This section and the revised contracts are authoritative wherever they conflict
+with Sections 3–14. Earlier text remains to preserve the history of the
+implemented first architecture and its completed task states; it is not an
+instruction to continue adding regex patches.
+
+### 15.1 Unified planning authority
+
+- **FR-041**: Every submitted, continued, retried, or regenerated turn MUST
+  produce exactly one validated structured planning result, named `TurnPlan` in
+  this specification. It represents user intent; text, image, or multimodal
+  modality; conversation dependency; resolved and unresolved references; active
+  entities and topics; memory reads and writes; retrieval scope; vision
+  execution; required context sources; generation requirements; confidence; and
+  safe fallback behavior.
+- **FR-042**: Request classification, context orchestration, generation
+  planning, vision execution, `InferenceQueue`, refusal recovery, and grounding
+  assessment MUST execute the validated `TurnPlan` and MUST NOT independently
+  infer or override its semantic decisions. Capability and asset validation are
+  permitted; silent semantic reclassification is not.
+- **FR-043**: Planning MUST follow four tiers: deterministic application state;
+  semantic signals; constrained structured-model fallback only for remaining
+  ambiguity; and deterministic validation/safe fallback.
+- **FR-044**: Deterministic state includes current attachments, available prior
+  assets, active conversation, continue/retry/regenerate action, settings,
+  feature gates, and provider/artifact readiness.
+- **FR-045**: Semantic signals include embedding similarity, active-topic and
+  entity similarity, eligible retrieval evidence, ledger state, and recent
+  dependency state. No one signal is authoritative by itself.
+- **FR-046**: Constrained model fallback MUST return validated structured
+  planning output, MAY initially use the current Qwen provider, MUST run only for
+  ambiguous requests, and MUST NOT be required for every turn.
+- **FR-047**: Regex MAY parse deterministic syntax such as identifiers,
+  explicit ordinals, file paths, dates, code identifiers, and structured output.
+  Regex MUST NOT remain the primary authority for semantic intent,
+  conversational dependency, memory recall, active-topic selection, or
+  image-reference understanding.
+- **FR-048**: Low confidence or failure in one planning field MUST NOT remove
+  independently established requirements. An attached image, explicit
+  reference, explicit memory write, or required current request survives an
+  uncertain intent/dependency decision.
+- **FR-049**: A plan requiring image pixels MUST NOT silently fall back to
+  text-only generation. A plan with multiple plausible image targets MUST keep
+  the reference unresolved and request clarification or use only evidence valid
+  for all candidates; it MUST NOT guess or silently default to the active image.
+
+The full shape and invariants are defined in
+[`contracts/unified-turn-planning.md`](./contracts/unified-turn-planning.md).
+
+### 15.2 Conversation-state ledger and memory
+
+- **FR-050**: Each conversation MUST have a lightweight derived
+  conversation-state ledger tracking active topics, active entities, active
+  comparison targets, active image entities, referenced code/documents,
+  unresolved references, recent explicit decisions, and explicit memory writes.
+- **FR-051**: The ledger MUST NOT replace canonical SQLite messages. Every
+  derived entry retains source-message provenance and source revision and is
+  invalidated or rebuilt when its source changes, is superseded, or is deleted.
+- **FR-052**: The memory architecture MUST distinguish immediate working
+  memory, the conversation-state ledger, explicit durable memories, episodic
+  retrieval units, segment summaries, structured image evidence, and optional
+  cross-chat memory.
+- **FR-053**: Explicit user memory statements MUST be persisted and available
+  to planning and lexical/direct memory lookup immediately after their canonical
+  source message is persisted. They MUST NOT wait for compaction, summarization,
+  embedding backfill, restart, or a long-conversation threshold.
+- **FR-054**: Compaction and segment summarization MUST support ordinary short
+  and medium conversations through bounded segment policies; they MUST NOT be
+  the activation mechanism for explicit memory.
+- **FR-055**: User-stated facts, user decisions, structured image evidence,
+  completed assistant answers, and low-trust assistant attempts MUST have
+  distinct reliability classes. Assistant-generated claims MUST NOT
+  automatically become durable facts.
+- **FR-056**: Failed, cancelled, interrupted, refusal-like, superseded, or
+  unsupported assistant attempts MUST NOT rank as trusted factual evidence or
+  become authoritative image evidence.
+
+The ledger and memory-layer contract is
+[`contracts/conversation-state-ledger.md`](./contracts/conversation-state-ledger.md).
+
+### 15.3 Typed retrieval units and hybrid ranking
+
+- **FR-057**: Retrievable content MUST be represented as typed units, including
+  user messages, completed assistant answers, code blocks, explicit memories,
+  durable facts, decisions, summary segments, and structured image evidence.
+- **FR-058**: Every retrieval unit MUST retain a stable ID, conversation scope,
+  source-message IDs, unit type, searchable text, reliability, source revision,
+  and creation/update timestamps.
+- **FR-059**: Hybrid ranking MUST combine lexical, semantic, entity,
+  provenance, reliability, scope, and recency signals, then deduplicate
+  overlapping sources before context selection.
+- **FR-060**: Lexical retrieval MUST remain available for exact prices, dates,
+  names, unit numbers, IDs, code identifiers, and quoted text. Semantic scoring
+  MUST NOT replace or hide exact-match retrieval.
+- **FR-061**: Semantic retrieval eligibility MUST NOT be controlled by a binary
+  “independent question means never retrieve” gate. The planner may reject
+  irrelevant candidates, but one dependency classification cannot disable
+  recent context, retrieval, facts, summaries, image evidence, and explicit
+  memory together.
+
+### 15.4 Model-independent embedding architecture
+
+- **FR-062**: Application code MUST depend on an `EmbeddingProvider` contract
+  that distinguishes query embeddings, document embeddings, model descriptor,
+  artifact identity, vector dimensions, prompt-policy version, source revision,
+  normalization, runtime readiness, cancellation, and model/index migration.
+- **FR-063**: EmbeddingGemma is the first provider to evaluate for same-chat and
+  optional cross-chat semantic retrieval, code retrieval, explicit-memory
+  retrieval, textual image-evidence retrieval, active-topic/entity similarity,
+  and planner intent/reference-resolution signals.
+- **FR-064**: EmbeddingGemma MUST NOT generate final answers, inspect image
+  pixels, decide the complete `TurnPlan`, replace lexical retrieval, or determine
+  source reliability.
+- **FR-065**: Embedding activation MUST be feature-gated and artifact-approved.
+  Indexes MUST be versioned; background indexing MUST be restart-safe and pause
+  for visible inference; lexical fallback MUST remain available while indexes
+  are incomplete, stale, incompatible, cancelled, or failed.
+- **FR-066**: Vector staleness and re-indexing MUST account for embedding model,
+  artifact, dimensions, prompt policy, normalization, and source revision.
+  Provider migration builds a new index without modifying canonical messages.
+- **FR-067**: Conversation deletion MUST cascade to its derived retrieval units
+  and vectors. Changing embedding providers MUST NOT lose or migrate canonical
+  conversation data.
+- **FR-068**: The first production dimension remains a benchmark decision.
+  Evaluation MUST compare at least 256 and 512 dimensions for retrieval quality,
+  latency, memory, storage, backfill time, and battery impact.
+
+See [`contracts/embedding-provider.md`](./contracts/embedding-provider.md).
+
+### 15.5 Model-independent main inference architecture
+
+- **FR-069**: The main inference runtime MUST be behind a provider boundary with
+  a capability descriptor covering text generation, image input, structured
+  extraction, context limit, native tokenizer, generation limits, projector
+  requirements, runtime compatibility, cancellation, and supported prompt
+  format.
+- **FR-070**: The current production Qwen3-VL model MUST NOT change in this
+  phase. The provider boundary MUST permit a later Qwen3.5 or compatible
+  multimodal provider without redesigning turn planning, ledger state, memory
+  storage, retrieval units, embedding indexes, context ranking, image-evidence
+  persistence, or diagnostics.
+- **FR-071**: Switching the main model MUST NOT require re-embedding stored
+  memories unless the embedding provider/index descriptor itself changes.
+- **FR-072**: Final prompt verification MUST use the selected main provider's
+  native tokenizer and capability descriptor, not an application-wide
+  Qwen-specific constant.
+
+See
+[`contracts/main-inference-provider.md`](./contracts/main-inference-provider.md).
+
+### 15.6 Authoritative vision execution
+
+- **FR-073**: `TurnPlan` MUST contain one authoritative vision execution plan
+  with strategies equivalent to: no vision; reuse stored evidence; inspect one
+  original image; inspect and persist structured evidence; or compare multiple
+  evidence sets.
+- **FR-074**: Every image MUST be a first-class image entity with stable
+  identity, source-message provenance, asset URI/availability state, content
+  revision, and evidence links.
+- **FR-075**: Structured image evidence MUST support multiple objects, object
+  attributes, extracted text, numeric values, price-to-object and text-to-object
+  associations, counts, spatial relationships, uncertainty, and source image
+  identity.
+- **FR-076**: A normal image turn MUST leave reusable structured evidence even
+  when its visible answer used a direct-image path. If full extraction is
+  deferred for latency, the plan records pending evidence work and guarantees
+  that a follow-up can inspect the original asset rather than relying on
+  assistant prose.
+- **FR-077**: Canonical image pixels, derived structured evidence, and prior
+  assistant prose are distinct sources. Previous refusals, image-unavailable
+  claims, or unsupported visual prose MUST NOT be treated as authoritative
+  evidence during reinspection.
+- **FR-078**: Multi-image comparisons MUST preserve separate image identities,
+  evidence sets, provenance, and uncertainties through context assembly and
+  generation.
+
+The extended contract is
+[`contracts/image-continuity.md`](./contracts/image-continuity.md).
+
+### 15.7 Context assembly
+
+- **FR-079**: Context assembly MUST, in order: preserve the current request;
+  preserve required images and direct references; retrieve only eligible
+  sources; rank by hybrid relevance and reliability; deduplicate overlapping
+  sources; allocate token budget; preserve provenance; reserve generation
+  headroom; and verify the final prompt with the selected provider's native
+  tokenizer.
+- **FR-080**: The complete conversation remains in canonical SQLite storage.
+  Excluding irrelevant material from one prompt MUST NOT delete or rewrite it.
+- **FR-081**: Refusal recovery and reinspection MUST assemble context from
+  canonical image entities and eligible evidence, explicitly excluding the prior
+  refusal as factual authority.
+
+### 15.8 Diagnostics and safe rollout
+
+- **FR-082**: Shadow diagnostics MUST record the legacy classification/selection,
+  proposed validated `TurnPlan`, field confidence, signal provenance,
+  validation changes, execution results, and material differences without
+  changing the visible answer.
+- **FR-083**: The legacy implementation MUST remain available during shadow
+  comparison until golden scenarios, automated contract tests, and physical
+  device diagnostics support authority transfer. The migration MUST NOT replace
+  every component in one implementation task.
+- **FR-084**: After the new planner becomes authoritative, obsolete semantic
+  regex routing and duplicate semantic decisions MUST be removed. Deterministic
+  syntax regex and validation remain.
+- **FR-085**: All planning, embeddings, retrieval, memory, vision, generation,
+  and persistence remain on-device and zero-network. Model and embedding work
+  obey the single-flight resource policy and degrade without crashes.
+
+## 16. Revised Golden Validation Scenarios
+
+- **GV-001 Text dependency**: Provide recursive and iterative code; ask which is
+  better; then ask which of the two should be used in an interview. The ledger
+  retains both comparison targets and the planner selects the relevant code and
+  prior decision context.
+- **GV-002 Explicit memory**: Tell Locra to remember an apartment rent; ask
+  unrelated questions; recall the rent without using “remember,” “earlier,” or
+  “mentioned.” The value is available immediately and exact lexical retrieval
+  remains possible before semantic indexing.
+- **GV-003 Image continuity**: Upload a market image; ask for visible products;
+  ask for their prices using a pronoun; ask which price belongs to a specific
+  product. The same image entity and structured object/value associations remain
+  active.
+- **GV-004 Image reinspection**: Produce or inject a false image-unavailable
+  response; ask Locra to inspect the image again. The original image entity is
+  used and the prior refusal is excluded as authoritative evidence.
+- **GV-005 Multi-image comparison**: Upload two images and ask for a comparison.
+  Both identities and evidence sets remain separate through planning, assembly,
+  generation, and diagnostics.
+- **GV-006 Retrieval negative**: Ask an unrelated self-contained question. No
+  irrelevant conversation or image context is selected, while planning does not
+  rely on a global binary no-retrieval gate.
+- **GV-007 Main-model switching**: Replace a mocked main inference provider.
+  Planning, retrieval, memory, evidence, embedding-index, storage, and
+  diagnostics contracts remain unchanged.
+- **GV-008 Embedding migration**: Change embedding provider, version, or
+  dimensions. Lexical fallback remains available while the new versioned index
+  builds; canonical messages and memories remain untouched.
+
+## 17. Revised Rollout Sequence
+
+1. Specification and typed contracts.
+2. Shadow `TurnPlan` generation.
+3. Planner diagnostics and golden scenarios.
+4. Image execution under the new plan.
+5. Conversation-state ledger.
+6. Immediate explicit memory writes.
+7. EmbeddingGemma indexing through `EmbeddingProvider`.
+8. Shadow semantic retrieval.
+9. Controlled semantic-retrieval activation.
+10. New planner becomes authoritative.
+11. Obsolete semantic regex routing and duplicate semantic authority are removed.
+12. Final physical-device validation.
+
+Each stage has a separately testable checkpoint and rollback to the prior
+authoritative behavior until Stage 10. Stages 2–9 do not silently replace the
+legacy path.
+
+## 18. Superseded Spec 007 Decisions
+
+The following earlier Spec 007 decisions are explicitly superseded:
+
+- `RequestClassification` as the authoritative semantic result and
+  `ContextOrchestrator` as a place that may independently decide source needs.
+- The pure-independent hard skip in FR-003/FR-004/FR-030 and related task text
+  when interpreted as a binary switch that disables all context systems.
+  Irrelevant context remains excluded, but retrieval and memory eligibility are
+  field-level plan decisions with independent signals.
+- The regex/lexical conversational-reference classifier described in
+  `research.md` Section 2 and Assumptions as the primary semantic authority.
+- FR-012a and related acceptance text that maps an ambiguous image reference to
+  the active image. Ambiguous references now remain unresolved and are never
+  guessed.
+- The rule that query embedding occurs only after a deterministic
+  long-context/cross-chat classification. Query embedding is now one semantic
+  signal requested by the planner when useful, without a brittle binary gate.
+- The assumption that semantic activation does not select an initial model.
+  EmbeddingGemma is now the first provider to evaluate, while artifact approval
+  and the dimension benchmark remain open.
+- The claim that Qwen3-VL is an application-wide sole inference architecture.
+  It remains the unchanged current provider behind a model-independent boundary.
+- Any behavior that lets `InferenceQueue`, vision execution, generation
+  planning, refusal recovery, or grounding independently reinterpret modality,
+  intent, image strategy, or retrieval requirements.
+- Any evidence policy that allows a normal direct-image turn to finish without
+  either persisted reusable structured evidence or a guaranteed path back to
+  the canonical original image.
+
+## 19. Success Criteria
+
+- **SC-001**: All eight golden scenarios produce the expected plan, selected
+  context, provenance, and fallback results in automated contract fixtures; no
+  scenario depends on final-answer wording.
+- **SC-002**: In the golden corpus, 100% of explicitly attached images and
+  explicit memory writes survive unrelated low-confidence planner fields.
+- **SC-003**: No ambiguous multi-image reference is silently mapped to an image
+  in automated or physical validation.
+- **SC-004**: Explicit memories are queryable immediately after source-message
+  persistence, before compaction or embedding backfill.
+- **SC-005**: Lexical retrieval remains operational throughout every tested
+  embedding failure, pause, stale-index, and migration state.
+- **SC-006**: Switching mocked main inference providers changes no planning,
+  ledger, memory, retrieval-unit, embedding-index, or evidence schema.
+- **SC-007**: Final prompt verification demonstrates required image/reference
+  preservation and generation headroom using the active provider's native
+  tokenizer for every golden fixture.
+- **SC-008**: Final physical-device validation completes in airplane mode with
+  zero inference-path network calls and no crash across planner failure, missing
+  assets, embedding failure, cancellation, and provider-capability mismatch.
+
+## 20. Open Implementation Questions
+
+- Which on-device runtime and quantization of EmbeddingGemma satisfy artifact
+  licensing, NDK 26, New Architecture, latency, memory, battery, and cancellation
+  requirements?
+- Which of at least 256 and 512 dimensions provides the best measured
+  quality/resource tradeoff for Locra's golden retrieval corpus?
+- What constrained structured-planning schema and confidence calibration should
+  the current Qwen provider use for genuinely ambiguous turns?
+- What bounded segment policy triggers early conversation summaries without
+  duplicating or delaying explicit durable memory?
+- Which structured image-evidence extraction policy balances first-turn latency
+  against guaranteed follow-up reuse on 6–8GB devices?
+- How are canonical source edits represented in the current immutable-message
+  model: superseding revision, deletion only, or a future explicit edit feature?
+- What thresholds combine semantic, entity, provenance, reliability, scope, and
+  recency signals before controlled semantic retrieval becomes authoritative?
+- What evidence threshold is sufficient to move from shadow planning to the new
+  authoritative planner, and what rollback window is required afterward?

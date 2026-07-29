@@ -1,5 +1,11 @@
 # Contract: Optional Scoped Cross-Chat Retrieval (Phase 7 — built only after Phases 1–6 are stable)
 
+> **Architecture revision (2026-07-28)**: Cross-chat scope is now an optional
+> `TurnPlan` retrieval scope over eligible typed memory/retrieval units. It does
+> not require an explicit regex phrase such as “remember” or “earlier” when
+> semantic/ledger signals establish relevance, and it remains globally
+> off-by-default with bilateral conversation exclusions.
+
 **Module**: extended `src/persistence/sqlite/Migrations.ts`, `src/persistence/ConversationRepository.ts`, `src/store/settingsStore.ts`, `src/retrieval/HybridRetriever.ts` | New UI: `src/components/settings/CrossChatSettingRow.tsx`
 
 This entire contract is out of scope for Phases 1–6 delivery (routing, image continuity, token budgeting, generation improvements, and same-chat semantic retrieval); nothing in Phases 1–6 may import or depend on the shapes below.
@@ -54,6 +60,16 @@ setCrossChatMemoryEnabled(enabled: boolean): void;
 ## UI
 
 - One global settings-row toggle (existing settings-screen pattern/components) and one per-conversation exclusion control (e.g., a conversation-menu action), both built from existing `design/` tokens — no new picker UX (spec Non-Goal, Section 7 intro).
+
+## Typed-memory extension
+
+- Explicit durable memories are available immediately inside their source
+  conversation without cross-chat activation and become cross-chat eligible only
+  when global and conversation policies permit.
+- Cross-chat planning applies provenance, reliability, semantic, lexical,
+  entity, and recency ranking over typed units.
+- Assistant refusal/failed attempt content never becomes trusted cross-chat
+  factual memory.
 
 ## Invariants
 

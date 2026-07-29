@@ -44,3 +44,21 @@
   T052–T055 remain explicitly incomplete physical-device tasks, so this checklist
   does not claim every implementation task has hardware acceptance.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
+- Revision (2026-07-28 — unified architecture): validated one authoritative
+  `TurnPlan`; tiered deterministic/semantic/constrained-model/validation
+  planning; conversation-state ledger; immediate explicit memory; typed
+  provenance/reliability-aware retrieval units; EmbeddingGemma behind a
+  model-independent provider with 256/512 dimension benchmarking and versioned
+  index migration; current Qwen behind a model-independent main provider;
+  plan-driven single/multi-image execution; provider-native prompt verification;
+  twelve-stage shadow-to-authoritative rollout; and all eight required golden
+  scenarios.
+- Earlier contradictory decisions are explicitly superseded in spec Section 18
+  and research Section 22 rather than silently coexisting: regex-primary
+  semantics, binary independent-question context removal, active-image fallback
+  for ambiguity, application-wide Qwen coupling, and downstream semantic
+  reclassification.
+- Open questions in spec Section 20 are benchmark/implementation decisions with
+  safe gated defaults. No unresolved question permits activation without
+  artifact/runtime/device evidence, so no `[NEEDS CLARIFICATION]` marker is
+  required for specification readiness.

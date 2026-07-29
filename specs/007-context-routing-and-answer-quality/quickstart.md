@@ -1,6 +1,43 @@
 # Quickstart: Validating Context Routing and Answer Quality
 
+> **Architecture revision (2026-07-28)**: Legacy Phases 1–9 remain below as
+> historical validation. The authoritative new rollout is Phases 10–21.
+
 This guide runs the manual validation criteria from `spec.md` Section 11 against a local development build, using the existing beta diagnostics export as the source of truth for what the router actually did. It does not duplicate contract details — see `contracts/` and `data-model.md` for the shapes referenced below.
+
+## Architecture Revision Phases 10–21
+
+1. **Typed contracts**: review `data-model.md` and contracts; confirm one plan,
+   provider-independent model/embedding boundaries, ledger, typed units, and
+   first-class image/evidence entities without behavior changes.
+2. **Shadow planning**: confirm every turn receives a validated shadow
+   `TurnPlan` while legacy routing remains authoritative and unambiguous turns
+   require no constrained planner-model call.
+3. **Diagnostics/golden scenarios**: run GV-001–GV-008 from
+   `manual-validation-checklist.md`; inspect confidence, provenance, legacy
+   deltas, provider/index descriptors, selected sources, and fallback.
+4. **Plan-driven vision**: exercise all five vision strategies and confirm
+   refusals never become image authority.
+5. **Conversation-state ledger**: exercise code comparisons, pronoun price
+   follow-ups, previous-image comparisons, and decision recall; rebuild from
+   source revisions.
+6. **Immediate explicit memory**: write and recall an apartment-rent memory
+   before compaction or semantic indexing; confirm lexical/direct availability.
+7. **EmbeddingGemma indexing**: after approval, benchmark at least 256/512
+   dimensions; interrupt/restart/pause/cancel backfill and confirm lexical
+   availability.
+8. **Shadow semantic retrieval**: compare lexical-authoritative results with
+   typed-unit multi-signal ranking; confirm low-trust attempts are not factual
+   evidence.
+9. **Controlled semantic activation**: enable only through measured gates;
+   verify stale/failing/migrating index fallback and rollback.
+10. **Planner authority**: confirm context, vision, memory, retrieval,
+    generation, queue, refusal recovery, and grounding use one plan ID/version.
+11. **Semantic-regex removal**: confirm regex remains only for deterministic
+    syntax/validation and downstream semantic reclassification is gone.
+12. **Final physical validation**: run golden, provider-switch, embedding
+    migration, failure/cancellation, airplane-mode, and regression matrices on
+    representative 6–8GB devices.
 
 ## Prerequisites
 

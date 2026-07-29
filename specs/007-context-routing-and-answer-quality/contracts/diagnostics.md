@@ -1,5 +1,9 @@
 # Contract: Router Diagnostics (Phase 1, ships before behavior changes)
 
+> **Architecture revision (2026-07-28)**: Diagnostics compare legacy routing
+> with proposed/validated `TurnPlan` during shadow rollout. Legacy fields remain
+> readable for historical records.
+
 **Module**: extended `src/inference/ContextOrchestrator.ts` (`ContextSelectionDiagnostics`), `src/diagnostics/DiagnosticsBundleBuilder.ts`, `src/diagnostics/DiagnosticsTraceStore.ts`
 
 ## ContextSelectionDiagnostics (extended)
@@ -47,6 +51,26 @@ export interface ContextSelectionDiagnostics {
   use selected context plus the current turn's fresh `hiddenEvidence`, and use
   `null` only when no image/retrieved evidence makes assessment applicable.
   Older pre-Phase-8 records may omit it without being considered incomplete.
+
+## TurnPlan diagnostic extension
+
+Each shadow or authoritative turn records:
+
+- plan/schema version and planner mode (`shadow`, `controlled`,
+  `authoritative`, `legacy-rollback`);
+- sanitized validated `TurnPlan`;
+- planning tiers/signals used and field-level confidence;
+- unresolved references and safe fallback;
+- deterministic validation changes/rejections;
+- legacy classification/selection summary and material differences;
+- execution outcomes for memory, retrieval, vision, context assembly, provider
+  capability, generation, and queue completion;
+- embedding provider/index descriptor and lexical fallback reason;
+- selected source IDs/revisions and reliability.
+
+Diagnostics distinguish planning decisions from execution failures. They remain
+sanitized, exclude raw pixels/internal prompts by default, and do not expose
+hidden reasoning or unredacted local paths.
 
 ## DiagnosticsBundleBuilder / DiagnosticsExportService (extended)
 

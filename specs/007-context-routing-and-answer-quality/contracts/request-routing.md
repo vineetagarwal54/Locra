@@ -1,5 +1,9 @@
 # Contract: Request Routing (Classification + Minimal-Context Selection)
 
+> **Architecture revision (2026-07-28)**: This is now the legacy/shadow adapter
+> contract. `RequestClassification` is no longer the authoritative semantic
+> decision. See [`unified-turn-planning.md`](./unified-turn-planning.md).
+
 **Module**: new `src/inference/RequestClassifier.ts` + extended `src/inference/ContextOrchestrator.ts` | Consumers: `store/conversationStore.ts`
 
 ## RequestClassifier (new, pure functions, no I/O)
@@ -52,6 +56,19 @@ orchestrate(
     or `isCrossChatEligible` → only the sources required by that classification
     are considered. Cross-chat scope does not inherit the same-chat length gate.
 - **MUST** remain deterministic: identical `snapshot`, `options`, and settings state produce identical `RequestClassification` and identical selected/ordered context (spec FR-006).
+
+## Revised execution contract
+
+- `ContextOrchestrator` consumes a validated `TurnPlan`; it does not call a
+  semantic classifier and then independently choose source requirements.
+- A legacy `isIndependentTextQuestion` value MUST NOT act as a global kill
+  switch for memory, retrieval, summaries, facts, or images. Each required source
+  is preserved or rejected through its own plan field and evidence.
+- Deterministic ordinal, date, identifier, and code/path parsing may populate
+  planning signals. Pronoun, intent, dependency, memory, topic, and image-target
+  semantics require ledger/semantic signals and optional constrained fallback.
+- An unresolved image reference is never converted to an active-image fallback
+  by this adapter.
 
 ## Invariants
 

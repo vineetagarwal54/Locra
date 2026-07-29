@@ -1,5 +1,9 @@
 # Contract: Image Continuity and Original-Pixel Reuse
 
+> **Architecture revision (2026-07-28)**: The `VisionExecutionPlan` in the
+> validated `TurnPlan` is authoritative; this earlier policy is a migration
+> adapter and MUST NOT independently select an image or strategy.
+
 **Module**: extended `src/inference/ImageEvidencePolicy.ts` + extended `src/inference/ContextOrchestrator.ts` | Consumers: `store/conversationStore.ts`, `InferenceService`
 
 ## ImageEvidencePolicy (extended, still pure)
@@ -43,6 +47,31 @@ When `evaluateImageEvidenceAvailability` returns `{ kind: 'use-original' }`:
 - **Ambiguous reference (new, spec FR-012a)**: ambiguity begins with two or more plausible prior images. Explicit ordinals remain unambiguous. Descriptive references are resolved deterministically from the image-bearing prompt, associated assistant/later turns, and the newest compatible stored evidence; exactly one uniquely strongest match is required. Tied, weak, or missing matches remain ambiguous. An unresolved ambiguous reference defaults to `isSameImageFollowUp` against the active image, never calls `resolveReferencedImageEvidence` with a guessed ID, and records both the ambiguity and `imageReferenceResolution: 'ambiguous-active-fallback'`.
 - `original-unavailable` (pixel-dependent, asset missing) **MUST** surface as a response indicating the original is unavailable, not a guess from stale evidence (spec FR-011).
 - `evidence-unavailable` combined with non-pixel-dependent and no evidence is unchanged from Spec 006 (no evidence available at all).
+
+## Revised first-class image and vision contract
+
+The authoritative strategies are `none`, `reuse-evidence`,
+`inspect-original`, `inspect-and-structure`, and `compare-evidence`.
+
+Every referenced image has a stable image entity, source-message provenance,
+asset revision/availability, and evidence links. Structured evidence supports
+multiple objects, attributes, extracted text, numbers, prices, counts,
+text/value-to-object associations, spatial relationships, uncertainty, and
+source image identity.
+
+- A normal direct-image answer MUST also persist reusable structured evidence or
+  retain a planned, guaranteed path to inspect the canonical pixels for a
+  follow-up.
+- Multiple images and evidence sets remain separately labeled; comparison never
+  merges identities or provenance.
+- Canonical pixels, structured evidence, and assistant prose are separate
+  sources. A refusal, false image-unavailable statement, or unsupported visual
+  claim is never authoritative on reinspection.
+- Ambiguous image references remain unresolved. The earlier
+  `ambiguous-active-fallback` decision is superseded and MUST NOT be used by the
+  new planner.
+- A required image with no available pixels/evidence yields explicit
+  asset-unavailable or clarification fallback, never silent text-only execution.
 
 ## Invariants
 

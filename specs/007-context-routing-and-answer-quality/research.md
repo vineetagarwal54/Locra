@@ -148,3 +148,195 @@ dependency or network call is needed.
   `stopCompletion()` owner. User cancellation is idempotent and queue-level
   streaming does not issue a second native stop. Mocked acceptance is complete;
   physical acceptance remains T034.
+
+## 11. Unified semantic authority
+
+**Decision**: Replace authoritative `RequestClassification` with one validated
+`TurnPlan` that contains field-level semantic decisions and is consumed by
+context assembly, vision, generation, queue dispatch, recovery, and grounding.
+The existing classifier remains only as a legacy shadow comparator during
+migration.
+
+**Rationale**: Device diagnostics showed contradictions between visual
+classification and queue path selection, lost image references, and a single
+classification disabling unrelated systems. A shared plan gives every consumer
+the same modality, references, required sources, and fallback while retaining
+single-flight execution.
+
+**Alternatives considered**:
+- Add more cross-module flags: rejected because flags duplicate rather than
+  consolidate authority.
+- Let each module resolve ambiguity locally: rejected because this caused the
+  observed inconsistent paths.
+
+## 12. Tiered semantic planning
+
+**Decision**: Evaluate deterministic app state first, semantic topic/entity/
+retrieval signals second, a constrained structured-model planner only for
+remaining ambiguity, and deterministic validation last. Regex is retained only
+for syntax and validation.
+
+**Rationale**: Deterministic state is reliable and cheap; embeddings and ledger
+state handle paraphrases and implicit dependency; model fallback covers the
+small ambiguous tail without imposing an extra generation on every request;
+validation prevents silent unsafe fallback.
+
+**Supersedes**: Section 2's regex/lexical heuristic as the primary semantic
+authority and the assumption that no on-device planning fallback may exist.
+
+## 13. Conversation-state ledger
+
+**Decision**: Add a derived, revisioned ledger over canonical messages for active
+topics, entities, comparison targets, images, artifacts, unresolved references,
+decisions, and explicit memory writes.
+
+**Rationale**: Natural continuations such as “Which one is better?” or “What did
+I decide?” refer to structured conversational state, not merely a pronoun match
+or a fixed recent-turn window. Keeping it derived preserves SQLite messages as
+the source of truth and supports invalidation.
+
+**Alternatives considered**:
+- Store only a rolling prose summary: rejected because it loses typed identity,
+  comparison, reference, and reliability information.
+- Treat the ledger as canonical: rejected because source edits/deletion and
+  provenance would become ambiguous.
+
+## 14. Layered memory and typed retrieval units
+
+**Decision**: Separate immediate working memory, ledger state, explicit durable
+memories, episodic units, segment summaries, structured image evidence, and
+optional cross-chat memory. Index typed units for user messages, completed
+assistant answers, code, explicit memories, facts, decisions, summaries, and
+image evidence.
+
+**Rationale**: Explicit memory must be available immediately, while summaries
+and semantic vectors may be delayed. Typed units allow reliability and
+provenance to affect ranking, preventing failed/refusal-like assistant attempts
+from becoming trusted evidence.
+
+**Alternatives considered**:
+- Wait for compaction before any durable memory: rejected because it fails normal
+  short conversations.
+- Embed raw messages only: rejected because code, decisions, explicit memories,
+  evidence, and summary segments need different type/reliability treatment.
+
+## 15. Embedding provider and EmbeddingGemma
+
+**Decision**: Use EmbeddingGemma as the first provider to evaluate behind a
+model-independent `EmbeddingProvider`. Distinguish query/document policies and
+version vectors by provider/model, artifact, dimensions, prompt policy,
+normalization, source revision, and index version. Benchmark at least 256 and 512
+dimensions before selecting production dimensions.
+
+**Rationale**: EmbeddingGemma can supply same/cross-chat retrieval, code/memory/
+evidence retrieval, and topic/entity/reference signals, but those capabilities
+must not couple application schemas to one artifact. Dimension choice is a
+measured quality/resource tradeoff on constrained devices.
+
+**Alternatives considered**:
+- Make EmbeddingGemma types/storage application-wide: rejected because provider
+  migration would require redesign.
+- Hardcode 256 or 512 now: rejected pending physical quality, storage, memory,
+  latency, backfill, and battery benchmarks.
+- Use the main Qwen model's embeddings as the permanent boundary: rejected
+  because main-model switching and embedding lifecycle must remain independent.
+
+## 16. Embedding index lifecycle
+
+**Decision**: Use feature-gated, artifact-approved, versioned indexes with
+restart-safe background backfill, cooperative cancellation, persisted progress,
+pause/yield for visible inference, stale-vector detection, side-by-side rebuild,
+and lexical fallback throughout migration or failure.
+
+**Rationale**: Semantic capability must never block answering or risk canonical
+data. Side-by-side indexes allow rollback and provider/dimension/policy migration
+without rewriting messages or explicit memories.
+
+**Alternatives considered**:
+- Rebuild in place: rejected because partial failure can leave no valid semantic
+  index.
+- Block chat until backfill completes: rejected for graceful degradation and
+  single-flight resource priority.
+
+## 17. Multi-signal hybrid retrieval
+
+**Decision**: Retain lexical exact-match guarantees and add semantic, entity,
+provenance, reliability, scope, and recency signals over eligible typed units.
+No binary “independent” classification disables semantic retrieval globally.
+
+**Rationale**: Exact values require lexical matching; paraphrases require
+semantic signals; source trust/provenance must affect ranking; conversation scope
+and recency matter independently. A field-level plan can reject irrelevant
+candidates without one mistake switching off every source.
+
+**Supersedes**: Section 3 remains useful for lexical/semantic list fusion, but RRF
+alone is no longer the complete ranking architecture.
+
+## 18. Model-independent main inference provider
+
+**Decision**: Keep current Qwen3-VL unchanged but place its generation,
+multimodal input, extraction, tokenizer, prompt format, context/generation
+limits, projector, compatibility, and cancellation behind a provider capability
+descriptor.
+
+**Rationale**: Future Qwen3.5 or compatible provider changes should be runtime
+and prompt migrations, not planning/memory/retrieval/storage migrations. Native
+token verification belongs to the selected provider, not a permanent
+Qwen-specific application constant.
+
+**Alternatives considered**:
+- Keep Qwen-specific contracts throughout application code: rejected because it
+  couples every architecture layer to the current model.
+- Couple embedding indexes to the main provider: rejected because changing the
+  answer model must not require re-embedding memories.
+
+## 19. Authoritative vision plan and evidence
+
+**Decision**: Put one vision strategy in `TurnPlan`: none, reuse evidence,
+inspect original, inspect plus structured evidence, or compare evidence sets.
+Represent images as stable entities and store structured object/text/value/
+association/count/spatial/uncertainty evidence by image identity. Treat pixels,
+evidence, and assistant prose as separate sources.
+
+**Rationale**: This prevents classifier/queue disagreement, preserves follow-up
+continuity after direct-image answers, keeps multiple images separate, and
+prevents false refusals from poisoning later reinspection.
+
+**Supersedes**: Section 8's active-image fallback for ambiguity and any policy
+where “direct image” may finish without reusable evidence or canonical-pixel
+continuity.
+
+## 20. Context assembly order
+
+**Decision**: Preserve current request, required images, and direct references
+first; retrieve only eligible sources; rank by relevance/reliability; dedupe;
+budget; preserve provenance; reserve generation headroom; and verify the final
+prompt with the active provider's native tokenizer.
+
+**Rationale**: This turns context selection into execution of explicit
+requirements and ensures later budget logic cannot silently discard the image or
+reference that defines the turn.
+
+## 21. Shadow-to-authoritative rollout
+
+**Decision**: Use twelve stages: contracts, shadow plan, diagnostics/golden
+scenarios, planned vision, ledger, immediate memory, EmbeddingGemma indexing,
+shadow semantic retrieval, controlled retrieval activation, planner authority,
+obsolete semantic-regex removal, and final physical validation.
+
+**Rationale**: The current implementation remains a safety comparator until the
+new plan has evidence. This avoids a big-bang rewrite and isolates rollback
+points.
+
+## 22. Contradiction resolution
+
+- “Pure regex classifier” conflicts with required semantic planning: superseded.
+- “Independent means query nothing” conflicts with resilient memory/retrieval:
+  superseded by field-level plan requirements while irrelevant selection remains
+  forbidden.
+- “Ambiguous active-image fallback is not a guess” conflicts with no guessed
+  image target: superseded by unresolved-reference handling.
+- “No embedding model selected” conflicts with the new first-provider decision:
+  EmbeddingGemma is selected for evaluation, not yet artifact-approved.
+- “Qwen tokenizer/context constants are application architecture” conflicts with
+  model switching: moved behind the main provider descriptor.

@@ -74,3 +74,37 @@ dimension, latency, memory, and device-compatibility approval gate is completed.
 
 Use [manual-validation-checklist.md](./manual-validation-checklist.md) to record
 the remaining physical results.
+
+## Specification-only architecture revision (2026-07-28)
+
+The automated results above are a historical record of the first Spec 007
+implementation as of 2026-07-26. They do not validate the revised `TurnPlan`,
+conversation-state ledger, immediate-memory, EmbeddingGemma provider/index,
+typed-unit retrieval, main-provider boundary, or plan-driven vision contracts.
+
+This revision changed specification artifacts only. No production source, test,
+database migration, model artifact, dependency, or configuration file was
+changed, and no new automated or physical validation is claimed.
+
+New implementation work is listed unchecked as T059–T110. The existing task
+file also contains two historical completed tasks labeled T056; their text and
+checkboxes are preserved, and new numbering starts after the existing maximum
+T058 rather than rewriting task history.
+
+Required future automated coverage includes:
+
+- `TurnPlan` schema/validation and field-level fallback;
+- tiered planning and constrained fallback validation;
+- eight golden architecture scenarios;
+- ledger transitions, provenance, revision invalidation, and deletion cascade;
+- immediate explicit memory availability before compaction/indexing;
+- typed-unit reliability and multi-signal retrieval;
+- EmbeddingProvider readiness/cancellation/index lifecycle and 256/512
+  dimension evaluation inputs;
+- MainInferenceProvider capability and substitution contracts;
+- plan-driven single/multi-image execution and refusal-exclusion;
+- one-plan authority across context, vision, generation, queue, recovery, and
+  grounding.
+
+The complete future physical matrix is recorded in
+[manual-validation-checklist.md](./manual-validation-checklist.md).

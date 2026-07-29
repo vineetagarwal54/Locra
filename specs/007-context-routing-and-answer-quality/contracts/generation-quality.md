@@ -1,5 +1,9 @@
 # Contract: Generation Quality
 
+> **Architecture revision (2026-07-28)**: `GenerationPlan` is an execution
+> projection of `TurnPlan.generation` and provider capabilities. It does not
+> infer intent, modality, dependency, image strategy, or retrieval need.
+
 **Modules**: `GenerationTuning.ts`, `InferenceQueue.ts`,
 `QwenLlamaRuntime.ts`, and `AnswerPostProcessor.ts`
 
@@ -46,6 +50,13 @@ The effective value must equal the `n_predict` value used by the runtime.
 `stopCompletion()`. Queue code does not issue a duplicate stop. Deterministic
 mock coverage is complete, while physical stop/lease/cancellation acceptance
 remains open under T034.
+
+## TurnPlan execution
+
+The generator receives provenance-labeled assembled context and the validated
+vision result. It does not treat prior refusal prose as image evidence and does
+not silently downgrade an image-required turn when the provider lacks image
+capability. Provider incompatibility follows `TurnPlan.fallback`.
 
 ## Validation
 

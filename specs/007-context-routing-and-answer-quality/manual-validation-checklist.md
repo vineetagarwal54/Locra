@@ -117,3 +117,112 @@ until every required result has been observed on hardware.
   checkpoint/recovery, durable images, and offline operation.
 - [ ] **T055:** Execute every phase in `quickstart.md` end to end and record all
   deviations plus a before/after comparison against the T001 baseline fixtures.
+
+## Architecture revision golden matrix (Phases 11–21)
+
+Record both the legacy result and shadow/authoritative `TurnPlan`, including
+field confidence, source provenance, selected retrieval units, image IDs,
+provider/index descriptors, fallback, and execution result. Do not mark any new
+task complete from a desktop/mock result when the task requires physical
+hardware.
+
+### GV-001 — Text dependency
+
+- [ ] Ask for recursive and iterative implementations of the same algorithm.
+- [ ] Ask “Which one is better?”
+- [ ] Ask “Which of the two should I use in an interview?”
+- [ ] Confirm both code entities remain distinct comparison targets in the
+  ledger and the final plan selects only their relevant messages/code blocks.
+- [ ] Confirm no regex phrase is the sole reason for dependency resolution.
+
+### GV-002 — Immediate explicit memory
+
+- [ ] Tell Locra to remember a specific apartment rent.
+- [ ] Immediately inspect diagnostics/storage and confirm an explicit-memory
+  unit with user-source provenance is available before compaction or indexing.
+- [ ] Ask unrelated questions.
+- [ ] Ask for the rent without “remember,” “earlier,” or “mentioned.”
+- [ ] Confirm direct/lexical recall works while semantic indexing is paused,
+  stale, or disabled.
+
+### GV-003 — Image continuity and associations
+
+- [ ] Upload a market image and ask which products are visible.
+- [ ] Confirm a stable image entity and reusable structured evidence are
+  persisted even if the visible answer used direct image generation.
+- [ ] Ask “What are their prices?”
+- [ ] Ask which price belongs to one named product.
+- [ ] Confirm object, text, numeric value, and price-to-object associations retain
+  the same source image ID and uncertainty.
+
+### GV-004 — Image reinspection after false refusal
+
+- [ ] Produce or inject a false image-unavailable/refusal-like assistant attempt.
+- [ ] Ask Locra to inspect the image again.
+- [ ] Confirm the plan uses the canonical original image entity, not the refusal
+  as evidence.
+- [ ] Confirm the prior refusal is low-trust/ineligible for factual grounding and
+  the original asset remains active when available.
+
+### GV-005 — Multi-image comparison
+
+- [ ] Upload two images in separate turns and ask for a comparison.
+- [ ] Confirm the plan names both image IDs and selects `compare-evidence`.
+- [ ] Confirm evidence blocks, objects, uncertainties, and provenance remain
+  separate through final prompt assembly.
+- [ ] Remove one asset and confirm the missing side is identified specifically;
+  no substitution or merged “both unavailable” claim occurs.
+
+### GV-006 — Retrieval negative
+
+- [ ] Ask an unrelated self-contained question after text and image-heavy turns.
+- [ ] Confirm zero irrelevant conversation/image sources are selected.
+- [ ] Confirm the planner may evaluate eligible semantic/ledger signals and does
+  not rely on a global “independent means never retrieve” switch.
+
+### GV-007 — Main provider substitution
+
+- [ ] Substitute a mocked compatible main inference provider.
+- [ ] Confirm `TurnPlan`, ledger, memory, retrieval units, embedding index,
+  evidence schemas, and persisted diagnostics remain unchanged.
+- [ ] Confirm prompt token verification uses the substitute provider descriptor.
+- [ ] Substitute a provider without image capability and confirm an image-required
+  turn uses explicit fallback, never silent text-only generation.
+
+### GV-008 — Embedding migration
+
+- [ ] Build an active index, then change provider/version/dimensions or prompt
+  policy.
+- [ ] Confirm existing vectors become stale by descriptor and a side-by-side
+  index builds from restart-safe progress.
+- [ ] Confirm lexical retrieval remains available during build, pause,
+  cancellation, restart, and failure.
+- [ ] Confirm canonical messages/memories are unchanged and conversation deletion
+  cascades to both old/new derived units and vectors.
+
+## Planner authority and semantic-decision audit
+
+- [ ] Confirm context orchestration, generation planning, vision execution,
+  `InferenceQueue`, refusal recovery, and grounding all receive the same
+  validated plan ID/version.
+- [ ] Confirm none independently changes intent, modality, image target,
+  dependency, retrieval scope, or memory operations.
+- [ ] Confirm low confidence in intent does not remove an attachment, direct
+  reference, explicit memory write, or required current input.
+- [ ] Confirm ambiguous image references request clarification or use only
+  common evidence; the active image is never silently guessed.
+- [ ] Confirm deterministic regex remains only for syntax/validation.
+
+## Final architecture physical validation
+
+- [ ] Validate EmbeddingGemma 256- and 512-dimension benchmark results on the
+  recorded 6–8GB device matrix before selecting production dimensions.
+- [ ] Confirm background indexing pauses for visible inference and resumes after
+  restart without corrupting the active index.
+- [ ] Confirm constrained model planning is called only for ambiguous fixtures
+  and is cancelled/released cleanly.
+- [ ] Run the complete architecture in airplane mode and verify zero network
+  calls across planning, embeddings, retrieval, memory, vision, generation,
+  persistence, deletion, and migration.
+- [ ] Re-run every historical open hardware task (T034, T052–T055, T058)
+  independently; this new matrix does not close them by implication.

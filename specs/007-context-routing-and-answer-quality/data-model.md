@@ -112,3 +112,172 @@ Extends the existing `ContextSelectionDiagnostics`/`RankedCandidateDiagnostic` s
 - `retrievalMode` and `imageDecision` MUST be present on every turn's diagnostics once Phase 1 ships, even when the value is `'none'`/`'not-applicable'` (spec FR-037 requires recording consideration, not just selection).
 - Older pre-Phase-8 diagnostic records MAY omit `groundingVerdict`; current records use
   `null` when grounding assessment is not applicable (spec FR-040).
+
+## Architecture Revision Entities (2026-07-28, authoritative)
+
+The entities below supersede `RequestClassification` as the authoritative
+semantic model. The existing classification shape may remain during shadow
+migration only.
+
+## TurnPlan
+
+Transient, validated per turn, and persisted only as sanitized diagnostics/audit
+state as required by rollout. Exact implementation names may change without
+changing these semantics.
+
+| Field | Type | Validation |
+|---|---|---|
+| `planVersion` | string | Required; identifies schema/policy version. |
+| `turnId` | string | Stable link to canonical turn/action. |
+| `intent` | structured intent | One primary user goal plus optional secondary goals; not a regex label. |
+| `modality` | `text \| image \| multimodal` | Must match required inputs and provider capability. |
+| `conversationDependency` | structured dependency | `none`, `recent`, `ledger`, `retrieval`, or combinations with confidence/evidence. |
+| `references` | `ResolvedReference[]` | Each carries target type/ID, resolution evidence, and confidence. |
+| `unresolvedReferences` | `UnresolvedReference[]` | Non-empty when no safe unique target exists. |
+| `activeEntityIds` | string[] | Ledger entity IDs required by this turn. |
+| `activeTopics` | `TopicReference[]` | Topic IDs/labels plus source provenance. |
+| `memoryReads` | `MemoryRead[]` | Typed scope, query, required/optional status, limits. |
+| `memoryWrites` | `MemoryWrite[]` | Explicit/derived classification, value, provenance, reliability. |
+| `retrievalScope` | `RetrievalScope` | Conversation IDs/types, cross-chat eligibility, exclusions. |
+| `vision` | `VisionExecutionPlan` | Exactly one strategy; see below. |
+| `requiredContextSources` | `ContextSourceRequirement[]` | Each independently required/optional with reason and provenance. |
+| `generation` | `GenerationRequirements` | Output shape, grounding needs, length/headroom, provider capabilities. |
+| `confidence` | `PlanningConfidence` | Overall and field-level confidence. |
+| `fallback` | `SafeFallbackPlan` | Clarification, lexical-only, asset-unavailable, capability-unavailable, or safe execution. |
+| `evidence` | `PlanningSignal[]` | Deterministic, semantic, retrieval, ledger, or model-fallback signal provenance. |
+
+**Validation rules**:
+
+- One validated plan exists before downstream semantic execution.
+- A missing/low-confidence field does not remove unrelated required fields.
+- Required image modality identifies available image entities or produces an
+  unresolved/asset-unavailable fallback; never silent text-only.
+- Multiple plausible image references never select one without a uniquely
+  supported resolution.
+- Continue/retry/regenerate action semantics link to the prior plan/attempt.
+
+## ConversationStateLedger
+
+Derived per conversation; canonical messages remain authoritative.
+
+| Field | Type | Notes |
+|---|---|---|
+| `conversation_id` | stable ID | Parent; cascades on conversation delete. |
+| `revision` | integer | Increments on derived-state update/rebuild. |
+| `active_topics` | typed list | Topic identity, aliases, confidence, source message IDs. |
+| `active_entities` | typed list | Entity identity/type/aliases and source message IDs. |
+| `comparison_target_ids` | ID list | Ordered current comparison set. |
+| `active_image_ids` | image ID list | One or more active images; order is explicit. |
+| `referenced_artifact_ids` | ID list | Code blocks and supported document references. |
+| `unresolved_references` | typed list | Candidate targets and clarification state. |
+| `recent_decisions` | typed list | User-stated/confirmed decisions with provenance. |
+| `explicit_memory_write_ids` | ID list | Immediate durable-memory links. |
+| `source_message_ids` | ID list | Complete derivation provenance. |
+| `updated_at` | timestamp | Derived update time. |
+
+Ledger rebuild and invalidation follow source revision/deletion. Failed,
+cancelled, interrupted, refusal-like, superseded, or unsupported assistant
+attempts do not establish trusted facts or decisions.
+
+## RetrievalUnit
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | stable ID | Stable across index rebuilds; not a vector ID. |
+| `conversation_id` | nullable stable ID | Null only for explicitly global local memory if later approved. |
+| `source_message_ids` | non-empty ID list | Canonical provenance. |
+| `type` | enum | `user-message`, `assistant-answer`, `code-block`, `explicit-memory`, `durable-fact`, `decision`, `summary-segment`, `image-evidence`. |
+| `text` | string | Searchable textual representation. |
+| `reliability` | enum/score | Derived from source type/status, never semantic similarity. |
+| `source_revision` | integer/string | Stale-unit/invalidation key. |
+| `created_at` / `updated_at` | timestamps | Required. |
+| `status` | enum | `eligible`, `stale`, `superseded`, `deleted`, `untrusted`. |
+
+Completed assistant answers may be eligible at lower reliability. Failed,
+cancelled, interrupted, refusal-like, superseded, or unsupported attempts are
+not trusted factual evidence.
+
+## ExplicitMemory
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | stable ID | Also represented by a typed retrieval unit. |
+| `conversation_id` | stable ID | Source conversation. |
+| `source_message_ids` | non-empty ID list | User source provenance. |
+| `subject` / `predicate` / `value` | strings | Structured memory content where extraction is reliable. |
+| `verbatim_text` | string | Exact lexical fallback. |
+| `reliability` | `user-explicit` | Distinct from inferred facts. |
+| `source_revision` | revision | Invalidation key. |
+| `available_at` | timestamp | Same transaction/workflow completion as source persistence; never compaction-gated. |
+
+## ImageEntity
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | stable ID | First-class identity across turns/evidence versions. |
+| `source_message_id` | stable ID | Canonical provenance. |
+| `asset_revision` | revision | Changes when asset metadata/content changes. |
+| `asset_availability` | enum | `available`, `missing`, `deleted`, `unsupported`. |
+| `local_asset_reference` | sanitized local reference | Pixels remain canonical local asset, never exported raw by default. |
+| `evidence_ids` | ID list | Structured evidence versions. |
+| `created_at` / `updated_at` | timestamps | Required. |
+
+## StructuredImageEvidence
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | stable versioned ID | Separate from assistant message/answer. |
+| `image_id` | stable image ID | Mandatory source identity. |
+| `source_message_ids` | ID list | Image turn plus extraction-triggering turn. |
+| `objects` | typed list | Multiple object identities and attributes. |
+| `extracted_text` | typed spans | Text plus object/spatial association and confidence. |
+| `numeric_values` | typed list | Values, units, prices, counts, associations, confidence. |
+| `spatial_relationships` | typed list | Relative positions/containment/adjacency. |
+| `uncertainty` | typed list/score | Evidence-level and field-level uncertainty. |
+| `source_revision` | revision | Image/evidence policy revision key. |
+| `created_at` / `updated_at` | timestamps | Required. |
+
+## VisionExecutionPlan
+
+| Strategy | Required behavior |
+|---|---|
+| `none` | No image/evidence input. |
+| `reuse-evidence` | Use eligible structured evidence for identified image entities. |
+| `inspect-original` | Inspect identified canonical pixels for this turn. |
+| `inspect-and-structure` | Inspect pixels and persist reusable structured evidence. |
+| `compare-evidence` | Preserve multiple image/evidence identities and compare without merging provenance. |
+
+Assistant prose, including refusals, is never substituted for canonical pixels
+or structured evidence.
+
+## EmbeddingModelDescriptor / EmbeddingIndex
+
+| Field | Type | Notes |
+|---|---|---|
+| `provider_id` / `model_id` | strings | Model-independent provider identity. |
+| `artifact_identity` | string | Approved artifact/hash identity. |
+| `dimensions` | integer | Benchmark-selected; at least 256/512 evaluated. |
+| `prompt_policy_version` | string | Distinguishes query/document policy. |
+| `normalization` | enum | `l2` or `none`. |
+| `runtime_compatibility` | string | Runtime/New Architecture/NDK descriptor. |
+| `index_version` | string | Side-by-side migration key. |
+| `state` | enum | `inactive`, `building`, `ready`, `stale`, `failed`, `retiring`. |
+| `progress_cursor` | nullable stable cursor | Restart-safe backfill. |
+| `created_at` / `activated_at` | timestamps | Lifecycle audit. |
+
+Each vector additionally stores `retrieval_unit_id`, `source_revision`, model
+descriptor identity, index version, and normalized vector data.
+
+## MainModelCapabilities
+
+Transient descriptor supplied by the active main inference provider:
+
+- text generation, image input, and structured extraction support;
+- context limit and native tokenizer descriptor;
+- generation limits and supported prompt formats;
+- projector requirements and runtime compatibility;
+- cancellation capability;
+- provider/model descriptor safe for internal diagnostics.
+
+Changing this descriptor does not migrate canonical messages, ledger/memory,
+retrieval units, image evidence, or embedding indexes.

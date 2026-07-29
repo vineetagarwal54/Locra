@@ -6,6 +6,16 @@
 
 ## Summary
 
+**Architecture revision (2026-07-28, authoritative)**: Migrate from the
+implemented regex-led `RequestClassification` architecture to one validated
+`TurnPlan` per turn. The plan coordinates conversation state, memory,
+retrieval, vision, generation, queue dispatch, refusal recovery, and grounding.
+Introduce model-independent boundaries for EmbeddingGemma-backed semantic
+signals and the unchanged current Qwen3-VL main provider. Preserve the current
+implementation in shadow mode until golden scenarios and physical diagnostics
+justify authority transfer. The original summary below describes the
+implemented legacy baseline and is retained for historical task traceability.
+
 Extend Spec 006's `ContextOrchestrator` with a deterministic request-classification step (8 combinable categories) so independent, self-contained questions receive zero unrelated context, wire the already-built-but-inert pieces (`ImageEvidencePolicy`, query-time embeddings, `HybridRetriever` fusion) into the live path, replace the router's character-based budget with a token-aware one reconciled against the existing hard `ContextWindow` trim, and improve generation quality (task-sensitive length targets, earlier in-stream loop stopping) — all as incremental changes to existing modules. Cross-chat retrieval (Phase 7) and deterministic grounding diagnostics (Phase 8) are designed here but explicitly sequenced after the same-chat/image/budget/generation work is stable, per spec Section 14.
 
 ## Technical Context
@@ -187,6 +197,206 @@ Phase order matches spec Section 14 exactly and will map 1:1 onto `tasks.md` pha
 
 - Run `npm run type-check`, `npm run lint`, and `npm test -- --runInBand`; focused suites may supplement but never replace the complete Jest suite. Then run the full manual validation matrix (spec Section 11, MV-001–MV-018) on a physical device against the Phase 0 baseline fixtures, including final airplane-mode operation (MV-017).
 - Confirm zero regression against Spec 006 acceptance scenarios and success criteria (spec Non-Goals, MV-018).
+
+## Architecture Revision Decisions (authoritative)
+
+1. **One validated `TurnPlan` is the sole semantic authority.** It contains
+   intent, modality, dependency, references, active topics/entities, memory
+   operations, retrieval scope, vision strategy, context requirements,
+   generation requirements, confidence, and fallback. Downstream modules
+   execute it and report capability/asset outcomes without reclassification.
+2. **Planning is tiered, not regex-primary.** Deterministic application state is
+   evaluated first; semantic topic/entity/retrieval signals second; constrained
+   structured-model fallback only for ambiguity; deterministic validation last.
+   Regex remains valid for syntax and structured-output validation.
+3. **A field-level safe fallback replaces the global independent-question kill
+   switch.** Irrelevant material is still excluded, but uncertainty in one field
+   cannot erase an attached image, explicit reference, explicit memory write, or
+   independently relevant retrieval source.
+4. **A derived conversation-state ledger supports natural dependencies.** It
+   tracks topics, entities, comparisons, images, artifacts, unresolved
+   references, decisions, and explicit memories while canonical messages remain
+   authoritative in SQLite.
+5. **Memory is layered and provenance bearing.** Explicit user memories are
+   immediately readable; episodic units, summaries, facts, image evidence, and
+   optional cross-chat memory retain source IDs/revisions and distinct
+   reliability.
+6. **Typed retrieval units replace message-only retrieval assumptions.** User
+   messages, completed answers, code blocks, memories, facts, decisions,
+   summaries, and image evidence share stable provenance/revision metadata.
+7. **EmbeddingGemma is the first provider, not an application dependency.** An
+   `EmbeddingProvider` boundary owns descriptors, query/document policies,
+   readiness, cancellation, normalization, source revisions, and versioned
+   index migration. The production dimension is selected only after benchmarking
+   at least 256 and 512.
+8. **Hybrid retrieval is multi-signal and always preserves lexical exactness.**
+   Semantic, lexical, entity, provenance, reliability, scope, and recency signals
+   rank eligible units. Semantic retrieval is not gated solely by an
+   “independent” boolean.
+9. **The main inference runtime is provider independent.** Current Qwen3-VL
+   remains unchanged, but planning and storage depend only on a capability
+   descriptor for generation, images, extraction, context/tokenizer limits,
+   projector, prompt format, compatibility, and cancellation.
+10. **Vision execution is planned once.** Strategies are no vision, reuse
+    evidence, inspect original, inspect plus structured extraction, or compare
+    multiple evidence sets. Image pixels, structured evidence, and assistant
+    prose are separate sources; refusals never become image authority.
+11. **Context assembly is provider-aware and provenance preserving.** It protects
+    current input and required images/references, ranks and deduplicates eligible
+    sources, preserves generation headroom, and verifies the final prompt using
+    the active provider's native tokenizer.
+12. **Authority moves only after shadow evidence.** Legacy and proposed plans are
+    compared through diagnostics and golden fixtures until controlled activation;
+    semantic regex authority is removed only after the new planner is proven.
+
+## Revised Contract Map
+
+```text
+contracts/
+├── unified-turn-planning.md       # new authoritative TurnPlan
+├── conversation-state-ledger.md   # new derived state and memory layers
+├── embedding-provider.md          # new provider and index lifecycle
+├── main-inference-provider.md     # new main-model capability boundary
+├── request-routing.md             # extended as legacy/shadow adapter
+├── image-continuity.md            # extended into authoritative vision execution
+├── retrieval-fusion.md            # extended for typed units and multi-signal ranking
+├── token-budget.md                # extended for provider-native verification
+├── generation-quality.md          # consumes TurnPlan requirements
+├── diagnostics.md                 # shadow/authoritative plan diagnostics
+└── cross-chat.md                  # optional scope over eligible memory units
+```
+
+## Revised Architecture Boundaries
+
+- **Planning boundary**: constructs and validates `TurnPlan`; it reads
+  deterministic state, ledger state, and semantic signals through interfaces.
+- **Ledger/memory boundary**: derives queryable state from canonical repository
+  events and performs immediate explicit memory writes; it does not generate.
+- **Retrieval boundary**: indexes and ranks typed eligible units; it does not
+  decide final context or reliability.
+- **Embedding boundary**: provider-specific artifact/runtime/index concerns; it
+  does not inspect pixels or answer.
+- **Vision boundary**: executes the plan against first-class image entities and
+  persists structured evidence; it does not reinterpret user intent.
+- **Main inference boundary**: exposes capabilities, native tokenization,
+  structured extraction, generation, and cancellation; it does not own planning
+  or storage schemas.
+- **Context assembly boundary**: protects required sources, ranks/deduplicates
+  candidates, budgets, preserves provenance, and verifies the final prompt.
+- **Queue boundary**: enforces single flight and executes planned operations; it
+  never selects a different modality or image strategy.
+
+## Revised Rollout Phases
+
+The legacy Phases 0–9 above document implemented work and retain their historical
+task states. New implementation proceeds in these incremental phases:
+
+### Phase 10 — Specification and typed contracts
+
+Validate the revised data model and contracts against existing repository
+boundaries. No production behavior changes.
+
+### Phase 11 — Shadow turn planning
+
+Generate validated `TurnPlan` records beside the current routing decision. The
+legacy path remains authoritative.
+
+### Phase 12 — Planner diagnostics and golden scenarios
+
+Persist sanitized plan comparisons, field confidence, signal provenance,
+validation changes, and material deltas. Add automated golden fixtures for text
+dependency, explicit memory, image continuity/reinspection/comparison, retrieval
+negatives, provider switching, and embedding migration.
+
+### Phase 13 — Image execution under the new plan
+
+Make the vision executor consume shadow/controlled plans, represent every image
+as an entity, guarantee reusable structured evidence or canonical pixel
+availability, and exclude refusal prose from reinspection authority.
+
+### Phase 14 — Conversation-state ledger
+
+Derive and persist active topics/entities/comparisons/images/artifacts,
+unresolved references, and decisions with source revisions.
+
+### Phase 15 — Immediate explicit memory writes
+
+Persist explicit memory units synchronously with the source message and make
+them directly/lexically readable before summaries or embeddings exist.
+
+### Phase 16 — EmbeddingGemma indexing
+
+Approve the artifact/runtime, benchmark at least 256 and 512 dimensions,
+implement the provider boundary and restart-safe versioned background indexing,
+and preserve lexical fallback.
+
+### Phase 17 — Shadow semantic retrieval
+
+Compute semantic candidates and multi-signal ranks for diagnostics while the
+legacy/lexical selection remains authoritative.
+
+### Phase 18 — Controlled semantic-retrieval activation
+
+Enable semantic ranking by feature gate for validated scopes/devices, with
+instant lexical fallback and index rollback.
+
+### Phase 19 — New planner becomes authoritative
+
+After golden and physical thresholds pass, execute the validated `TurnPlan` for
+context, memory, retrieval, vision, generation, queue dispatch, and recovery.
+Retain an emergency rollback window to the legacy path.
+
+### Phase 20 — Remove obsolete semantic regex routing
+
+Delete or reduce legacy semantic classifiers to deterministic syntax parsing;
+remove duplicate semantic decisions from downstream modules only after Phase 19
+is stable.
+
+### Phase 21 — Final physical-device validation
+
+Run the complete golden matrix, airplane-mode checks, memory/index migrations,
+provider substitution, cancellation, resource contention, missing assets, and
+Spec 006/007 regressions on representative 6–8GB devices.
+
+## Revised Constitution Check
+
+| Principle | Status | Revision impact |
+|---|---|---|
+| I. Privacy-first | Pass | Planning, embeddings, retrieval, provider execution, and persistence remain local and airplane-mode testable. |
+| II. Single-flight | Pass | Model, vision, planner-fallback model calls, indexing, and compaction share the device resource policy; the queue executes rather than replans. |
+| III. Graceful degradation | Pass | Field-level fallback, lexical fallback, unresolved-reference handling, provider readiness, and missing-asset states are explicit. |
+| IV. Memory safety | Gate | EmbeddingGemma dimensions/runtime and structured vision extraction require 6–8GB benchmarks before activation. |
+| V. Minimal TypeScript | Pass | Contracts separate provider-specific complexity while retaining one plan and one canonical store. |
+| VI. TDD core systems | Pass | Every new inference/planning/model-lifecycle function receives failing tests before implementation; golden contracts are added before authority transfer. |
+| VII. New Architecture | Gate | EmbeddingGemma runtime and any native integration require current New Architecture/NDK verification before installation or activation. |
+| VIII. Canonical SQL | Pass | Messages remain canonical; ledger, units, summaries, evidence, and vectors are derived SQL data with cascade invalidation. MMKV remains feature/settings only. |
+| IX. Verify before assuming | Gate | Main and embedding provider APIs, tokenizer behavior, dimensions, artifacts, prompt policies, and cancellation are benchmark/approval tasks. |
+| X. Hard boundaries | Pass | Planning, memory, retrieval, vision, providers, queue, and context assembly have explicit responsibilities and no UI imports. |
+| XI. Design source | Pass | This revision adds no production UI design; future settings/clarification surfaces must follow `design/`. |
+
+## Resolved Contradictions in the Legacy Plan
+
+- The legacy plan says classification is a pure deterministic regex-led layer,
+  while device failures require semantic state and constrained model fallback.
+  `TurnPlan` supersedes that authority.
+- The legacy plan says an independent classification short-circuits every source,
+  while the revision requires one error not to disable memory, retrieval, facts,
+  summaries, and image continuity simultaneously. Field-level requirements now
+  control sources.
+- The legacy plan calls active-image fallback “not a guess” for ambiguous image
+  references. The revised safety rule treats it as an unjustified semantic choice
+  and leaves the reference unresolved.
+- The legacy plan says no embedding model is selected. This revision selects
+  EmbeddingGemma as the first provider to evaluate but keeps artifact activation
+  and dimensions gated.
+- The legacy plan makes Qwen-specific tokenizer/context assumptions part of
+  application budgeting. The revision moves them behind the main provider
+  capability descriptor.
+- The legacy plan allows the queue/runtime and generation planner to own semantic
+  decisions separately. They now execute the validated plan.
+- Historical task text reports 53 of 59 tasks but duplicates task ID T056; this
+  revision continues numbering at T059 without altering either historical
+  checkbox.
 
 ## Complexity Tracking
 
