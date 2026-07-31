@@ -72,7 +72,7 @@ spikes/qwen3vl-llamarn/*.log
 /spikes/qwen3vl-llamarn/
 .codex-input/
 .claude/settings.local.json
-
+*.zip
 # Environment files
 .env
 .env.*

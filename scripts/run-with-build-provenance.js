@@ -11,9 +11,6 @@ function readGit(args, fallback) {
   }
 }
 
-function commandForPlatform(command) {
-  return process.platform === 'win32' && command === 'npx' ? 'npx.cmd' : command;
-}
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
@@ -35,10 +32,11 @@ function main() {
     EXPO_PUBLIC_LOCRA_WORKTREE_STATE: workingTreeState,
     EXPO_PUBLIC_LOCRA_BUILD_IDENTIFIER: `${shortSha}-${workingTreeState}`,
   };
-  const result = spawnSync(commandForPlatform(command), args, {
-    env: environment,
-    stdio: 'inherit',
-  });
+  const result = spawnSync(command, args, {
+  env: environment,
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+});
   if (result.error !== undefined) {
     process.stderr.write(`${result.error.message}\n`);
     process.exitCode = 1;
