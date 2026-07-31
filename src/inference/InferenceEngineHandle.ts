@@ -63,6 +63,13 @@ export interface EngineGenerateRequest {
 export interface EngineGenerateResult {
   response: string;
   tokenCount: number;
+  /** Hidden structured-extraction tokens consumed across initial + repair attempts. */
+  extractionGeneratedTokens?: number;
+  /** Visible answer tokens consumed across answer + refusal-recovery attempts. */
+  visibleGeneratedTokens?: number;
+  extractionSchemaMode?: StructuredOutputSchemaMode;
+  extractionSchemaVersion?: string | null;
+  extractionAttemptLimitsTokens?: readonly number[];
   promptTokenCount?: number;
   estimatedPromptTokenCount?: number;
   finalNativePromptTokenCount?: number;
@@ -88,7 +95,13 @@ export interface GenerationRuntimeDiagnostics {
   readonly softTargetTokens: number;
   readonly generationPlanId: string;
   readonly taskKind: GenerationTaskKind;
+  readonly structuredOutputMode?: StructuredOutputSchemaMode;
+  readonly structuredOutputSchemaVersion?: string | null;
 }
+
+export type StructuredOutputSchemaMode =
+  | 'not-used'
+  | 'native-json-schema';
 
 export type GenerationRuntimeStage =
   | 'prompt-formatting'
@@ -100,6 +113,8 @@ export type GenerationRuntimeStage =
 export interface GenerationRuntimeStageEvent {
   readonly stage: GenerationRuntimeStage;
   readonly status: 'started' | 'completed';
+  readonly structuredOutputMode?: StructuredOutputSchemaMode;
+  readonly structuredOutputSchemaVersion?: string | null;
 }
 
 /** Runtime-neutral contract consumed by the single-flight inference queue. */

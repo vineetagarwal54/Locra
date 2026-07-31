@@ -1,3 +1,5 @@
+import type { ConversationFocusPlannerInput } from '../memory/ConversationStateLedger';
+
 import {
   evaluateConstrainedPlannerGate,
   type ConstrainedPlannerGate,
@@ -29,6 +31,7 @@ import {
   type TurnIntent,
   type TurnModality,
   type TurnPlan,
+  type TurnScenarioClass,
   type TurnPlanValidationResult,
   type UnresolvedReference,
   type VisionExecutionPlan,
@@ -54,6 +57,7 @@ export interface PlanningApplicationState {
   readonly attachedImageIds: readonly string[];
   readonly availableImageIds: readonly string[];
   readonly directReferenceIds?: readonly string[];
+  readonly imageIdsWithEvidence?: readonly string[];
   readonly embeddingsAvailable?: boolean;
   readonly mainProviderDescriptor?: string;
   readonly providerCapabilities?: TurnPlanProviderCapabilities;
@@ -113,10 +117,13 @@ export interface TurnPlanningSignals {
 
 export interface TurnPlanningInput {
   readonly turnId: string;
-  readonly scenarioClass: string;
+  /** Deprecated compatibility field. TurnPlanner derives the scenario class. */
+  readonly scenarioClass?: string;
   readonly activation: PlannerActivationConfig;
   readonly applicationState: PlanningApplicationState;
   readonly ledgerState: PlanningLedgerState;
+  /** Derived conversation focus exposed for diagnostics/future planning only in Prompt 1. */
+  readonly focusLedger?: ConversationFocusPlannerInput;
   readonly signals: TurnPlanningSignals;
 }
 
@@ -130,7 +137,6 @@ export interface TurnPlannerResult {
 
 export class TurnPlanner {
   plan(input: TurnPlanningInput): TurnPlannerResult {
-    const activation = resolvePlannerActivation(input.activation, input.scenarioClass);
     const references = resolveReferences(input);
     const unresolvedReferences = unresolvedReferencesFor(input, references);
     const requiredContextSources = contextSourcesFor(input, references);
@@ -140,11 +146,19 @@ export class TurnPlanner {
     const intent = intentFor(input);
     const dependency = dependencyFor(input, references);
     const fallback = fallbackFor(input, unresolvedReferences);
+    const scenarioClass = scenarioClassFor(
+      input,
+      references,
+      unresolvedReferences,
+      dependency,
+    );
+    const activation = resolvePlannerActivation(input.activation, scenarioClass);
     const draft: TurnPlan = {
       planVersion: TURN_PLAN_VERSION,
       turnId: input.turnId,
       authorityMode: activation.authorityMode,
       planOwner: activation.planOwner,
+      scenarioClass,
       intent,
       modality: modalityFor(input, references),
       conversationDependency: dependency,
@@ -260,6 +274,17 @@ function contextSourcesFor(
       reason: 'direct-reference',
       sourceMessageIds: [...reference.sourceMessageIds],
     });
+    if (reference.targetType === 'image') {
+      for (const sourceMessageId of reference.sourceMessageIds) {
+        sources.push({
+          sourceType: 'recent-turn',
+          sourceId: sourceMessageId,
+          required: false,
+          reason: 'direct-reference',
+          sourceMessageIds: [sourceMessageId],
+        });
+      }
+    }
   }
   for (const entityId of uniqueStrings([
     ...input.signals.activeEntityMatches,
@@ -365,7 +390,13 @@ function visionPlanFor(
   if (imageIds.length === 0) {
     return noVision();
   }
-  if (input.applicationState.action === 'compare' && imageIds.length >= 2) {
+  if (
+    (
+      input.applicationState.action === 'compare'
+      || isExplicitComparison(input.applicationState.userText ?? '')
+    )
+    && imageIds.length >= 2
+  ) {
     return { strategy: 'compare-evidence', imageReferenceIds: imageIds, evidenceIds: [] };
   }
   if (input.applicationState.action === 'inspect') {
@@ -374,6 +405,12 @@ function visionPlanFor(
   if (
     input.applicationState.action === 'extract'
     || input.applicationState.attachedImageIds.length > 0
+    || (
+      input.applicationState.imageIdsWithEvidence !== undefined
+      && imageIds.some(
+        (imageId) => !input.applicationState.imageIdsWithEvidence?.includes(imageId),
+      )
+    )
   ) {
     return {
       strategy: 'inspect-and-structure',
@@ -385,18 +422,19 @@ function visionPlanFor(
 }
 
 function intentFor(input: TurnPlanningInput): TurnIntent {
-  if (input.signals.intent !== undefined) {
-    return input.signals.intent;
-  }
   if (input.signals.memoryInterpretation === 'read') {
     return 'recall';
   }
   if (input.signals.memoryInterpretation === 'write') {
     return 'remember';
   }
-  return input.applicationState.action === 'none'
-    ? 'answer'
-    : input.applicationState.action;
+  if (
+    input.applicationState.action === 'none'
+    && isExplicitComparison(input.applicationState.userText ?? '')
+  ) {
+    return 'compare';
+  }
+  return input.applicationState.action === 'none' ? 'answer' : input.applicationState.action;
 }
 
 function modalityFor(
@@ -456,6 +494,46 @@ function generationTaskFor(intent: TurnIntent): GenerationTaskKind {
   return 'answer';
 }
 
+function scenarioClassFor(
+  input: TurnPlanningInput,
+  references: readonly ResolvedReference[],
+  unresolved: readonly UnresolvedReference[],
+  dependency: ConversationDependency,
+): TurnScenarioClass {
+  if (input.applicationState.action === 'retry') return 'retry';
+  if (input.applicationState.action === 'regenerate') return 'regeneration';
+  if (input.applicationState.action === 'continue') return 'continuation';
+  if (unresolved.length > 0) return 'unresolved-reference';
+  if (input.applicationState.attachedImageIds.length > 0) return 'new-image';
+  const imageCount = references.filter((reference) => reference.targetType === 'image').length;
+  if (isExplicitComparison(input.applicationState.userText ?? '') && imageCount >= 2) {
+    return 'image-comparison';
+  }
+  if (imageCount > 0) return 'image-follow-up';
+  if (references.some((reference) => reference.targetType === 'code'
+    || reference.targetType === 'document')) {
+    return 'artifact-follow-up';
+  }
+  if (references.some((reference) => reference.targetType === 'message')) {
+    return 'assistant-follow-up';
+  }
+  const lexicalLedger = lexicalLedgerMatchesFor(input);
+  if (
+    input.signals.activeEntityMatches.length > 0
+    || lexicalLedger.entityIds.length > 0
+  ) {
+    return 'entity-follow-up';
+  }
+  if (
+    input.signals.activeTopicMatches.length > 0
+    || lexicalLedger.topicIds.length > 0
+    || dependency === 'ledger'
+  ) {
+    return 'topic-follow-up';
+  }
+  return 'independent-text';
+}
+
 function constrainedGateInput(
   input: TurnPlanningInput,
   plan: TurnPlan,
@@ -498,6 +576,7 @@ function sourceTypeForReference(targetType: ReferenceTargetType): ContextSourceR
   if (targetType === 'code') return 'code';
   if (targetType === 'document') return 'document';
   if (targetType === 'memory') return 'memory';
+  if (targetType === 'message') return 'recent-turn';
   return 'ledger';
 }
 
@@ -553,8 +632,22 @@ function lexicalLedgerMatchesFor(input: TurnPlanningInput) {
     entities: input.ledgerState.activeEntities,
     activeComparisonTargetIds: input.ledgerState.activeComparisonTargetIds,
     directReferenceIds: input.applicationState.directReferenceIds ?? [],
-    comparisonRequested: input.applicationState.action === 'compare',
+    comparisonRequested:
+      input.applicationState.action === 'compare'
+      || isExplicitComparison(input.applicationState.userText ?? ''),
   });
+}
+
+function isExplicitComparison(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  return (
+    normalized.startsWith('compare ')
+    || normalized === 'compare'
+    || normalized.includes(' both images')
+    || normalized.startsWith('both images')
+    || normalized.includes(' the two images')
+    || normalized.startsWith('the two images')
+  );
 }
 
 function uniqueStrings(values: readonly string[]): string[] {

@@ -28,8 +28,11 @@ describe('TurnArchitectureDiagnostics', () => {
         missingImageIds: [],
         evidenceAction: 'freshly-structured',
         evidenceStatus: 'pending',
-        pixelsUsed: true,
-        storedEvidenceUsed: false,
+      pixelsUsed: true,
+      storedEvidenceUsed: false,
+      imageDiagnostics: [],
+      comparisonProvenance: [],
+      uncertaintyOrFailureReason: null,
       },
       shadowPlan: null,
       planDelta: [],
@@ -53,19 +56,17 @@ describe('TurnArchitectureDiagnostics', () => {
     })).toThrow(/whole-turn ownership invariant/i);
   });
 
-  it('records one authority mode, exact owner, plan/version, shadow delta, recovery, and Tier-3 gate', () => {
-    const activation = resolvePlannerActivation({
-      ...DEFAULT_PLANNER_ACTIVATION,
-      configuredMode: 'shadow',
-      shadowDiagnosticsEnabled: true,
-    }, 'text-answer');
+  it('records one authority mode, exact owner, plan/version, recovery, and Tier-3 gate', () => {
+    const activation = resolvePlannerActivation(
+      DEFAULT_PLANNER_ACTIVATION,
+      'independent-text',
+    );
     const planning = new TurnPlanner().plan({
       turnId: 'turn-1',
       scenarioClass: 'text-answer',
       activation: {
         ...DEFAULT_PLANNER_ACTIVATION,
-        configuredMode: 'shadow',
-        shadowDiagnosticsEnabled: true,
+        configuredMode: 'authoritative',
       },
       applicationState: {
         action: 'answer',
@@ -89,9 +90,9 @@ describe('TurnArchitectureDiagnostics', () => {
     const diagnostics = createTurnArchitectureDiagnostics({
       activation,
       planning,
-      scenarioClass: 'text-answer',
+      scenarioClass: 'independent-text',
       missingImageIds: [],
-      legacySemanticDecisionCount: 1,
+      legacySemanticDecisionCount: 0,
       recovery: {
         enabled: true,
         classifiedIndependent: true,
@@ -107,12 +108,12 @@ describe('TurnArchitectureDiagnostics', () => {
     });
 
     expect(diagnostics).toEqual(expect.objectContaining({
-      authorityMode: 'shadow',
-      planOwner: 'legacy-router:v1',
-      scenarioClass: 'text-answer',
-      executedPlanId: 'legacy:turn-1',
-      executedPlanVersion: 'legacy-routing-v1',
-      legacySemanticDecisionCount: 1,
+      authorityMode: 'authoritative',
+      planOwner: 'turn-planner:v1',
+      scenarioClass: 'independent-text',
+      executedPlanId: 'turn-1',
+      executedPlanVersion: 'turn-plan-mvp-v1',
+      legacySemanticDecisionCount: 0,
       vision: expect.objectContaining({
         strategy: 'none',
         imageIds: [],
@@ -120,7 +121,7 @@ describe('TurnArchitectureDiagnostics', () => {
         evidenceAction: 'not-produced',
         evidenceStatus: 'not-applicable',
       }),
-      shadowPlan: expect.objectContaining({ turnId: 'turn-1' }),
+      shadowPlan: null,
       constrainedPlanner: expect.objectContaining({
         invoked: false,
         gateReason: expect.any(String),
@@ -147,8 +148,11 @@ describe('TurnArchitectureDiagnostics', () => {
         missingImageIds: ['missing-image'],
         evidenceAction: 'freshly-structured' as const,
         evidenceStatus: 'pending' as const,
-        pixelsUsed: true,
-        storedEvidenceUsed: false,
+      pixelsUsed: true,
+      storedEvidenceUsed: false,
+      imageDiagnostics: [],
+      comparisonProvenance: [],
+      uncertaintyOrFailureReason: null,
       },
       shadowPlan: {
         turnId: 'turn-1',

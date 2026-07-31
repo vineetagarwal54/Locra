@@ -16,8 +16,16 @@ export interface AppDiagnosticsInfo {
   readonly modelId: string;
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
+  readonly inferenceRuntimeVersion: string;
   readonly appBuildId: string;
+  readonly gitCommitSha: string;
+  readonly gitBranch: string;
+  readonly workingTreeState: 'clean' | 'dirty' | 'unknown';
+  readonly buildIdentifier: string;
   readonly deviceNameModel: string;
+  readonly totalMemoryBytes: number | null;
+  readonly runtimeUsedMemoryBytes: number | null;
+  readonly thermalState: string | null;
   readonly exportedAt: string;
   readonly modelDownloadStatus: string;
   readonly modelDownloadProgress: number;
@@ -93,8 +101,16 @@ function sanitizeAppInfo(appInfo: AppDiagnosticsInfo): AppDiagnosticsInfo {
     modelId: sanitizeSensitive(appInfo.modelId),
     generationConfigId: sanitizeSensitive(appInfo.generationConfigId),
     pipelineVariantId: sanitizeSensitive(appInfo.pipelineVariantId),
+    inferenceRuntimeVersion: sanitizeSensitive(appInfo.inferenceRuntimeVersion),
     appBuildId: sanitizeSensitive(appInfo.appBuildId),
+    gitCommitSha: sanitizeSensitive(appInfo.gitCommitSha),
+    gitBranch: sanitizeSensitive(appInfo.gitBranch),
+    buildIdentifier: sanitizeSensitive(appInfo.buildIdentifier),
     deviceNameModel: sanitizeSensitive(appInfo.deviceNameModel),
+    thermalState:
+      appInfo.thermalState === null
+        ? null
+        : sanitizeSensitive(appInfo.thermalState),
     activeResourceOperation:
       appInfo.activeResourceOperation === null
         ? null
@@ -185,14 +201,20 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
       ? null
       : sanitizeSensitive(trace.finalResponse),
     refusalRecoveryTriggered: trace?.stages.some((stage) => stage.refusalRetry === true) ?? false,
-    objectiveResult: turn.objectiveResult,
+    objectiveResult:
+      turn.objectiveResult === null
+        ? null
+        : sanitizeUnknown(turn.objectiveResult) as ObjectiveInferenceResultRecord,
     contextDiagnostics: sanitizeContextDiagnostics(turn.contextDiagnostics),
     architectureDiagnostics:
       turn.architectureDiagnostics === undefined
       || turn.architectureDiagnostics === null
         ? null
         : sanitizeTurnArchitectureDiagnostics(turn.architectureDiagnostics),
-    summary: turn.summary ?? null,
+    summary:
+      turn.summary === undefined
+        ? null
+        : sanitizeUnknown(turn.summary) as ProductionDiagnosticTurnSummary,
   };
 }
 

@@ -1,5 +1,6 @@
 import { buildExtractionRetryPrompt } from './ExtractionPrompt';
 import type { HiddenVisualEvidence } from './OutputPipelineTypes';
+import { normalizeStructuredVisualFindings } from './StructuredVisualExtraction';
 
 export interface ExtractionFindings {
   subjectObject: string;
@@ -35,34 +36,24 @@ export function parseExtractionResponse(rawText: string): ExtractionParseResult 
       return { ok: false, rawText };
     }
 
-    const subjectObject = readRequiredString(parsed, 'subjectObject');
-    const visibleObjects = readRequiredStringArray(parsed, 'visibleObjects', 12);
-    const visibleFeatures = readRequiredStringArray(parsed, 'visibleFeatures', 12);
-    const extractedVisibleText = readRequiredStringArray(parsed, 'visibleText', 16);
-    const visibleCondition = readRequiredString(parsed, 'visibleCondition');
-    const uncertainty = readRequiredStringArray(parsed, 'uncertainty', 8);
-    if (
-      subjectObject === null
-      || visibleObjects === null
-      || visibleFeatures === null
-      || extractedVisibleText === null
-      || visibleCondition === null
-      || uncertainty === null
-    ) {
-      return { ok: false, rawText };
-    }
+    const normalized = normalizeStructuredVisualFindings(parsed);
+    if (normalized === null) return { ok: false, rawText };
 
     return {
       ok: true,
       findings: {
-        subjectObject,
-        visibleObjects,
-        visibleFeatures,
-        visibleText: extractedVisibleText.filter(
-          (text) => !duplicatesVisibleObjectLabel(text, visibleObjects, visibleFeatures),
+        subjectObject: normalized.subjectObject,
+        visibleObjects: [...normalized.visibleObjects],
+        visibleFeatures: [...normalized.visibleFeatures],
+        visibleText: normalized.visibleText.filter(
+          (text) => !duplicatesVisibleObjectLabel(
+            text,
+            normalized.visibleObjects,
+            normalized.visibleFeatures,
+          ),
         ),
-        visibleCondition,
-        uncertainty,
+        visibleCondition: normalized.visibleCondition,
+        uncertainty: [...normalized.uncertainty],
       },
     };
   } catch {
@@ -136,6 +127,12 @@ function isFormattingRepairCandidate(rawText: string): boolean {
     .replace(/\s*```$/i, '')
     .trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return false;
+  try {
+    JSON.parse(trimmed);
+    return false;
+  } catch {
+    // Only a structurally different formatting repair may follow malformed JSON.
+  }
   const normalized = trimmed.toLowerCase();
   return [
     'subjectobject',
@@ -155,36 +152,6 @@ export function formatExtractionAnswer(findings: ExtractionFindings): string {
     `Visible text: ${formatList(findings.visibleText)}`,
     `Visible condition: ${findings.visibleCondition}`,
   ].join('\n');
-}
-
-function readRequiredString(record: Record<string, unknown>, key: string): string | null {
-  const value = record[key];
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-}
-
-function readRequiredStringArray(
-  record: Record<string, unknown>,
-  key: string,
-  maximumItems: number,
-): string[] | null {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return null;
-  }
-
-  if (value.some((item) => typeof item !== 'string')) {
-    return null;
-  }
-  const unique = new Map<string, string>();
-  for (const item of value) {
-    const normalized = item.trim().replace(/\s+/g, ' ').slice(0, 160);
-    const keyValue = normalized.toLocaleLowerCase();
-    if (normalized !== '' && !unique.has(keyValue)) {
-      unique.set(keyValue, normalized);
-    }
-    if (unique.size === maximumItems) break;
-  }
-  return [...unique.values()];
 }
 
 function formatList(values: string[]): string {

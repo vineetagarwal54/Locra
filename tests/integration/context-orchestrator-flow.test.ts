@@ -149,7 +149,7 @@ describe('ContextOrchestrator full inference flow', () => {
 
     const followUpTerminal = waitForTerminalState(queue);
     await store.submit(first.conversationId, {
-      question: 'What was the tracking code?',
+      question: 'What was the tracking code in that image?',
       imagePath: null,
     });
     await followUpTerminal;
@@ -165,6 +165,8 @@ describe('ContextOrchestrator full inference flow', () => {
     ]);
     expect(followUpRequest?.messages[0]?.content).toContain('Relevant prior media evidence');
     expect(followUpRequest?.messages[0]?.content).toContain('Tracking code LK-2048');
-    expect(followUpRequest?.messages.at(-1)?.content).toBe('What was the tracking code?');
+    expect(followUpRequest?.messages.at(-1)?.content).toBe(
+      'What was the tracking code in that image?',
+    );
   });
 });

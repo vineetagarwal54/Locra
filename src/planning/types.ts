@@ -17,6 +17,20 @@ export type TurnIntent =
 
 export type TurnModality = 'text' | 'image' | 'multimodal';
 
+export type TurnScenarioClass =
+  | 'independent-text'
+  | 'new-image'
+  | 'image-follow-up'
+  | 'image-comparison'
+  | 'assistant-follow-up'
+  | 'artifact-follow-up'
+  | 'topic-follow-up'
+  | 'entity-follow-up'
+  | 'unresolved-reference'
+  | 'retry'
+  | 'regeneration'
+  | 'continuation';
+
 export type ConversationDependency =
   | 'none'
   | 'recent'
@@ -157,6 +171,7 @@ export interface TurnPlan {
   readonly turnId: string;
   readonly authorityMode: AuthorityMode;
   readonly planOwner: string;
+  readonly scenarioClass: TurnScenarioClass;
   readonly intent: TurnIntent;
   readonly modality: TurnModality;
   readonly conversationDependency: ConversationDependency;

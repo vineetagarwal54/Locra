@@ -138,6 +138,7 @@ describe('VisionExecutor', () => {
       expect.objectContaining({ imageId: 'image-a' }),
     ]);
     expect(result.missingImageIds).toEqual(['image-b']);
+    expect(result.failureReason).toBe('comparison-side-unavailable:image-b');
   });
 
   it('reports a missing comparison asset even when stale retained evidence exists', () => {
@@ -159,6 +160,150 @@ describe('VisionExecutor', () => {
     expect(result.status).toBe('partial');
     expect(result.imageInputs.map((input) => input.imageId)).toEqual(['image-a']);
     expect(result.missingImageIds).toEqual(['image-b']);
+  });
+
+  it('reinspects the same selected image when complete evidence cannot answer OCR', () => {
+    const source = sources();
+    const result = new VisionExecutor(source).execute(
+      plan('reuse-evidence', ['image-a']),
+      new AbortController().signal,
+      { question: 'Read the visible text.' },
+    );
+
+    expect(result.imageInputs).toEqual([
+      expect.objectContaining({
+        imageId: 'image-a',
+        localAssetReference: '/images/image-a.jpg',
+        evidence: null,
+      }),
+    ]);
+    expect(result.pixelInspectionImageIds).toEqual(['image-a']);
+    expect(result.requiresStructuredExtraction).toBe(true);
+    expect(result.imageDiagnostics).toEqual([
+      expect.objectContaining({
+        imageId: 'image-a',
+        evidenceStatus: 'complete',
+        sufficiencyResult: 'insufficient',
+        sufficiencyReason: 'readable-text-missing',
+        action: 'pixel-inspection',
+      }),
+    ]);
+    expect(source.getImage).toHaveBeenCalledWith('image-a');
+    expect(source.getImage).not.toHaveBeenCalledWith(expect.stringMatching(/other|active/));
+  });
+
+  it('reuses complete evidence when it contains the required structured field', () => {
+    const source = sources();
+    source.getEvidence = (imageId) => ({
+      id: `evidence-${imageId}`,
+      conversationId: 'conversation-1',
+      imageId,
+      sourceMessageIds: [`message-${imageId}`],
+      summary: `label on ${imageId}`,
+      visibleObjects: [],
+      extractedText: [{ text: 'SN A-184', confidence: 1 }],
+      numericValues: [{
+        kind: 'serial',
+        value: 'A-184',
+        rawText: 'SN A-184',
+        confidence: 1,
+      }],
+      uncertainty: { overallConfidence: 1, notes: [] },
+      status: 'complete',
+      sourceRevision: 'asset-v1',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const result = new VisionExecutor(source).execute(
+      plan('reuse-evidence', ['image-older']),
+      new AbortController().signal,
+      { question: 'What is the serial number?' },
+    );
+
+    expect(result.evidenceAction).toBe('reused');
+    expect(result.pixelInspectionImageIds).toEqual([]);
+    expect(result.imageInputs).toEqual([
+      expect.objectContaining({
+        imageId: 'image-older',
+        localAssetReference: null,
+        evidence: expect.objectContaining({ imageId: 'image-older' }),
+      }),
+    ]);
+    expect(result.imageDiagnostics[0]).toEqual(expect.objectContaining({
+      sufficiencyResult: 'sufficient',
+      sufficiencyReason: 'serial-field-covered',
+      action: 'reused-evidence',
+    }));
+  });
+
+  it('reinspects only the insufficient selected comparison side and preserves provenance', () => {
+    const source = sources();
+    const originalGetEvidence = source.getEvidence;
+    source.getEvidence = (imageId) => imageId === 'image-a'
+      ? {
+          ...originalGetEvidence(imageId),
+          imageId,
+          numericValues: [{
+            kind: 'price',
+            value: '$3.99',
+            rawText: '$3.99',
+            confidence: 1,
+          }],
+        } as NonNullable<ReturnType<typeof originalGetEvidence>>
+      : originalGetEvidence(imageId);
+
+    const result = new VisionExecutor(source).execute(
+      plan('compare-evidence', ['image-a', 'image-b']),
+      new AbortController().signal,
+      { question: 'Compare their prices.' },
+    );
+
+    expect(result.status).toBe('ready');
+    expect(result.pixelInspectionImageIds).toEqual(['image-b']);
+    expect(result.imageInputs).toEqual([
+      expect.objectContaining({
+        imageId: 'image-a',
+        localAssetReference: null,
+        evidence: expect.objectContaining({ imageId: 'image-a' }),
+      }),
+      expect.objectContaining({
+        imageId: 'image-b',
+        localAssetReference: '/images/image-b.jpg',
+        evidence: null,
+      }),
+    ]);
+    expect(result.imageDiagnostics.map((diagnostic) => ({
+      imageId: diagnostic.imageId,
+      action: diagnostic.action,
+      side: diagnostic.comparisonProvenance?.side,
+    }))).toEqual([
+      { imageId: 'image-a', action: 'reused-evidence', side: 0 },
+      { imageId: 'image-b', action: 'pixel-inspection', side: 1 },
+    ]);
+  });
+
+  it('treats stale or revision-mismatched evidence as insufficient without substituting', () => {
+    const source = sources();
+    const originalGetEvidence = source.getEvidence;
+    source.getEvidence = (imageId) => ({
+      ...originalGetEvidence(imageId),
+      status: 'stale',
+    }) as NonNullable<ReturnType<typeof originalGetEvidence>>;
+
+    const result = new VisionExecutor(source).execute(
+      plan('reuse-evidence', ['image-older']),
+      new AbortController().signal,
+      { question: 'What is visible?' },
+    );
+
+    expect(result.imageInputs.map((input) => input.imageId)).toEqual(['image-older']);
+    expect(result.pixelInspectionImageIds).toEqual(['image-older']);
+    expect(result.imageDiagnostics[0]).toEqual(expect.objectContaining({
+      evidenceStatus: 'stale',
+      sufficiencyReason: 'stale-evidence',
+      action: 'pixel-inspection',
+    }));
   });
 
   it('honors cancellation before resolving any assets', () => {

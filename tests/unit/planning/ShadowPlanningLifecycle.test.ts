@@ -27,12 +27,11 @@ function snapshot(): CanonicalConversationSnapshot {
 }
 
 describe('ShadowPlanningLifecycle', () => {
-  it('records a shadow plan while retaining legacy as the only execution owner', () => {
+  it('is unreachable after universal TurnPlanner entry', () => {
     const current = snapshot();
     const orchestration = new ContextOrchestrator().orchestrate(current, {
       diagnosticsEnabled: true,
     });
-    const before = JSON.stringify(orchestration);
     const diagnostics = runShadowPlanningLifecycle({
       snapshot: current,
       orchestration,
@@ -43,12 +42,7 @@ describe('ShadowPlanningLifecycle', () => {
       action: 'answer',
     }, new TurnPlanner());
 
-    expect(diagnostics).toEqual(expect.objectContaining({
-      authorityMode: 'shadow',
-      planOwner: 'legacy-router:v1',
-      shadowPlan: expect.any(Object),
-    }));
-    expect(JSON.stringify(orchestration)).toBe(before);
+    expect(diagnostics).toBeNull();
   });
 
   it('does not run when every Wave A gate is disabled', () => {

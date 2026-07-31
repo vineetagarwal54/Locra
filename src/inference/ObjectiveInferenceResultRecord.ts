@@ -5,6 +5,11 @@ export const OBJECTIVE_INFERENCE_RESULT_RECORD_FIELDS = [
   'answerGenerationLatencyMs',
   'totalEndToEndLatencyMs',
   'generatedTokens',
+  'extractionGeneratedTokens',
+  'visibleGeneratedTokens',
+  'extractionSchemaMode',
+  'extractionSchemaVersion',
+  'extractionAttemptLimitsTokens',
   'promptTokens',
   'estimatedPromptTokens',
   'finalNativePromptTokens',
@@ -38,6 +43,11 @@ export interface ObjectiveInferenceResultRecord {
   answerGenerationLatencyMs: number;
   totalEndToEndLatencyMs: number;
   generatedTokens: number;
+  extractionGeneratedTokens?: number;
+  visibleGeneratedTokens?: number;
+  extractionSchemaMode?: import('./InferenceEngineHandle').StructuredOutputSchemaMode;
+  extractionSchemaVersion?: string | null;
+  extractionAttemptLimitsTokens?: readonly number[];
   promptTokens?: number;
   estimatedPromptTokens?: number;
   finalNativePromptTokens?: number;

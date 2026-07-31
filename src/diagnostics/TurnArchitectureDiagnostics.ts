@@ -3,6 +3,10 @@ import type {
   IndependentRecoveryKind,
   IndependentRoutingRecoveryResult,
 } from '../inference/IndependentRoutingRecovery';
+import type {
+  VisionComparisonProvenance,
+  VisionImageDiagnostic,
+} from '../inference/VisionExecutor';
 import type { PlannerActivation } from '../planning/PlannerActivation';
 import type { TurnPlannerResult } from '../planning/TurnPlanner';
 import type {
@@ -79,6 +83,9 @@ export interface VisionArchitectureDiagnostic {
   readonly evidenceStatus: VisionEvidenceDiagnosticStatus;
   readonly pixelsUsed: boolean;
   readonly storedEvidenceUsed: boolean;
+  readonly imageDiagnostics: readonly VisionImageDiagnostic[];
+  readonly comparisonProvenance: readonly VisionComparisonProvenance[];
+  readonly uncertaintyOrFailureReason: string | null;
 }
 
 export interface TurnArchitectureDiagnostics {
@@ -104,7 +111,8 @@ export function createTurnArchitectureDiagnostics(input: {
   readonly activation: PlannerActivation;
   readonly planning: TurnPlannerResult;
   readonly recovery: IndependentRoutingRecoveryResult;
-  readonly scenarioClass: string;
+  /** Deprecated compatibility field; diagnostics use the planner-owned value. */
+  readonly scenarioClass?: string;
   readonly missingImageIds?: readonly string[];
   readonly legacySemanticDecisionCount?: number;
 }): TurnArchitectureDiagnostics {
@@ -120,7 +128,7 @@ export function createTurnArchitectureDiagnostics(input: {
   return {
     authorityMode: input.activation.authorityMode,
     planOwner: input.activation.planOwner,
-    scenarioClass: input.scenarioClass,
+    scenarioClass: plan.scenarioClass,
     executedPlanId: legacyExecution ? `legacy:${plan.turnId}` : plan.turnId,
     executedPlanVersion: legacyExecution ? 'legacy-routing-v1' : plan.planVersion,
     legacySemanticDecisionCount,
@@ -172,6 +180,28 @@ export function sanitizeTurnArchitectureDiagnostics(
       ...diagnostics.vision,
       imageIds: diagnostics.vision.imageIds.map(sanitizeIdentifier),
       missingImageIds: diagnostics.vision.missingImageIds.map(sanitizeIdentifier),
+      imageDiagnostics: diagnostics.vision.imageDiagnostics.map((diagnostic) => ({
+        ...diagnostic,
+        imageId: sanitizeIdentifier(diagnostic.imageId),
+        extractionSchemaVersion:
+          diagnostic.extractionSchemaVersion === null
+            ? null
+            : sanitizeIdentifier(diagnostic.extractionSchemaVersion),
+        uncertaintyOrFailureReason:
+          diagnostic.uncertaintyOrFailureReason === null
+            ? null
+            : sanitizeIdentifier(diagnostic.uncertaintyOrFailureReason),
+        comparisonProvenance: diagnostic.comparisonProvenance === null
+          ? null
+          : sanitizeComparisonProvenance(diagnostic.comparisonProvenance),
+      })),
+      comparisonProvenance: diagnostics.vision.comparisonProvenance.map(
+        sanitizeComparisonProvenance,
+      ),
+      uncertaintyOrFailureReason:
+        diagnostics.vision.uncertaintyOrFailureReason === null
+          ? null
+          : sanitizeIdentifier(diagnostics.vision.uncertaintyOrFailureReason),
     },
     shadowPlan: diagnostics.shadowPlan === null
       ? null
@@ -211,7 +241,13 @@ export function withTerminalVisionEvidenceDiagnostic(
     readonly terminalStatus?: 'completed' | 'failed' | 'cancelled';
   },
 ): TurnArchitectureDiagnostics {
-  if (diagnostics.vision.strategy !== 'inspect-and-structure') {
+  const pendingExtraction = diagnostics.vision.imageDiagnostics.some(
+    (diagnostic) => diagnostic.extractionValidity === 'pending',
+  );
+  if (
+    diagnostics.vision.strategy !== 'inspect-and-structure'
+    && !pendingExtraction
+  ) {
     return {
       ...diagnostics,
       executionResult: input.terminalStatus ?? diagnostics.executionResult,
@@ -230,6 +266,27 @@ export function withTerminalVisionEvidenceDiagnostic(
         : input.extractionFailurePresent
           ? 'failed'
           : 'not-applicable',
+      imageDiagnostics: diagnostics.vision.imageDiagnostics.map((diagnostic) =>
+        diagnostic.extractionValidity !== 'pending'
+          ? diagnostic
+          : {
+              ...diagnostic,
+              evidenceStatus: input.hiddenEvidencePresent
+                ? 'complete'
+                : input.terminalStatus === 'cancelled'
+                  ? diagnostic.evidenceStatus
+                  : 'failed',
+              extractionValidity: input.hiddenEvidencePresent
+                ? 'valid'
+                : input.terminalStatus === 'cancelled'
+                  ? 'not-evaluated'
+                  : 'invalid',
+              uncertaintyOrFailureReason: input.hiddenEvidencePresent
+                ? null
+                : input.terminalStatus === 'cancelled'
+                  ? 'cancelled'
+                  : 'structured-extraction-invalid',
+            }),
     },
   };
 }
@@ -255,12 +312,17 @@ export function withControlledExecutionDiagnostic(
     executionResult: audit.result,
     vision: {
       strategy: audit.visionStrategy,
-      imageIds: [...audit.actualImageIds],
+      imageIds: audit.imageDiagnostics.length === 0
+        ? [...audit.actualImageIds]
+        : audit.imageDiagnostics.map((diagnostic) => diagnostic.imageId),
       missingImageIds: [...audit.missingImageIds],
       evidenceAction: audit.evidenceAction,
       evidenceStatus: evidenceStatusForAudit(audit),
       pixelsUsed: audit.pixelsUsed,
       storedEvidenceUsed: audit.storedEvidenceUsed,
+      imageDiagnostics: audit.imageDiagnostics,
+      comparisonProvenance: audit.comparisonProvenance,
+      uncertaintyOrFailureReason: audit.failureReason,
     },
   };
 }
@@ -321,6 +383,9 @@ function visionDiagnosticFor(
       evidenceStatus: 'not-applicable',
       pixelsUsed: false,
       storedEvidenceUsed: false,
+      imageDiagnostics: [],
+      comparisonProvenance: [],
+      uncertaintyOrFailureReason: null,
     };
   }
   if (missingImageIds.length > 0) {
@@ -332,6 +397,9 @@ function visionDiagnosticFor(
       evidenceStatus: 'unavailable',
       pixelsUsed: false,
       storedEvidenceUsed: false,
+      imageDiagnostics: [],
+      comparisonProvenance: [],
+      uncertaintyOrFailureReason: `selected-image-unavailable:${missingImageIds[0]}`,
     };
   }
   return {
@@ -352,6 +420,9 @@ function visionDiagnosticFor(
           : 'pending',
     pixelsUsed: strategy === 'inspect-original' || strategy === 'inspect-and-structure',
     storedEvidenceUsed: strategy === 'reuse-evidence' || strategy === 'compare-evidence',
+    imageDiagnostics: [],
+    comparisonProvenance: [],
+    uncertaintyOrFailureReason: null,
   };
 }
 
@@ -376,4 +447,17 @@ function sanitizeIdentifier(value: string): string {
     .replace(/\/(?:data|storage|cache|tmp|var)\/[^\s"'<>]+/g, '[local-path]')
     .replace(/[^a-zA-Z0-9:_./\-[\]]/g, '_')
     .slice(0, 160);
+}
+
+function sanitizeComparisonProvenance(
+  provenance: VisionComparisonProvenance,
+): VisionComparisonProvenance {
+  return {
+    side: provenance.side,
+    imageId: sanitizeIdentifier(provenance.imageId),
+    sourceMessageId: sanitizeIdentifier(provenance.sourceMessageId),
+    evidenceId: provenance.evidenceId === null
+      ? null
+      : sanitizeIdentifier(provenance.evidenceId),
+  };
 }

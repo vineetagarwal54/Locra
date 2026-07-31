@@ -53,6 +53,7 @@ import {
 } from './InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
 import { DEFAULT_RESPONSE_MODE, getResponseModeConfig, type ResponseMode } from './ResponseMode';
+import { STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION } from './StructuredVisualExtraction';
 import {
   buildToolRefusalRecoveryMessages,
   shouldRetryToolRefusal,
@@ -109,6 +110,23 @@ export interface InferenceQueueDeps {
 export interface DeviceBuildMetadata {
   deviceNameModel: string;
   appBuildId: string;
+  gitCommitSha?: string;
+  gitBranch?: string;
+  workingTreeState?: 'clean' | 'dirty' | 'unknown';
+  buildIdentifier?: string;
+  totalMemoryBytes?: number | null;
+  runtimeUsedMemoryBytes?: number | null;
+  thermalState?: string | null;
+}
+
+interface ResolvedDeviceBuildMetadata extends DeviceBuildMetadata {
+  gitCommitSha: string;
+  gitBranch: string;
+  workingTreeState: 'clean' | 'dirty' | 'unknown';
+  buildIdentifier: string;
+  totalMemoryBytes: number | null;
+  runtimeUsedMemoryBytes: number | null;
+  thermalState: string | null;
 }
 
 // 'cancelling' is in-flight: a stop was requested but the native call/lease have
@@ -143,10 +161,25 @@ interface ActiveRequest {
     readonly generationConfigId: string;
     readonly deviceNameModel: string;
     readonly appBuildId: string;
+    readonly gitCommitSha: string;
+    readonly gitBranch: string;
+    readonly workingTreeState: 'clean' | 'dirty' | 'unknown';
+    readonly buildIdentifier: string;
+    readonly totalMemoryBytes: number | null;
+    readonly runtimeUsedMemoryBytes: number | null;
+    readonly thermalState: string | null;
   };
   cancelled: boolean;
   evidenceState: InferenceEvidenceState;
   cancellationDiagnostics: InferenceExecutionDiagnostics | null;
+  extractionGeneratedTokens: number;
+  visibleGeneratedTokens: number;
+  extractionSchemaMode: import('./InferenceEngineHandle').StructuredOutputSchemaMode;
+  extractionSchemaVersion: string | null;
+  extractionAttemptLimitsTokens: number[];
+  evidenceValidationOutcome: NonNullable<
+    InferenceExecutionDiagnostics['evidenceValidationOutcome']
+  >;
 }
 
 interface LifecycleGate<T> {
@@ -243,6 +276,14 @@ export class InferenceQueue implements IInferenceQueue {
       cancelled: false,
       evidenceState: requestRequiresStructuredVision(request) ? 'pending' : 'not-applicable',
       cancellationDiagnostics: null,
+      extractionGeneratedTokens: 0,
+      visibleGeneratedTokens: 0,
+      extractionSchemaMode: 'not-used',
+      extractionSchemaVersion: null,
+      extractionAttemptLimitsTokens: [],
+      evidenceValidationOutcome: requestRequiresStructuredVision(request)
+        ? 'pending'
+        : 'not-applicable',
     };
     this.active = active;
     const lifecycleGates = createLifecycleGates();
@@ -430,6 +471,9 @@ export class InferenceQueue implements IInferenceQueue {
     active.cancelled = true;
     active.evidenceState =
       active.evidenceState === 'pending' ? 'cancelled' : active.evidenceState;
+    if (active.evidenceValidationOutcome === 'pending') {
+      active.evidenceValidationOutcome = 'cancelled';
+    }
     active.cancellationDiagnostics = this.buildExecutionDiagnostics(active);
     active.controller.abort();
     this.lifecycleActor.send({ type: 'CANCEL' });
@@ -483,6 +527,7 @@ export class InferenceQueue implements IInferenceQueue {
     const plannedVisionStrategy = request.visionExecutionPlan?.strategy;
     const shouldStructure =
       plannedVisionStrategy === 'inspect-and-structure'
+      || request.visionEvidenceExecution?.requiresStructuredExtraction === true
       || (
         plannedVisionStrategy === undefined
         && requiresStructuredVision(request.question)
@@ -509,7 +554,9 @@ export class InferenceQueue implements IInferenceQueue {
     }
 
     recorder.markPerceptionStart();
+    active.extractionSchemaVersion = STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION;
     const extractionPlan = createStructuredVisionGenerationPlan('extraction');
+    active.extractionAttemptLimitsTokens.push(extractionPlan.hardSafetyLimitTokens);
     const extractionRequest: EngineGenerateRequest = {
       messages: buildPerceptionModelMessages(
         buildStructuredExtractionPrompt(request.question),
@@ -528,11 +575,24 @@ export class InferenceQueue implements IInferenceQueue {
     };
     const extractionResult = await this.deps.engine.generate(
       extractionRequest,
-      () => {
+      (_cumulative, generatedTokenCount) => {
         // Hidden perception output never streams into visible queue state.
+        if (generatedTokenCount !== undefined) {
+          active.extractionGeneratedTokens = Math.max(
+            active.extractionGeneratedTokens,
+            generatedTokenCount,
+          );
+        }
       },
       active.controller.signal,
     );
+    active.extractionGeneratedTokens = Math.max(
+      active.extractionGeneratedTokens,
+      extractionResult.tokenCount,
+    );
+    active.extractionSchemaMode =
+      extractionResult.generationDiagnostics?.structuredOutputMode
+      ?? 'native-json-schema';
     recorder.markPerceptionEnd();
     if (active.cancelled) {
       return extractionResult;
@@ -542,7 +602,9 @@ export class InferenceQueue implements IInferenceQueue {
     const extractionOutcome = await parseExtractionWithRetry(
       extractionResult.response,
       async (retryPrompt) => {
+        const priorExtractionTokens = active.extractionGeneratedTokens;
         const retryPlan = createStructuredVisionGenerationPlan('extractionRetry');
+        active.extractionAttemptLimitsTokens.push(retryPlan.hardSafetyLimitTokens);
         const retryRequest: EngineGenerateRequest = {
           messages: buildPerceptionRetryModelMessages(retryPrompt),
           kind: 'extractionRetry',
@@ -558,10 +620,20 @@ export class InferenceQueue implements IInferenceQueue {
         };
         const retryResult = await this.deps.engine.generate(
           retryRequest,
-          () => {
+          (_cumulative, generatedTokenCount) => {
             // Retry output is hidden for the same reason as first perception.
+            if (generatedTokenCount !== undefined) {
+              active.extractionGeneratedTokens = Math.max(
+                active.extractionGeneratedTokens,
+                priorExtractionTokens + generatedTokenCount,
+              );
+            }
           },
           active.controller.signal,
+        );
+        active.extractionGeneratedTokens = Math.max(
+          active.extractionGeneratedTokens,
+          priorExtractionTokens + retryResult.tokenCount,
         );
         this.recordTraceStage(active, 'extractionRetry', retryRequest, retryResult);
         return retryResult.response;
@@ -573,6 +645,8 @@ export class InferenceQueue implements IInferenceQueue {
     recorder.endLatencyStage('evidence-validation');
     active.evidenceState =
       extractionOutcome.hiddenEvidence === null ? 'failed' : 'valid-unpersisted';
+    active.evidenceValidationOutcome =
+      extractionOutcome.hiddenEvidence === null ? 'invalid' : 'valid';
     this.recordTraceStage(active, 'perception', extractionRequest, extractionResult, {
       parsedOutput: extractionOutcome.hiddenEvidence,
       processedOutput: extractionOutcome.visibleAnswer,
@@ -595,7 +669,12 @@ export class InferenceQueue implements IInferenceQueue {
       this.setState({ response: extractionOutcome.visibleAnswer });
       return {
         response: extractionOutcome.visibleAnswer,
-        tokenCount: extractionResult.tokenCount,
+        tokenCount: 0,
+        extractionGeneratedTokens: active.extractionGeneratedTokens,
+        visibleGeneratedTokens: 0,
+        extractionSchemaMode: active.extractionSchemaMode,
+        extractionSchemaVersion: active.extractionSchemaVersion,
+        extractionAttemptLimitsTokens: [...active.extractionAttemptLimitsTokens],
         pinnedExtraction: extractionOutcome.pinnedExtraction,
         hiddenEvidence: null,
       };
@@ -630,6 +709,11 @@ export class InferenceQueue implements IInferenceQueue {
 
     return {
       ...answerResult,
+      extractionGeneratedTokens: active.extractionGeneratedTokens,
+      visibleGeneratedTokens: active.visibleGeneratedTokens,
+      extractionSchemaMode: active.extractionSchemaMode,
+      extractionSchemaVersion: active.extractionSchemaVersion,
+      extractionAttemptLimitsTokens: [...active.extractionAttemptLimitsTokens],
       pinnedExtraction: extractionOutcome.pinnedExtraction,
       hiddenEvidence: extractionOutcome.hiddenEvidence,
     };
@@ -691,8 +775,15 @@ export class InferenceQueue implements IInferenceQueue {
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
 
+    let visibleAttemptBase = active.visibleGeneratedTokens;
     const onToken = (cumulative: string, generatedTokenCount?: number): void => {
       if (active.cancelled) return;
+      if (generatedTokenCount !== undefined) {
+        active.visibleGeneratedTokens = Math.max(
+          active.visibleGeneratedTokens,
+          visibleAttemptBase + generatedTokenCount,
+        );
+      }
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
       recorder.endLatencyStage('visible-answer-startup');
@@ -709,6 +800,10 @@ export class InferenceQueue implements IInferenceQueue {
       onToken,
       active.controller.signal,
     );
+    active.visibleGeneratedTokens = Math.max(
+      active.visibleGeneratedTokens,
+      visibleAttemptBase + result.tokenCount,
+    );
     recorder.endLatencyStage('visible-answer-startup');
     this.recordVisibleTraceStage(active, stage, generateRequest, result);
 
@@ -718,20 +813,31 @@ export class InferenceQueue implements IInferenceQueue {
       active.controller.signal.aborted ||
       !shouldRetryToolRefusal(result.response, originalQuestion)
     ) {
-      return result;
+      return {
+        ...result,
+        visibleGeneratedTokens: active.visibleGeneratedTokens,
+      };
     }
 
     const retryRequest: EngineGenerateRequest = {
       ...generateRequest,
       messages: buildToolRefusalRecoveryMessages(messages),
     };
+    visibleAttemptBase = active.visibleGeneratedTokens;
     const retryResult = await this.deps.engine.generate(
       retryRequest,
       onToken,
       active.controller.signal,
     );
+    active.visibleGeneratedTokens = Math.max(
+      active.visibleGeneratedTokens,
+      visibleAttemptBase + retryResult.tokenCount,
+    );
     this.recordVisibleTraceStage(active, stage, retryRequest, retryResult, { refusalRetry: true });
-    return retryResult;
+    return {
+      ...retryResult,
+      visibleGeneratedTokens: active.visibleGeneratedTokens,
+    };
   }
 
   private recordVisibleTraceStage(
@@ -762,6 +868,16 @@ export class InferenceQueue implements IInferenceQueue {
       answerText,
       ...timings,
       generatedTokens: result.tokenCount,
+      extractionGeneratedTokens:
+        result.extractionGeneratedTokens ?? 0,
+      visibleGeneratedTokens:
+        result.visibleGeneratedTokens ?? result.tokenCount,
+      extractionSchemaMode:
+        result.extractionSchemaMode ?? 'not-used',
+      extractionSchemaVersion:
+        result.extractionSchemaVersion ?? null,
+      extractionAttemptLimitsTokens:
+        result.extractionAttemptLimitsTokens ?? [],
       truncated: verdict === 'truncated',
       looping: verdict === 'looping',
       timestamp: new Date().toISOString(),
@@ -870,6 +986,14 @@ export class InferenceQueue implements IInferenceQueue {
           ?? getResponseModeConfig(request.responseMode).answerTargetTokens,
         generationPlanId: request.generationPlanId ?? 'response-mode-default-v1',
         taskKind: request.generationTaskKind ?? 'concise-prose',
+        structuredOutputMode:
+          request.kind === 'extraction' || request.kind === 'extractionRetry'
+            ? 'native-json-schema'
+            : 'not-used',
+        structuredOutputSchemaVersion:
+          request.kind === 'extraction' || request.kind === 'extractionRetry'
+            ? STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION
+            : null,
       },
       ...parsed,
     });
@@ -885,10 +1009,20 @@ export class InferenceQueue implements IInferenceQueue {
     this.setState({ inferenceTrace: active.trace });
   }
 
-  private resolveDeviceBuildMetadata(): DeviceBuildMetadata {
-    return this.deps.getDeviceBuildMetadata?.() ?? {
+  private resolveDeviceBuildMetadata(): ResolvedDeviceBuildMetadata {
+    const metadata = this.deps.getDeviceBuildMetadata?.() ?? {
       deviceNameModel: 'unknown-device',
       appBuildId: 'unknown-build',
+    };
+    return {
+      ...metadata,
+      gitCommitSha: metadata.gitCommitSha ?? 'unknown',
+      gitBranch: metadata.gitBranch ?? 'unknown',
+      workingTreeState: metadata.workingTreeState ?? 'unknown',
+      buildIdentifier: metadata.buildIdentifier ?? metadata.appBuildId,
+      totalMemoryBytes: metadata.totalMemoryBytes ?? null,
+      runtimeUsedMemoryBytes: metadata.runtimeUsedMemoryBytes ?? null,
+      thermalState: metadata.thermalState ?? null,
     };
   }
 
@@ -899,6 +1033,11 @@ export class InferenceQueue implements IInferenceQueue {
     return (event): void => {
       const stage = latencyStageForRuntimeEvent(event.stage, generation);
       if (event.status === 'started') {
+        if (generation === 'hidden' && event.structuredOutputMode !== undefined) {
+          active.extractionSchemaMode = event.structuredOutputMode;
+          active.extractionSchemaVersion =
+            event.structuredOutputSchemaVersion ?? active.extractionSchemaVersion;
+        }
         active.recorder.startLatencyStage(stage);
       } else {
         active.recorder.endLatencyStage(stage);
@@ -909,14 +1048,29 @@ export class InferenceQueue implements IInferenceQueue {
   private buildExecutionDiagnostics(
     active: ActiveRequest,
   ): InferenceExecutionDiagnostics {
+    const timings = active.recorder.captureExecutionTimings();
     return {
-      ...active.recorder.captureExecutionTimings(),
+      ...timings,
       evidenceState: active.evidenceState,
+      cancellationStage: active.cancelled ? timings.activeStage : null,
+      extractionGeneratedTokens: active.extractionGeneratedTokens,
+      visibleGeneratedTokens: active.visibleGeneratedTokens,
+      extractionSchemaMode: active.extractionSchemaMode,
+      extractionSchemaVersion: active.extractionSchemaVersion,
+      extractionAttemptLimitsTokens: [...active.extractionAttemptLimitsTokens],
+      evidenceValidationOutcome: active.evidenceValidationOutcome,
       modelId: active.attribution.modelId,
       generationConfigId: active.attribution.generationConfigId,
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
       deviceNameModel: active.attribution.deviceNameModel,
       appBuildId: active.attribution.appBuildId,
+      gitCommitSha: active.attribution.gitCommitSha,
+      gitBranch: active.attribution.gitBranch,
+      workingTreeState: active.attribution.workingTreeState,
+      buildIdentifier: active.attribution.buildIdentifier,
+      totalMemoryBytes: active.attribution.totalMemoryBytes,
+      runtimeUsedMemoryBytes: active.attribution.runtimeUsedMemoryBytes,
+      thermalState: active.attribution.thermalState,
     };
   }
 
@@ -966,11 +1120,7 @@ export class InferenceQueue implements IInferenceQueue {
     options: InferenceSubmitOptions,
   ): string | null {
     const strategy = request.visionExecutionPlan?.strategy;
-    if (
-      strategy === 'none'
-      || strategy === 'reuse-evidence'
-      || strategy === 'compare-evidence'
-    ) {
+    if (strategy === 'none') {
       return null;
     }
     if (request.imagePath === null) {
@@ -1025,6 +1175,7 @@ function validatePlannedVisionRequest(request: InferenceRequest): void {
 function requestRequiresStructuredVision(request: InferenceRequest): boolean {
   const strategy = request.visionExecutionPlan?.strategy;
   return strategy === 'inspect-and-structure'
+    || request.visionEvidenceExecution?.requiresStructuredExtraction === true
     || (strategy === undefined && requiresStructuredVision(request.question));
 }
 

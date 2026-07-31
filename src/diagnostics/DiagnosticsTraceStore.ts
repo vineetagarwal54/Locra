@@ -6,6 +6,10 @@ import type {
 import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { ResponseMode } from '../inference/ResponseMode';
+import type {
+  ConversationFocusArtifact,
+  ConversationFocusUnresolvedReference,
+} from '../memory/ConversationStateLedger';
 import { storage } from '../storage/mmkv';
 import type {
   GenerationFinishReason,
@@ -38,17 +42,48 @@ export interface DiagnosticTurnRecord {
 
 export type DiagnosticRequestKind = 'text' | 'image' | 'extraction' | 'retry';
 
+export interface ProductionConversationFocusSummary {
+  readonly schemaVersion: string;
+  readonly lastCompletedTurnId: string | null;
+  readonly activeImageIds: readonly string[];
+  readonly lastExplicitlyReferencedImageIds: readonly string[];
+  readonly activeAssistantMessageId: string | null;
+  readonly activeArtifact: ConversationFocusArtifact | null;
+  readonly activeTopicLabels: readonly string[];
+  readonly activeEntityLabels: readonly string[];
+  readonly unresolvedReference: ConversationFocusUnresolvedReference | null;
+  readonly publicationStatus: 'current' | 'updated' | 'rebuild-required';
+}
+
 export interface ProductionDiagnosticTurnSummary {
   readonly responseMode: ResponseMode;
   readonly requestKind: DiagnosticRequestKind;
   readonly promptTokenCount: number;
   readonly generatedTokenCount: number;
+  readonly extractionGeneratedTokenCount: number;
+  readonly visibleGeneratedTokenCount: number;
+  readonly extractionSchemaMode: import('../inference/InferenceEngineHandle').StructuredOutputSchemaMode;
+  readonly extractionSchemaVersion: string | null;
+  readonly extractionAttemptLimitsTokens: readonly number[];
   readonly firstTokenTimeMs: number;
+  readonly firstVisibleTokenLatencyMs: number | null;
   readonly totalTimeMs: number;
   readonly activeStage: InferenceExecutionDiagnostics['activeStage'];
   readonly lastCompletedStage: InferenceExecutionDiagnostics['lastCompletedStage'];
   readonly latencyStages: InferenceExecutionDiagnostics['stages'];
   readonly evidenceState: InferenceEvidenceState;
+  readonly evidenceValidationOutcome:
+    | 'not-applicable'
+    | 'pending'
+    | 'valid'
+    | 'invalid'
+    | 'cancelled';
+  readonly evidencePersistenceOutcome:
+    | 'not-applicable'
+    | 'persisted'
+    | 'failed'
+    | 'not-attempted';
+  readonly cancellationStage: InferenceExecutionDiagnostics['activeStage'];
   readonly finishReason: GenerationFinishReason;
   readonly looping: boolean;
   readonly truncated: boolean;
@@ -93,11 +128,21 @@ export interface ProductionDiagnosticTurnSummary {
   readonly generationTaskKind: GenerationTaskKind;
   readonly samplingProfile: SamplingProfile;
   readonly imageSupplied: boolean;
+  readonly conversationFocus: ProductionConversationFocusSummary;
+  readonly conversationFocusBefore: ProductionConversationFocusSummary;
+  readonly conversationFocusAfter: ProductionConversationFocusSummary;
   readonly modelId: string;
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
   readonly appBuildId: string;
+  readonly gitCommitSha: string;
+  readonly gitBranch: string;
+  readonly workingTreeState: 'clean' | 'dirty' | 'unknown';
+  readonly buildIdentifier: string;
   readonly deviceNameModel: string;
+  readonly totalMemoryBytes: number | null;
+  readonly runtimeUsedMemoryBytes: number | null;
+  readonly thermalState: string | null;
 }
 
 interface DiagnosticsIndexEntry {

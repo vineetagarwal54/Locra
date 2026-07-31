@@ -5,17 +5,17 @@ import {
 } from '../../../src/planning/PlannerActivation';
 
 describe('PlannerActivation', () => {
-  it('keeps shadow diagnostics from owning execution', () => {
+  it('ignores obsolete shadow gates and gives the whole turn to TurnPlanner', () => {
     const result = resolvePlannerActivation({
       ...DEFAULT_PLANNER_ACTIVATION,
       configuredMode: 'shadow',
       shadowDiagnosticsEnabled: true,
     }, 'text-answer');
 
-    expect(result.planOwner).toBe('legacy-router:v1');
-    expect(result.semanticAuthority).toBe('legacy');
-    expect(result.runShadowPlanner).toBe(true);
-    expect(result.useLegacySemantics).toBe(true);
+    expect(result.planOwner).toBe('turn-planner:v1');
+    expect(result.semanticAuthority).toBe('turn-plan');
+    expect(result.runShadowPlanner).toBe(false);
+    expect(result.useLegacySemantics).toBe(false);
   });
 
   it('gives a named controlled class whole-turn ownership', () => {
@@ -31,15 +31,15 @@ describe('PlannerActivation', () => {
     expect(result.useLegacySemantics).toBe(false);
   });
 
-  it('does not partially activate an unnamed controlled class', () => {
+  it('does not use a controlled-class allowlist as a planner gate', () => {
     const result = resolvePlannerActivation({
       ...DEFAULT_PLANNER_ACTIVATION,
       configuredMode: 'controlled',
       controlledScenarioClasses: ['image-reinspection'],
     }, 'image-comparison');
 
-    expect(result.planOwner).toBe('legacy-router:v1');
-    expect(result.semanticAuthority).toBe('legacy');
+    expect(result.planOwner).toBe('turn-planner:v1');
+    expect(result.semanticAuthority).toBe('turn-plan');
     expect(result.wholeTurnOwned).toBe(true);
   });
 
@@ -66,15 +66,8 @@ describe('PlannerActivation', () => {
     expect(result.useLegacySemantics).toBe(true);
   });
 
-  it('enables only the temporary Wave A/B validation classes in development', () => {
-    expect(plannerActivationForRuntime(true)).toEqual({
-      ...DEFAULT_PLANNER_ACTIVATION,
-      configuredMode: 'controlled',
-      shadowDiagnosticsEnabled: true,
-      independentRecoveryEnabled: true,
-      controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
-      rollbackToLegacy: false,
-    });
+  it('uses universal authoritative entry in development', () => {
+    expect(plannerActivationForRuntime(true)).toBe(DEFAULT_PLANNER_ACTIVATION);
   });
 
   it('returns the unchanged default activation in release builds', () => {

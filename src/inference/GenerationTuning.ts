@@ -153,9 +153,19 @@ export function createGenerationPlan(
 
 export function createGenerationPlanFromTurnPlan(
   mode: ResponseMode,
-  taskKind: import('../planning/types').GenerationTaskKind,
+  turnPlan: import('../planning/types').TurnPlan,
 ): GenerationPlan {
   const config = getResponseModeConfig(mode);
+  const taskKind = turnPlan.generationTaskKind;
+  if (taskKind === 'continuation') {
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      'continuation-v1',
+      'continuation',
+      config.generationLimit,
+    );
+  }
   if (taskKind === 'comparison') {
     return plan(
       config.answerTargetTokens,
@@ -183,11 +193,25 @@ export function createGenerationPlanFromTurnPlan(
       config.generationLimit,
     );
   }
+  if (turnPlan.modality === 'text') {
+    const independentTarget = mode === 'High' ? 160 : mode === 'Medium' ? 128 : 96;
+    const followUpTarget = mode === 'High' ? 256 : mode === 'Medium' ? 192 : 128;
+    return plan(
+      Math.min(
+        config.answerTargetTokens,
+        turnPlan.conversationDependency === 'none' ? independentTarget : followUpTarget,
+      ),
+      config.generationLimit,
+      'turn-plan-concise-prose-v1',
+      'concise-prose',
+      config.generationLimit,
+    );
+  }
   const softTarget = Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128);
   return plan(
     softTarget,
     config.generationLimit,
-    'turn-plan-image-answer-v2',
+    'visual-description-v3',
     'visual-description',
     config.generationLimit,
   );

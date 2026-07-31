@@ -7,6 +7,7 @@ import * as Sharing from 'expo-sharing';
 
 import { deviceResourcePolicy } from '../inference/DeviceResourcePolicy';
 import { CURRENT_PIPELINE_VARIANT_ID } from '../inference/GenerationTuning';
+import { QWEN_LLAMA_RN_VERSION } from '../inference/llamaRn/QwenRuntimeConfig';
 import { QWEN_V1_DESCRIPTOR } from '../model/ActiveModel';
 import { conversationRepository, imageRepository, messageRepository } from '../store/historyStore';
 import { useModelStore } from '../store/modelStore';
@@ -110,8 +111,16 @@ function resolveAppInfo(turns: ReadonlyArray<DiagnosticTurnRecord>): AppDiagnost
     generationConfigId:
       mostRecentObjectiveResult?.generationConfigId ?? attribution.generationConfigId,
     pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
+    inferenceRuntimeVersion: `llama.rn@${QWEN_LLAMA_RN_VERSION}`,
     appBuildId: deviceMetadata.appBuildId,
+    gitCommitSha: deviceMetadata.gitCommitSha ?? 'unknown',
+    gitBranch: deviceMetadata.gitBranch ?? 'unknown',
+    workingTreeState: deviceMetadata.workingTreeState ?? 'unknown',
+    buildIdentifier: deviceMetadata.buildIdentifier ?? deviceMetadata.appBuildId,
     deviceNameModel: deviceMetadata.deviceNameModel,
+    totalMemoryBytes: deviceMetadata.totalMemoryBytes ?? null,
+    runtimeUsedMemoryBytes: deviceMetadata.runtimeUsedMemoryBytes ?? null,
+    thermalState: deviceMetadata.thermalState ?? null,
     exportedAt: new Date().toISOString(),
     modelDownloadStatus: modelState.downloadStatus,
     modelDownloadProgress: modelState.downloadProgress,

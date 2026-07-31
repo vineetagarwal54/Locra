@@ -20,6 +20,20 @@ function visionResult(
     })),
     missingImageIds: [],
     evidenceAction: 'freshly-inspected',
+    imageDiagnostics: imageIds.map((imageId) => ({
+      imageId,
+      evidenceStatus: 'missing',
+      sufficiencyResult: 'not-evaluated',
+      sufficiencyReason: 'not-evaluated',
+      action: 'pixel-inspection',
+      extractionSchemaVersion: null,
+      extractionValidity: 'not-evaluated',
+      comparisonProvenance: null,
+      uncertaintyOrFailureReason: null,
+    })),
+    pixelInspectionImageIds: [...imageIds],
+    requiresStructuredExtraction: false,
+    failureReason: null,
     replanned: false,
   };
 }
@@ -30,6 +44,7 @@ function controlledPlan(): TurnPlan {
     turnId: 'turn-image-1',
     authorityMode: 'controlled',
     planOwner: 'turn-planner:v1',
+    scenarioClass: 'image-follow-up',
     intent: 'inspect',
     modality: 'image',
     conversationDependency: 'ledger',

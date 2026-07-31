@@ -11,6 +11,7 @@ function validTextPlan(): TurnPlan {
     turnId: 'turn-1',
     authorityMode: 'authoritative',
     planOwner: 'turn-planner:v1',
+    scenarioClass: 'independent-text',
     intent: 'answer',
     modality: 'text',
     conversationDependency: 'none',

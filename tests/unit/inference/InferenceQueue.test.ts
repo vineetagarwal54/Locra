@@ -731,6 +731,11 @@ describe('InferenceQueue two-stage first image turns', () => {
         answerGenerationLatencyMs: 500,
         totalEndToEndLatencyMs: 700,
         generatedTokens: 6,
+        extractionGeneratedTokens: 14,
+        visibleGeneratedTokens: 6,
+        extractionSchemaMode: 'native-json-schema',
+        extractionSchemaVersion: 'structured-visual-extraction-v2',
+        extractionAttemptLimitsTokens: [192],
         promptTokens: 44,
         modelId: 'GEMMA4_E2B_MM',
         generationConfigId: 'gemma4-e2b-mm-library-default',
@@ -761,6 +766,43 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(state.response).not.toMatch(/subjectObject|visibleFeatures|Subject\/object/i);
     expect(state.pinnedExtraction).toContain('Subject/object: ceramic mug');
     expect(state.hiddenEvidence?.subjectObject).toBe('ceramic mug');
+  });
+
+  it('reinspects pixels and produces one visible answer for an insufficient reuse plan', async () => {
+    const generatedRequests: EngineGenerateRequest[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken) => {
+        generatedRequests.push(generateRequest);
+        const response = generateRequest.kind === 'extraction'
+          ? validExtractionJson
+          : 'The selected image has no readable text.';
+        if (generateRequest.kind === 'answer') onToken(response, 6);
+        return Promise.resolve({ response, tokenCount: 6 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit({
+      ...request,
+      visionExecutionPlan: {
+        strategy: 'reuse-evidence',
+        imageReferenceIds: ['image-selected'],
+        evidenceIds: ['evidence-insufficient'],
+      },
+      visionEvidenceExecution: {
+        pixelInspectionImageIds: ['image-selected'],
+        requiresStructuredExtraction: true,
+        failureReason: null,
+      },
+    });
+
+    expect(generatedRequests.map((generated) => generated.kind)).toEqual([
+      'extraction',
+      'answer',
+    ]);
+    expect(queue.getState().response).toBe('The selected image has no readable text.');
+    expect(queue.getState().hiddenEvidence).not.toBeNull();
   });
 
   it('uses a safe fallback and releases the lock after perception parse failure', async () => {
@@ -874,7 +916,9 @@ describe('InferenceQueue two-stage first image turns', () => {
       executionDiagnostics: expect.objectContaining({
         elapsedMs: 375,
         activeStage: 'extraction-formatting',
+        cancellationStage: 'extraction-formatting',
         evidenceState: 'cancelled',
+        extractionSchemaMode: 'not-used',
         modelId: 'ACTUAL_MODEL',
         generationConfigId: 'actual-runtime-config',
         appBuildId: 'locra-cancel-build',
@@ -905,17 +949,19 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
       elapsedMs: 120,
       activeStage: 'image-preprocessing',
+      cancellationStage: 'image-preprocessing',
       lastCompletedStage: null,
     }));
   });
 
   it.each([
-    ['media-tokenization', 'extraction-media-tokenization'],
-    ['prefill', 'extraction-prefill'],
-    ['generation', 'hidden-generation'],
+    ['prompt-tokenization', 'extraction-prompt-tokenization', 'not-used'],
+    ['media-tokenization', 'extraction-media-tokenization', 'not-used'],
+    ['prefill', 'extraction-prefill', 'native-json-schema'],
+    ['generation', 'hidden-generation', 'native-json-schema'],
   ] as const)(
     'reports cancellation during hidden runtime stage %s',
-    async (runtimeStage, expectedStage) => {
+    async (runtimeStage, expectedStage, expectedSchemaMode) => {
       const clock = makeClock();
       const gate = deferred<{ response: string; tokenCount: number }>();
       const terminalStates: InferenceState[] = [];
@@ -927,6 +973,11 @@ describe('InferenceQueue two-stage first image turns', () => {
             generateRequest.onRuntimeStage?.({
               stage: runtimeStage,
               status: 'started',
+              structuredOutputMode: expectedSchemaMode,
+              structuredOutputSchemaVersion:
+                expectedSchemaMode === 'native-json-schema'
+                  ? 'structured-visual-extraction-v2'
+                  : null,
             });
             return gate.promise;
           },
@@ -947,6 +998,8 @@ describe('InferenceQueue two-stage first image turns', () => {
       expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
         elapsedMs: 80,
         activeStage: expectedStage,
+        cancellationStage: expectedStage,
+        extractionSchemaMode: expectedSchemaMode,
       }));
     },
   );
@@ -986,9 +1039,53 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
       elapsedMs: 200,
       activeStage: 'visible-answer-startup',
+      cancellationStage: 'visible-answer-startup',
       evidenceState: 'valid-unpersisted',
     }));
   });
+
+  it.each([
+    ['prefill', 'visible-answer-prefill'],
+    ['generation', 'visible-generation'],
+  ] as const)(
+    'reports cancellation during visible runtime stage %s',
+    async (runtimeStage, expectedStage) => {
+      const clock = makeClock();
+      const gate = deferred<{ response: string; tokenCount: number }>();
+      const terminalStates: InferenceState[] = [];
+      const queue = makeQueue({
+        createRecorder: () => new InferenceMetricsRecorder(clock.now),
+        engine: {
+          loadModel: () => Promise.resolve(),
+          generate: (generateRequest) => {
+            generateRequest.onRuntimeStage?.({
+              stage: runtimeStage,
+              status: 'started',
+            });
+            return gate.promise;
+          },
+        },
+      });
+      queue.subscribe((state) => {
+        if (state.status === 'cancelled') terminalStates.push(state);
+      });
+
+      const inFlight = queue.submit({
+        imagePath: null,
+        question: 'Explain this.',
+      });
+      await flush();
+      clock.advanceTo(75);
+      queue.cancel();
+      gate.resolve({ response: 'partial', tokenCount: 1 });
+      await inFlight;
+
+      expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
+        activeStage: expectedStage,
+        cancellationStage: expectedStage,
+      }));
+    },
+  );
 
   it('cancels cleanly during hidden perception without starting answer generation', async () => {
     const gate = deferred<{ response: string; tokenCount: number }>();

@@ -233,6 +233,12 @@ export interface InferenceRequest {
   loopDetectionEligible?: boolean;
   /** Validated Wave B authority. When present, the queue executes it verbatim. */
   visionExecutionPlan?: import('../planning/types').VisionExecutionPlan;
+  /** Evidence execution derived only from the validated plan's selected image IDs. */
+  visionEvidenceExecution?: {
+    readonly pixelInspectionImageIds: readonly string[];
+    readonly requiresStructuredExtraction: boolean;
+    readonly failureReason: string | null;
+  };
 }
 
 export interface InferenceState {
@@ -260,11 +266,30 @@ export type InferenceEvidenceState =
 
 export interface InferenceExecutionDiagnostics extends InferenceExecutionTimings {
   readonly evidenceState: InferenceEvidenceState;
+  readonly cancellationStage?: import('../inference/InferenceMetrics').InferenceLatencyStage | null;
+  readonly extractionGeneratedTokens?: number;
+  readonly visibleGeneratedTokens?: number;
+  readonly extractionSchemaMode?: import('../inference/InferenceEngineHandle').StructuredOutputSchemaMode;
+  readonly extractionSchemaVersion?: string | null;
+  readonly extractionAttemptLimitsTokens?: readonly number[];
+  readonly evidenceValidationOutcome?:
+    | 'not-applicable'
+    | 'pending'
+    | 'valid'
+    | 'invalid'
+    | 'cancelled';
   readonly modelId: string;
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
   readonly deviceNameModel: string;
   readonly appBuildId: string;
+  readonly gitCommitSha?: string;
+  readonly gitBranch?: string;
+  readonly workingTreeState?: 'clean' | 'dirty' | 'unknown';
+  readonly buildIdentifier?: string;
+  readonly totalMemoryBytes?: number | null;
+  readonly runtimeUsedMemoryBytes?: number | null;
+  readonly thermalState?: string | null;
 }
 
 export interface ModelState {

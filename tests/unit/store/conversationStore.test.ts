@@ -28,8 +28,13 @@ import {
 } from '../../../src/inference/ContextOrchestrator';
 import { buildRuntimeIndependentRecoveryCandidates } from '../../../src/inference/RuntimeIndependentRecoveryCandidates';
 import { VisionExecutor } from '../../../src/inference/VisionExecutor';
+import {
+  emptyConversationFocusLedger,
+  type ConversationFocusLedger,
+} from '../../../src/memory/ConversationStateLedger';
 import type { ControlledPlanningImage } from '../../../src/planning/ControlledImageTurnPlanner';
 import { DEFAULT_PLANNER_ACTIVATION } from '../../../src/planning/PlannerActivation';
+import { TurnPlanner } from '../../../src/planning/TurnPlanner';
 import { storage } from '../../../src/storage/mmkv';
 import {
   createConversationStore,
@@ -286,16 +291,228 @@ function makeStore() {
 }
 
 describe('conversationStore', () => {
-  it('uses the temporary controlled activation for the real development runtime store', () => {
+  it('uses universal authoritative activation for the runtime store', () => {
     expect(RUNTIME_PLANNER_ACTIVATION).toEqual(expect.objectContaining({
-      configuredMode: 'controlled',
-      shadowDiagnosticsEnabled: true,
-      independentRecoveryEnabled: true,
-      controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
+      configuredMode: 'authoritative',
+      shadowDiagnosticsEnabled: false,
+      independentRecoveryEnabled: false,
+      controlledScenarioClasses: [],
       rollbackToLegacy: false,
       legacyPlanOwner: DEFAULT_PLANNER_ACTIVATION.legacyPlanOwner,
       newPlanOwner: DEFAULT_PLANNER_ACTIVATION.newPlanOwner,
     }));
+  });
+
+  it('exposes the derived focus ledger to the universal planning owner', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const turnPlanner = new TurnPlanner();
+    const plan = jest.spyOn(turnPlanner, 'plan');
+    const focusLedger: ConversationFocusLedger = {
+      ...emptyConversationFocusLedger('conversation-a'),
+      lastCompletedTurnId: 'user-prior',
+      activeAssistantMessageId: 'assistant-prior',
+      activeTopicLabels: ['graph traversal'],
+    };
+    const ids = ['request-current', 'user-current', 'assistant-current'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        shadowDiagnosticsEnabled: true,
+      },
+      turnPlanner,
+      getConversationFocusLedger: () => focusLedger,
+    });
+
+    await store.submit('conversation-a', { question: 'Explain the next step.', imagePath: null });
+
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({
+      focusLedger: expect.objectContaining({
+        lastCompletedTurnId: 'user-prior',
+        activeAssistantMessageId: 'assistant-prior',
+        activeTopicLabels: ['graph traversal'],
+      }),
+    }));
+    expect(plan.mock.results[0]?.value.plan.planOwner).toBe(
+      DEFAULT_PLANNER_ACTIVATION.newPlanOwner,
+    );
+  });
+
+  it.each([
+    ['text', 'Explain entropy.', null, [] as ControlledPlanningImage[], null],
+    ['image', 'What is visible?', '/capture.jpg', [] as ControlledPlanningImage[], null],
+    [
+      'image follow-up',
+      'What is visible in that image?',
+      null,
+      [planningImage('fruit')],
+      { kind: 'single' as const, imageId: 'fruit' },
+    ],
+    [
+      'comparison',
+      'Compare both images.',
+      null,
+      [planningImage('fruit'), planningImage('mattress')],
+      { kind: 'pair' as const, imageIds: ['fruit', 'mattress'] as const },
+    ],
+  ])('invokes TurnPlanner exactly once for every %s submit', async (
+    _label,
+    question,
+    imagePath,
+    images,
+    activeImageFocus,
+  ) => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    if (images.length > 0) history.save(conversationWithImages(images));
+    const turnPlanner = new TurnPlanner();
+    const plan = jest.spyOn(turnPlanner, 'plan');
+    const ids = ['conversation-a', 'request-a', 'user-a', 'assistant-a'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      turnPlanner,
+      listControlledPlanningImages: () => images,
+      getConversationFocusLedger: () => ({
+        ...emptyConversationFocusLedger('conversation-a'),
+        activeImageFocus,
+      }),
+    });
+
+    await store.submit(images.length === 0 ? 'new' : 'conversation-a', {
+      question,
+      imagePath,
+    });
+
+    expect(plan).toHaveBeenCalledTimes(1);
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({
+      focusLedger: expect.any(Object),
+    }));
+  });
+
+  it('publishes focus only after a linked attempt completes successfully', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    history.save({
+      id: 'conversation-a',
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [
+        {
+          id: 'user-prior',
+          role: 'user',
+          text: 'Explain X.',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 1,
+        },
+        {
+          id: 'assistant-prior',
+          role: 'assistant',
+          text: 'First answer.',
+          attachments: [],
+          status: 'completed',
+          errorMessage: null,
+          createdAt: 2,
+        },
+      ],
+      status: 'completed',
+      errorMessage: null,
+      metrics: null,
+      flagged: false,
+      flagNote: null,
+      contextMemory: null,
+    });
+    const baseline = {
+      ...emptyConversationFocusLedger('conversation-a'),
+      lastCompletedTurnId: 'user-prior',
+      activeAssistantMessageId: 'assistant-prior',
+    };
+    const updated = {
+      ...baseline,
+      activeAssistantMessageId: 'assistant-success',
+      sourceStateHash: 'fnv1a-updated',
+    };
+    const publish = jest.fn(() => updated);
+    const turnPlanner = new TurnPlanner();
+    const plan = jest.spyOn(turnPlanner, 'plan');
+    const ids = [
+      'assistant-cancelled', 'request-cancelled',
+      'assistant-failed', 'request-failed',
+      'assistant-success', 'request-success',
+    ];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      getConversationFocusLedger: () => baseline,
+      publishConversationFocusLedger: publish,
+      turnPlanner,
+    });
+
+    await store.regenerateResponse('conversation-a', 'assistant-prior');
+    queue.emit(makeInferenceState('cancelled'));
+    expect(publish).not.toHaveBeenCalled();
+
+    await store.retryFailedMessage('conversation-a', 'assistant-cancelled');
+    queue.emit(makeInferenceState('errored'));
+    expect(publish).not.toHaveBeenCalled();
+
+    await store.retryFailedMessage('conversation-a', 'assistant-failed');
+    queue.emit(makeInferenceState('completed', 'Successful replacement.'));
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith('conversation-a');
+    expect(append).toHaveBeenLastCalledWith(expect.objectContaining({
+      summary: expect.objectContaining({
+        conversationFocusBefore: expect.objectContaining({
+          lastCompletedTurnId: 'user-prior',
+          activeAssistantMessageId: 'assistant-prior',
+        }),
+        conversationFocusAfter: expect.objectContaining({
+          lastCompletedTurnId: 'user-prior',
+          activeAssistantMessageId: 'assistant-success',
+          publicationStatus: 'updated',
+        }),
+        conversationFocus: expect.objectContaining({
+          lastCompletedTurnId: 'user-prior',
+          activeAssistantMessageId: 'assistant-success',
+          publicationStatus: 'updated',
+        }),
+      }),
+    }));
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(plan.mock.calls.map(([input]) => input.turnId)).toEqual([
+      'user-prior',
+      'user-prior',
+      'user-prior',
+    ]);
+    expect(plan.mock.calls.map(([input]) => input.applicationState.action)).toEqual([
+      'regenerate',
+      'retry',
+      'retry',
+    ]);
+    expect(plan.mock.calls.map(([input]) => input.focusLedger)).toEqual([
+      expect.objectContaining({
+        lastCompletedTurnId: 'user-prior',
+        activeAssistantMessageId: 'assistant-prior',
+      }),
+      expect.objectContaining({
+        lastCompletedTurnId: 'user-prior',
+        activeAssistantMessageId: 'assistant-prior',
+      }),
+      expect.objectContaining({
+        lastCompletedTurnId: 'user-prior',
+        activeAssistantMessageId: 'assistant-prior',
+      }),
+    ]);
+    append.mockRestore();
   });
 
   it('wires exact rent recovery candidates into the legacy hard-skip recovery path', async () => {
@@ -325,6 +542,7 @@ describe('conversationStore', () => {
         ...DEFAULT_PLANNER_ACTIVATION,
         shadowDiagnosticsEnabled: true,
         independentRecoveryEnabled: true,
+        rollbackToLegacy: true,
       },
       listIndependentRecoveryCandidates: buildRuntimeIndependentRecoveryCandidates,
     });
@@ -388,6 +606,90 @@ describe('conversationStore', () => {
       }),
     }));
     append.mockRestore();
+  });
+
+  it('reinspects only the planner-selected image when stored evidence is insufficient', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const selectedImage: ControlledPlanningImage = {
+      ...planningImage('fruit'),
+      evidence: {
+        ...planningImage('fruit').evidence!,
+        extractedText: [],
+        numericValues: [],
+      },
+    };
+    history.save(conversationWithImage(selectedImage));
+    const orchestrate = jest.fn(() => {
+      throw new Error('legacy semantic routing must not run');
+    });
+    const ids = ['request-reinspect', 'user-reinspect', 'assistant-reinspect'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      contextOrchestrator: { orchestrate } as unknown as ContextOrchestrator,
+      listControlledPlanningImages: () => [selectedImage, planningImage('unselected')],
+    });
+
+    await store.submit('conversation-a', {
+      question: 'What text is visible in it?', imagePath: null,
+    });
+
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(queue.submitted).toHaveLength(1);
+    expect(queue.submitted[0]).toEqual(expect.objectContaining({
+      imagePath: '/images/fruit.jpg',
+      visionExecutionPlan: {
+        strategy: 'reuse-evidence',
+        imageReferenceIds: ['fruit'],
+        evidenceIds: [],
+      },
+      visionEvidenceExecution: expect.objectContaining({
+        pixelInspectionImageIds: ['fruit'],
+        requiresStructuredExtraction: true,
+      }),
+    }));
+    expect(queue.submittedContexts[0]?.mediaEvidence).toEqual([]);
+  });
+
+  it('clarifies unresolved ledger references without invoking legacy routing', async () => {
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const images = [planningImage('fruit'), planningImage('mattress')];
+    history.save(conversationWithImages(images));
+    const orchestrate = jest.fn(() => {
+      throw new Error('legacy semantic routing must not run');
+    });
+    const ids = ['request-unresolved', 'user-unresolved', 'assistant-unresolved'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      contextOrchestrator: { orchestrate } as unknown as ContextOrchestrator,
+      listControlledPlanningImages: () => images,
+      getConversationFocusLedger: () => ({
+        ...emptyConversationFocusLedger('conversation-a'),
+        unresolvedReference: {
+          targetType: 'image',
+          candidateIds: ['fruit', 'mattress'],
+          sourceMessageId: 'user-prior',
+        },
+      }),
+    });
+
+    await store.submit('conversation-a', { question: 'What is its price?', imagePath: null });
+
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(queue.submitted[0]).toEqual(expect.objectContaining({
+      imagePath: null,
+      question: expect.stringContaining('clarify which image'),
+      visionExecutionPlan: {
+        strategy: 'none',
+        imageReferenceIds: [],
+        evidenceIds: [],
+      },
+    }));
   });
 
   it('keeps an image retry under the original controlled owner', async () => {
@@ -532,6 +834,10 @@ describe('conversationStore', () => {
       },
       listControlledPlanningImages: () => images,
       visionExecutor: visionExecutorFor(images),
+      getConversationFocusLedger: () => ({
+        ...emptyConversationFocusLedger('conversation-a'),
+        activeImageFocus: { kind: 'pair', imageIds: ['fruit', 'mattress'] },
+      }),
     });
 
     await store.submit('conversation-a', {
@@ -668,6 +974,10 @@ describe('conversationStore', () => {
         currentConversationExcluded: false,
         eligibleConversationIds: ['conversation-b'],
       }),
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        rollbackToLegacy: true,
+      },
       now: () => 30,
       createId: () => ids.shift() ?? 'fallback',
     });
@@ -758,6 +1068,10 @@ describe('conversationStore', () => {
       contextOrchestrator: orchestrator,
       embeddingService: { embed },
       isEmbeddingRuntimeActive: () => true,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        rollbackToLegacy: true,
+      },
       now: () => 30,
       createId: () => ids.shift() ?? 'fallback',
     });
@@ -847,6 +1161,10 @@ describe('conversationStore', () => {
         historyStore: history,
         embeddingService: { embed },
         isEmbeddingRuntimeActive: () => true,
+        plannerActivation: {
+          ...DEFAULT_PLANNER_ACTIVATION,
+          rollbackToLegacy: true,
+        },
         now: () => 40,
         createId: () => 'replacement',
       });
@@ -1001,9 +1319,9 @@ describe('conversationStore', () => {
       importantFacts: [],
       olderSummary: null,
       budget: {
-        policyId: 'token-estimate-budget-v1',
-        maximumUnits: 2_334,
-        usedUnits: 35,
+        policyId: 'authoritative-turn-plan-v1',
+        maximumUnits: 66,
+        usedUnits: 66,
       },
     });
   });
@@ -1038,7 +1356,7 @@ describe('conversationStore', () => {
     );
 
     await store.submit(first.conversationId, {
-      question: 'Which order identifier was shown?',
+      question: 'Which order identifier was shown in that image?',
       imagePath: null,
     });
 
@@ -1111,7 +1429,94 @@ describe('conversationStore', () => {
     append.mockRestore();
   });
 
-  it('persists shadow planning separately while legacy remains the execution owner', async () => {
+  it('reports evidence storage failure without duplicating the response or publishing corrupt focus', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const before = {
+      ...emptyConversationFocusLedger('conversation-a'),
+      activeAssistantMessageId: null,
+    };
+    const after = {
+      ...before,
+      lastCompletedTurnId: 'user-message-a',
+      activeAssistantMessageId: 'assistant-message-a',
+      sourceStateHash: 'fnv1a-completed',
+    };
+    const publish = jest.fn(() => after);
+    const persistEvidence = jest.fn(() => {
+      throw new Error('Injected evidence storage failure.');
+    });
+    const ids = ['conversation-a', 'request-a', 'user-message-a', 'assistant-message-a'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      getConversationFocusLedger: () => before,
+      publishConversationFocusLedger: publish,
+      persistEvidence,
+    });
+
+    const submitted = await store.submit('new', {
+      question: 'Read this label.',
+      imagePath: '/capture/label.jpg',
+    });
+    queue.emit({
+      ...makeInferenceState('completed', 'The label reads LOC-42.'),
+      hiddenEvidence: {
+        version: 'hidden-evidence-v1',
+        imagePath: '/capture/label.jpg',
+        sourceQuestion: 'Read this label.',
+        subjectObject: 'product label',
+        visibleFeatures: [],
+        visibleText: ['LOC-42'],
+        visibleCondition: 'readable',
+        uncertainty: [],
+        createdAt: '2026-07-30T00:00:00.000Z',
+      },
+      executionDiagnostics: {
+        elapsedMs: 500,
+        activeStage: null,
+        lastCompletedStage: 'evidence-validation',
+        stages: [{ stage: 'evidence-validation', durationMs: 5, completed: true }],
+        evidenceState: 'valid-unpersisted',
+        modelId: 'ACTUAL_MODEL',
+        generationConfigId: 'actual-config',
+        pipelineVariantId: 'actual-pipeline',
+        deviceNameModel: 'Pixel',
+        appBuildId: 'build-1',
+      },
+    });
+
+    const conversation = history.get(submitted.conversationId);
+    expect(conversation?.messages.filter(
+      (message) => message.id === submitted.assistantMessageId,
+    )).toHaveLength(1);
+    expect(conversation?.messages.find(
+      (message) => message.id === submitted.assistantMessageId,
+    )).toEqual(expect.objectContaining({
+      status: 'completed',
+      text: 'The label reads LOC-42.',
+    }));
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      summary: expect.objectContaining({
+        evidenceState: 'valid-unpersisted',
+        evidenceValidationOutcome: 'valid',
+        evidencePersistenceOutcome: 'failed',
+        conversationFocusBefore: expect.objectContaining({
+          activeAssistantMessageId: null,
+        }),
+        conversationFocusAfter: expect.objectContaining({
+          activeAssistantMessageId: 'assistant-message-a',
+          publicationStatus: 'updated',
+        }),
+      }),
+    }));
+    append.mockRestore();
+  });
+
+  it('keeps one explicit whole-turn rollback boundary', async () => {
     const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
     const queue = new FakeInferenceQueue();
     const history = new FakeHistoryStore();
@@ -1123,7 +1528,7 @@ describe('conversationStore', () => {
       createId: () => ids.shift() ?? `id-${ids.length}`,
       plannerActivation: {
         ...DEFAULT_PLANNER_ACTIVATION,
-        shadowDiagnosticsEnabled: true,
+        rollbackToLegacy: true,
       },
     });
 
@@ -1135,9 +1540,9 @@ describe('conversationStore', () => {
 
     expect(append).toHaveBeenCalledWith(expect.objectContaining({
       architectureDiagnostics: expect.objectContaining({
-        authorityMode: 'shadow',
+        authorityMode: 'authoritative',
         planOwner: 'legacy-router:v1',
-        scenarioClass: 'text-answer',
+        scenarioClass: 'independent-text',
         executedPlanId: expect.stringContaining('legacy:'),
         executedPlanVersion: 'legacy-routing-v1',
         legacySemanticDecisionCount: 1,
@@ -1148,7 +1553,7 @@ describe('conversationStore', () => {
           evidenceAction: 'not-produced',
           evidenceStatus: 'not-applicable',
         }),
-        shadowPlan: expect.any(Object),
+        shadowPlan: null,
         independentRecovery: expect.any(Object),
         constrainedPlanner: expect.objectContaining({ invoked: false }),
       }),
@@ -1500,7 +1905,7 @@ describe('conversationStore', () => {
   it.each([
     ['Low', 96, 320, 1334],
     ['Medium', 128, 640, 2334],
-    ['High', 160, 1024, 2674],
+    ['High', 160, 1024, 3667],
   ] as const)('records %s mode configuration in diagnostics', async (
     mode, targetTokenCount, generationLimit, budgetMaximumUnits,
   ) => {

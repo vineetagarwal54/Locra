@@ -6,6 +6,154 @@ and date before starting. For each item, capture the visible result and the
 diagnostics export where applicable. Do not mark the corresponding task complete
 until every required result has been observed on hardware.
 
+## Final hardening replay — one fresh chat
+
+Build/install with `npm run android:diagnostic`, then start Metro with
+`npm run start:diagnostic`. Before testing, export one turn and confirm
+`appInfo.gitCommitSha`, `gitBranch`, `workingTreeState`, `buildIdentifier`,
+`appBuildId`, `inferenceRuntimeVersion = llama.rn@0.12.5`, `deviceNameModel`,
+and memory fields are populated. A dirty build
+is acceptable only when its exported `workingTreeState` is `dirty`; `unknown`
+provenance is not acceptable for a recorded replay. `thermalState` may be null
+because the linked React Native device API does not expose Android thermal
+status.
+
+Use one new conversation for all ten cases. Save the diagnostics export after
+each numbered case. In every new-authority case require
+`architectureDiagnostics.planOwner = turn-planner:v1`,
+`legacySemanticDecisionCount = 0`, one `executedPlanId` across every executed
+stage, and no per-subsystem fallback owner.
+
+1. [ ] **New fruit/vegetable image — general description**
+   - Input: attach a clear fruit/vegetable image and ask for a general description.
+   - Expected references/vision: the new durable image ID only;
+     `inspect-and-structure`; original pixels inspected.
+   - Expected evidence/grounding: validated evidence is persisted; exactly one
+     assistant response; claims are limited to the selected image.
+   - Expected ledger: `conversationFocusBefore.activeImageIds` is empty and
+     `conversationFocusAfter.activeImageIds` contains the new image ID.
+   - Inspect: plan/owner, selected image ID, per-image action/status/sufficiency,
+     `extractionSchemaMode = native-json-schema`, schema version, extraction
+     attempt limits/token count, visible token count, first-visible-token and
+     total latency, validation/persistence outcomes, memory/thermal fields.
+
+2. [ ] **OCR or price follow-up — same image**
+   - Input: ask for exact visible text or a price from the same image.
+   - Expected references/vision: active image ID from the ledger only; reuse
+     evidence if the matching OCR/price field is sufficient, otherwise
+     `inspect-and-structure` of that same original.
+   - Expected evidence/grounding: one response; no object label may be treated as
+     OCR and no other image may be substituted.
+   - Expected ledger: active image remains unchanged; explicit-reference IDs
+     update only when the prompt explicitly names/ordinals the image.
+   - Inspect: before/after focus, resolution code, selected image ID, sufficiency
+     reason, reuse versus pixel action, extraction/persistence fields and counts.
+
+3. [ ] **Fine detail — forced reinspection**
+   - Input: ask for a precise color, shape, location, damage, or other detail not
+     present in stored evidence.
+   - Expected references/vision: same active image; stored evidence marked
+     insufficient; original pixels reinspected without replanning.
+   - Expected evidence/grounding: one response; uncertainty/failure is explicit
+     if the detail remains unsupported.
+   - Expected ledger: active image identity remains unchanged.
+   - Inspect: `sufficiencyResult = insufficient`, bounded reason,
+     `action = pixel-inspection`, schema mode/version, separate token/timing
+     fields, validation and persistence outcome.
+
+4. [ ] **Two new images — comparison**
+   - Input: add two images in separate turns, then ask to compare them.
+   - Expected references/vision: exactly the ordered two-image ledger pair;
+     `compare-evidence`; sufficient sides reused and at most the exact
+     insufficient selected side reinspected.
+   - Expected evidence/grounding: one response; comparison provenance remains
+     separate by side/image/source/evidence ID. If a side is unavailable, name
+     that side and do not substitute.
+   - Expected ledger: completed comparison publishes the ordered active pair.
+   - Inspect: plan ID/owner, both selected IDs, both per-image diagnostics,
+     comparison provenance, missing IDs/failure reason, before/after focus.
+
+5. [ ] **First, previous, latest, and `fiest`**
+   - Input: issue four turns that refer to the first, previous, latest, and
+     misspelled `fiest` image.
+   - Expected references/vision: first/previous/latest resolve deterministically
+     to their exact IDs and inspect/reuse only those IDs. The explicitly
+     enumerated deterministic typo alias `fiest` resolves to the first image; it
+     is not a broad semantic-regex match.
+   - Expected evidence/grounding: one response per input and no image
+     substitution.
+   - Expected ledger: each successful exact reference becomes active; the
+     `fiest` publishes the first image as active.
+   - Inspect: resolution code/candidates, selected IDs, strategy, per-image
+     sufficiency/action, fallback, response count, focus transition.
+
+6. [ ] **“it” and “that”**
+   - Input: ask two unambiguous follow-ups using “it” and “that.”
+   - Expected references/vision: active single image or active pair comes only
+     from `conversationFocusBefore`; strategy follows evidence sufficiency.
+   - Expected evidence/grounding: one response; clarification instead of legacy
+     fallback if more than one target is materially plausible.
+   - Expected ledger: resolved focus is preserved; unresolved ambiguity does not
+     replace it.
+   - Inspect: before-focus IDs, resolved/candidate IDs, plan owner/ID, strategy,
+     sufficiency/action, and zero legacy decisions.
+
+7. [ ] **Difficult/dark image — extraction failure and repeat reference**
+   - Input: attach a difficult/dark image, trigger structured extraction failure,
+     then ask about that image again.
+   - Expected references/vision: first turn inspects that image and returns one
+     controlled uncertainty/failure; the next turn resolves the same stable image
+     ID and may reinspect its original pixels. No text-only vision fallback.
+   - Expected evidence/grounding: malformed/truncated evidence is not persisted;
+     one response per turn; no previous guess/refusal becomes evidence.
+   - Expected ledger: the image identity may remain active after the controlled
+     completed response, but evidence and identity remain separate.
+   - Inspect: extraction attempt limits/count, schema mode/version,
+     `evidenceValidationOutcome = invalid`, persistence `not-attempted`, per-image
+     validity/failure reason, same selected ID on the repeat turn.
+
+8. [ ] **Code follow-up**
+   - Input: obtain generated code, then ask “the code you gave” and “explain each
+     line.”
+   - Expected references/vision: active assistant/code artifact message ID from
+     the ledger; vision strategy `none`.
+   - Expected evidence/grounding: one response per input; explanation is grounded
+     in the selected canonical code message, not retrieval/image evidence.
+   - Expected ledger: code/document artifact and assistant focus remain active
+     across both follow-ups.
+   - Inspect: before/after active assistant/artifact, resolved message ID,
+     required context source ID, no selected image IDs, owner/plan ID.
+
+9. [ ] **Cancellation — hidden processing and visible generation**
+   - Input: cancel separate turns during preprocessing, extraction formatting,
+     extraction tokenization, extraction prefill, hidden generation, visible
+     prefill, and visible generation.
+   - Expected references/vision: original validated plan remains recorded; no
+     fallback plan or second response is created.
+   - Expected evidence/grounding: hidden-stage cancels create no completed visible
+     answer; visible-generation cancel preserves at most the single partial
+     assistant attempt; unvalidated evidence is not persisted.
+   - Expected ledger: `conversationFocusAfter` equals before for every cancelled
+     attempt.
+   - Inspect: exact `cancellationStage`, active/last-completed stages, separate
+     extraction/visible token counts, first-visible latency null before the first
+     visible token, persistence `not-attempted`, one attempt/response maximum,
+     resource release and next-turn readiness.
+
+10. [ ] **Restart — active image and code follow-ups**
+    - Input: force-stop/restart, reopen the same chat, repeat one active-image
+      follow-up and one “the code you gave” follow-up.
+    - Expected references/vision: ledger is loaded or deterministically rebuilt
+      from canonical history before planning; exact prior image/code IDs resolve.
+    - Expected evidence/grounding: image evidence is reused only if sufficient,
+      otherwise that image is reinspected; code uses canonical code context; one
+      response per turn.
+    - Expected ledger: rebuilt before-focus matches pre-restart canonical focus
+      and publishes only after each successful turn.
+    - Inspect: focus schema/hash/rebuild status, before/after IDs, selected plan
+      ID/owner, selected image/message IDs, evidence action, response count,
+      provenance/build fields, memory/thermal/total latency.
+
 ## Native stop behavior (T034)
 
 - [ ] Start a response long enough to stream for several seconds.

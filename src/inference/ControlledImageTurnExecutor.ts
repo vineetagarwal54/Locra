@@ -50,6 +50,11 @@ export interface ControlledImageTurnAudit {
   readonly evidenceStatus: VisionExecutionResult['status'];
   readonly pixelsUsed: boolean;
   readonly storedEvidenceUsed: boolean;
+  readonly imageDiagnostics: VisionExecutionResult['imageDiagnostics'];
+  readonly comparisonProvenance: readonly NonNullable<
+    VisionExecutionResult['imageDiagnostics'][number]['comparisonProvenance']
+  >[];
+  readonly failureReason: string | null;
   readonly result: 'dispatched' | 'cancelled';
 }
 
@@ -65,7 +70,7 @@ export class ControlledImageTurnExecutor {
     plan: TurnPlan,
     signal: AbortSignal,
   ): Promise<ControlledImageTurnResult> {
-    assertControlledImageAuthority(plan);
+    assertTurnPlanAuthority(plan);
     if (signal.aborted) {
       return cancelledResult(plan);
     }
@@ -107,22 +112,25 @@ export class ControlledImageTurnExecutor {
         evidenceStatus: vision.status,
         pixelsUsed: vision.imageInputs.some((input) => input.localAssetReference !== null),
         storedEvidenceUsed: vision.imageInputs.some((input) => input.evidence !== null),
+        imageDiagnostics: vision.imageDiagnostics,
+        comparisonProvenance: vision.imageDiagnostics.flatMap((diagnostic) =>
+          diagnostic.comparisonProvenance === null
+            ? []
+            : [diagnostic.comparisonProvenance],
+        ),
+        failureReason: vision.failureReason,
         result: 'dispatched',
       },
     };
   }
 }
 
-function assertControlledImageAuthority(plan: TurnPlan): void {
+function assertTurnPlanAuthority(plan: TurnPlan): void {
   if (
-    plan.authorityMode !== 'controlled'
+    (plan.authorityMode !== 'controlled' && plan.authorityMode !== 'authoritative')
     || !plan.planOwner.startsWith('turn-planner:')
-    || (
-      plan.modality === 'text'
-      && !plan.unresolvedReferences.some((reference) => reference.targetType === 'image')
-    )
   ) {
-    throw new Error('Controlled image authority requires one validated turn-planner owner.');
+    throw new Error('Turn-plan authority requires one validated turn-planner owner.');
   }
 }
 
@@ -223,6 +231,9 @@ function cancelledResult(plan: TurnPlan): ControlledImageTurnResult {
       evidenceStatus: 'cancelled',
       pixelsUsed: false,
       storedEvidenceUsed: false,
+      imageDiagnostics: [],
+      comparisonProvenance: [],
+      failureReason: null,
       result: 'cancelled',
     },
   };

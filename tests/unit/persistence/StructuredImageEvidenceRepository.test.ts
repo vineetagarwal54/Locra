@@ -79,12 +79,14 @@ describe('StructuredImageEvidenceRepository', () => {
         notes: ['one label is partly obscured'],
       }),
     }));
+    expect(saved).not.toBeNull();
+    if (saved === null) return;
     expect(saved.visibleObjects.map((object) => object.label)).not.toContain('$3.99');
     expect(saved.extractedText.map((span) => span.text)).not.toContain('apple');
     expect(repository.getLatestCompatible('image-1', 'asset-v1')).toEqual(saved);
   });
 
-  it('marks incomplete extraction partial and malformed extraction failed', () => {
+  it('does not persist incomplete or malformed extraction', () => {
     const partial = repository.saveExtraction({
       id: 'partial',
       conversationId: 'conversation-1',
@@ -105,9 +107,25 @@ describe('StructuredImageEvidenceRepository', () => {
       extraction: 'not structured',
     });
 
-    expect(partial.status).toBe('partial');
-    expect(failed.status).toBe('failed');
-    expect(failed.summary).toBe('');
+    expect(partial).toBeNull();
+    expect(failed).toBeNull();
+    expect(repository.listForImage('image-1')).toEqual([]);
+  });
+
+  it('does not persist semantically invalid hidden evidence', () => {
+    const saved = repository.saveFromHiddenEvidence({
+      conversationId: 'conversation-1',
+      imageId: 'image-1',
+      sourceMessageIds: ['message-1'],
+      sourceRevision: 'asset-v1',
+      hiddenEvidence: {
+        ...hiddenEvidence,
+        subjectObject: 'x'.repeat(161),
+      },
+    });
+
+    expect(saved).toBeNull();
+    expect(repository.listForImage('image-1')).toEqual([]);
   });
 
   it('stales prior evidence on reinference and keeps versions separate', () => {

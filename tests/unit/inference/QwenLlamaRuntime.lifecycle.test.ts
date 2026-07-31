@@ -194,6 +194,8 @@ describe('QwenLlamaRuntime lifecycle', () => {
       softTargetTokens: 128,
       generationPlanId: 'concise-prose-v2',
       taskKind: 'concise-prose',
+      structuredOutputMode: 'not-used',
+      structuredOutputSchemaVersion: null,
     });
   });
 

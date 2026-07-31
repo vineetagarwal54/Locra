@@ -22,7 +22,7 @@ export interface PlannerActivation {
 }
 
 export const DEFAULT_PLANNER_ACTIVATION: PlannerActivationConfig = {
-  configuredMode: 'shadow',
+  configuredMode: 'authoritative',
   shadowDiagnosticsEnabled: false,
   independentRecoveryEnabled: false,
   controlledScenarioClasses: [],
@@ -31,54 +31,27 @@ export const DEFAULT_PLANNER_ACTIVATION: PlannerActivationConfig = {
   newPlanOwner: 'turn-planner:v1',
 };
 
-/**
- * Temporary physical-validation activation. This is selected only by the
- * runtime store in development builds; release builds retain the default object
- * unchanged and expose no user-facing control for it.
- */
 export function plannerActivationForRuntime(
-  isDevelopment: boolean = __DEV__,
+  _isDevelopment: boolean = __DEV__,
 ): PlannerActivationConfig {
-  if (!isDevelopment) {
-    return DEFAULT_PLANNER_ACTIVATION;
-  }
-  return {
-    ...DEFAULT_PLANNER_ACTIVATION,
-    configuredMode: 'controlled',
-    shadowDiagnosticsEnabled: true,
-    independentRecoveryEnabled: true,
-    controlledScenarioClasses: [
-      'new-image',
-      'image-follow-up',
-      'image-comparison',
-    ],
-    rollbackToLegacy: false,
-  };
+  return DEFAULT_PLANNER_ACTIVATION;
 }
 
 export function resolvePlannerActivation(
   config: PlannerActivationConfig,
-  scenarioClass: string,
+  _scenarioClass: string,
 ): PlannerActivation {
-  const controlledScenarioEnabled =
-    config.configuredMode === 'controlled'
-    && config.controlledScenarioClasses.includes(scenarioClass);
-  const newPlannerOwns =
-    !config.rollbackToLegacy
-    && (config.configuredMode === 'authoritative' || controlledScenarioEnabled);
+  const controlledScenarioEnabled = false;
+  const newPlannerOwns = !config.rollbackToLegacy;
 
   return {
     authorityMode: config.configuredMode,
     planOwner: newPlannerOwns ? config.newPlanOwner : config.legacyPlanOwner,
     semanticAuthority: newPlannerOwns ? 'turn-plan' : 'legacy',
-    runShadowPlanner:
-      !newPlannerOwns
-      && config.configuredMode === 'shadow'
-      && config.shadowDiagnosticsEnabled,
+    runShadowPlanner: false,
     useLegacySemantics: !newPlannerOwns,
     wholeTurnOwned: true,
-    independentRecoveryEnabled:
-      !newPlannerOwns
+    independentRecoveryEnabled: config.rollbackToLegacy
       && config.independentRecoveryEnabled,
     controlledScenarioEnabled,
   };

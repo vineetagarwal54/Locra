@@ -3,6 +3,10 @@ import { create } from 'zustand';
 
 import { deriveConversationTitle } from '../history/ConversationSearch';
 import { fromStoredMode, toStoredMode } from '../inference/ResponseMode';
+import {
+  ConversationStateLedgerRepository,
+  type ConversationFocusSource,
+} from '../memory/ConversationStateLedger';
 import { BenchmarkRepository } from '../persistence/BenchmarkRepository';
 import { ChunkRepository } from '../persistence/ChunkRepository';
 import { ConversationRepository } from '../persistence/ConversationRepository';
@@ -16,6 +20,7 @@ import { getDatabase } from '../persistence/sqlite/Database';
 import { StructuredImageEvidenceRepository } from '../persistence/StructuredImageEvidenceRepository';
 import { SummaryRepository } from '../persistence/SummaryRepository';
 import type { SqliteDriver } from '../persistence/types';
+import { storage } from '../storage/mmkv';
 import type { IHistoryStore } from '../types/interfaces';
 import type { Conversation, ConversationMessage, ConversationRow, MessageRow, MetricsSummary } from '../types/models';
 
@@ -61,6 +66,10 @@ export const embeddingRepository = new EmbeddingRepository(driver);
 export const summaryRepository = new SummaryRepository(driver);
 export const factRepository = new FactRepository(driver);
 export const benchmarkRepository = new BenchmarkRepository(driver);
+export const conversationStateLedgerRepository = new ConversationStateLedgerRepository(
+  storage,
+  readConversationFocusSource,
+);
 
 export function reconcileAbandonedAttempts(): number {
   const reconciled = messageRepository.reconcileGeneratingAttempts();
@@ -145,6 +154,7 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
     rowsToConversationHeaders(conversationRepository.searchConversations(query)),
   delete: (id: string): void => {
     conversationRepository.deleteConversation(id);
+    conversationStateLedgerRepository.delete(id);
     messageCaches.delete(id);
     conversationCache = createConversationListCache(conversationRepository);
     set(listSnapshot());
@@ -166,6 +176,7 @@ export const useHistoryStore = create<HistoryStoreState>((set, get) => ({
     while (page.items.length > 0) {
       for (const row of page.items) {
         conversationRepository.deleteConversation(row.id);
+        conversationStateLedgerRepository.delete(row.id);
       }
       page = conversationRepository.listConversations({ limit: 50 });
     }
@@ -253,6 +264,41 @@ function materializeConversation(id: string): Conversation | null {
         : last?.status === 'interrupted' ? 'cancelled'
           : messages.length === 0 ? 'idle' : 'completed',
     errorMessage: last?.errorMessage ?? null,
+  };
+}
+
+function readConversationFocusSource(conversationId: string): ConversationFocusSource {
+  const rows: MessageRow[] = [];
+  let page = messageRepository.listMessages({ conversationId, limit: 50 });
+  rows.push(...page.items);
+  while (page.nextCursor !== null) {
+    page = messageRepository.listMessages({
+      conversationId,
+      before: page.nextCursor,
+      limit: 50,
+    });
+    rows.push(...page.items);
+  }
+  return {
+    conversationId,
+    messages: rows.map((row) => ({
+      id: row.id,
+      role: row.role,
+      replyToMessageId: row.reply_to_message_id,
+      attemptNumber: row.attempt_number,
+      activeAttempt: row.is_active_attempt === 1,
+      text: row.text,
+      status: row.status,
+      createdAt: row.created_at,
+      finalizedAt: row.finalized_at,
+    })),
+    images: imageEntityRepository.listForConversation(conversationId).map((entity) => ({
+      id: entity.id,
+      sourceMessageId: entity.sourceMessageId,
+      ordinal: entity.ordinal,
+      availability: entity.assetAvailability,
+      createdAt: entity.createdAt,
+    })),
   };
 }
 

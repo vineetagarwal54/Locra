@@ -132,7 +132,7 @@ const GOLDENS: readonly GoldenFixture[] = [
       dependency: 'ledger',
       fallback: 'execute',
       visionStrategy: 'reuse-evidence',
-      contextSourceIds: ['market-image', 'product-apples'],
+      contextSourceIds: ['market-image', 'product-apples', 'market-message'],
     },
   },
   {
@@ -164,7 +164,7 @@ const GOLDENS: readonly GoldenFixture[] = [
       dependency: 'ledger',
       fallback: 'execute',
       visionStrategy: 'inspect-original',
-      contextSourceIds: ['market-image'],
+      contextSourceIds: ['market-image', 'market-message'],
     },
   },
   {
@@ -201,7 +201,7 @@ const GOLDENS: readonly GoldenFixture[] = [
       dependency: 'recent',
       fallback: 'execute',
       visionStrategy: 'compare-evidence',
-      contextSourceIds: ['image-a', 'image-b'],
+      contextSourceIds: ['image-a', 'image-b', 'message-a', 'message-b'],
     },
   },
   {

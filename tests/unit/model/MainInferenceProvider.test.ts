@@ -43,6 +43,7 @@ function imagePlan(): TurnPlan {
     turnId: 'turn-1',
     authorityMode: 'authoritative',
     planOwner: 'turn-planner:v1',
+    scenarioClass: 'new-image',
     intent: 'extract',
     modality: 'multimodal',
     conversationDependency: 'none',

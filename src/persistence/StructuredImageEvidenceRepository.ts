@@ -1,4 +1,7 @@
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
+import {
+  normalizeHiddenVisualEvidence,
+} from '../inference/StructuredVisualExtraction';
 
 import type { SqliteDriver } from './types';
 
@@ -109,45 +112,53 @@ export class StructuredImageEvidenceRepository {
     this.createId = deps.createId ?? defaultCreateId;
   }
 
-  saveFromHiddenEvidence(input: SaveHiddenEvidenceInput): StructuredImageEvidence {
-    const objectLabels = uniqueStrings(
-      input.hiddenEvidence.visibleObjects ?? [input.hiddenEvidence.subjectObject],
-    ).slice(0, 12);
+  saveFromHiddenEvidence(input: SaveHiddenEvidenceInput): StructuredImageEvidence | null {
+    const findings = normalizeHiddenVisualEvidence(input.hiddenEvidence);
+    if (findings === null) return null;
+    const objectLabels = uniqueStrings(findings.visibleObjects);
     const visibleObjects = objectLabels.map((label, index) => ({
       id: `object-${index + 1}`,
       label,
       attributes:
-        index === 0 ? uniqueStrings(input.hiddenEvidence.visibleFeatures).slice(0, 12) : [],
-      confidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
+        index === 0 ? uniqueStrings(findings.visibleFeatures) : [],
+      confidence: confidenceFromUncertainty(findings.uncertainty),
     }));
     const unambiguousObjectId = visibleObjects.length === 1 ? visibleObjects[0].id : undefined;
+    const normalizedObjectLabels = new Set(
+      objectLabels.map((label) => label.toLocaleLowerCase()),
+    );
+    const readableText = uniqueStrings(findings.visibleText).filter(
+      (text) => !normalizedObjectLabels.has(text.toLocaleLowerCase()),
+    );
     const normalized: NormalizedExtraction = {
       summary: [
-        input.hiddenEvidence.subjectObject,
-        input.hiddenEvidence.visibleCondition,
+        findings.subjectObject,
+        findings.visibleCondition,
       ].filter((value) => value.trim() !== '').join(' — '),
       visibleObjects,
-      extractedText: uniqueStrings(input.hiddenEvidence.visibleText).slice(0, 16).map((text) => ({
+      extractedText: readableText.map((text) => ({
         text,
-        confidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
+        confidence: confidenceFromUncertainty(findings.uncertainty),
         ...(unambiguousObjectId === undefined ? {} : { objectId: unambiguousObjectId }),
       })),
-      numericValues: uniqueStrings(input.hiddenEvidence.visibleText).slice(0, 16).flatMap(
+      numericValues: readableText.flatMap(
         (text) => numericEvidenceFromText(text, unambiguousObjectId),
       ),
       uncertainty: {
-        overallConfidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
-        notes: [...input.hiddenEvidence.uncertainty],
+        overallConfidence: confidenceFromUncertainty(findings.uncertainty),
+        notes: [...findings.uncertainty],
       },
       status: 'complete',
     };
     return this.saveNormalized({ ...input, extraction: normalized });
   }
 
-  saveExtraction(input: SaveStructuredExtractionInput): StructuredImageEvidence {
+  saveExtraction(input: SaveStructuredExtractionInput): StructuredImageEvidence | null {
+    const extraction = normalizeExtraction(input.extraction);
+    if (extraction === null) return null;
     return this.saveNormalized({
       ...input,
-      extraction: normalizeExtraction(input.extraction),
+      extraction,
     });
   }
 
@@ -242,10 +253,8 @@ export class StructuredImageEvidenceRepository {
   }
 }
 
-function normalizeExtraction(value: unknown): NormalizedExtraction {
-  if (!isRecord(value)) {
-    return failedExtraction();
-  }
+function normalizeExtraction(value: unknown): NormalizedExtraction | null {
+  if (!isRecord(value)) return null;
   const summary = readString(value.summary);
   const visibleObjects = readVisibleObjects(value.visibleObjects);
   const extractedText = readExtractedText(value.extractedText);
@@ -257,38 +266,19 @@ function normalizeExtraction(value: unknown): NormalizedExtraction {
     && extractedText !== null
     && numericValues !== null
     && uncertainty !== null;
-  const anyUsable =
-    summary !== null
-    || (visibleObjects?.length ?? 0) > 0
-    || (extractedText?.length ?? 0) > 0
-    || (numericValues?.length ?? 0) > 0;
-
-  if (!anyUsable) {
-    return failedExtraction();
-  }
+  if (!allFieldsPresent) return null;
   return {
-    summary: summary ?? '',
-    visibleObjects: visibleObjects ?? [],
-    extractedText: extractedText ?? [],
-    numericValues: numericValues ?? [],
-    uncertainty: uncertainty ?? { overallConfidence: 0.5, notes: ['Incomplete extraction.'] },
-    status: allFieldsPresent ? 'complete' : 'partial',
-  };
-}
-
-function failedExtraction(): NormalizedExtraction {
-  return {
-    summary: '',
-    visibleObjects: [],
-    extractedText: [],
-    numericValues: [],
-    uncertainty: { overallConfidence: 0, notes: ['Structured extraction failed.'] },
-    status: 'failed',
+    summary,
+    visibleObjects,
+    extractedText,
+    numericValues,
+    uncertainty,
+    status: 'complete',
   };
 }
 
 function numericEvidenceFromText(text: string, objectId?: string): NumericEvidence[] {
-  const price = text.match(/[$€£]\s?\d+(?:[.,]\d{1,2})?/);
+  const price = text.match(/[$€£]\s?\d+(?:[.,]\d{1,2})?/u);
   if (price !== null) {
     return [{
       kind: 'price',
@@ -358,23 +348,25 @@ function toEvidence(row: StructuredImageEvidenceRow): StructuredImageEvidence {
 }
 
 function readVisibleObjects(value: unknown): VisibleObject[] | null {
-  return isVisibleObjectArray(value) ? value : null;
+  return isVisibleObjectArray(value) && value.length <= 12 ? dedupeBy(value, objectKey) : null;
 }
 
 function readExtractedText(value: unknown): ExtractedTextSpan[] | null {
-  return isExtractedTextArray(value) ? value : null;
+  return isExtractedTextArray(value) && value.length <= 16 ? dedupeBy(value, textKey) : null;
 }
 
 function readNumericValues(value: unknown): NumericEvidence[] | null {
-  return isNumericEvidenceArray(value) ? value : null;
+  return isNumericEvidenceArray(value) && value.length <= 16
+    ? dedupeBy(value, numericKey)
+    : null;
 }
 
 function readUncertainty(value: unknown): EvidenceUncertainty | null {
-  return isEvidenceUncertainty(value) ? value : null;
+  return isEvidenceUncertainty(value) && value.notes.length <= 8 ? value : null;
 }
 
 function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+  return boundedNonEmptyString(value, 320) ? value.trim() : null;
 }
 
 function parseJson<T>(
@@ -398,17 +390,17 @@ function isVisibleObjectArray(value: unknown): value is VisibleObject[] {
   return Array.isArray(value) && value.every((item) =>
     isRecord(item)
     && typeof item.id === 'string'
-    && typeof item.label === 'string'
-    && isStringArray(item.attributes)
-    && typeof item.confidence === 'number',
+    && boundedNonEmptyString(item.label, 80)
+    && isBoundedStringArray(item.attributes, 12, 160)
+    && isConfidence(item.confidence),
   );
 }
 
 function isExtractedTextArray(value: unknown): value is ExtractedTextSpan[] {
   return Array.isArray(value) && value.every((item) =>
     isRecord(item)
-    && typeof item.text === 'string'
-    && typeof item.confidence === 'number'
+    && boundedNonEmptyString(item.text, 160)
+    && isConfidence(item.confidence)
     && (item.objectId === undefined || typeof item.objectId === 'string'),
   );
 }
@@ -417,9 +409,9 @@ function isNumericEvidenceArray(value: unknown): value is NumericEvidence[] {
   return Array.isArray(value) && value.every((item) =>
     isRecord(item)
     && isNumericKind(item.kind)
-    && typeof item.value === 'string'
-    && typeof item.rawText === 'string'
-    && typeof item.confidence === 'number'
+    && boundedNonEmptyString(item.value, 160)
+    && boundedNonEmptyString(item.rawText, 160)
+    && isConfidence(item.confidence)
     && (item.unit === undefined || typeof item.unit === 'string')
     && (item.objectId === undefined || typeof item.objectId === 'string'),
   );
@@ -427,8 +419,8 @@ function isNumericEvidenceArray(value: unknown): value is NumericEvidence[] {
 
 function isEvidenceUncertainty(value: unknown): value is EvidenceUncertainty {
   return isRecord(value)
-    && typeof value.overallConfidence === 'number'
-    && isStringArray(value.notes);
+    && isConfidence(value.overallConfidence)
+    && isBoundedStringArray(value.notes, 8, 160);
 }
 
 function isNumericKind(value: unknown): value is NumericEvidenceKind {
@@ -447,7 +439,53 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+  const valuesByKey = new Map<string, string>();
+  for (const value of values) {
+    const key = value.toLocaleLowerCase();
+    if (!valuesByKey.has(key)) valuesByKey.set(key, value);
+  }
+  return [...valuesByKey.values()];
+}
+
+function boundedNonEmptyString(value: unknown, maximumLength: number): value is string {
+  return typeof value === 'string'
+    && value.trim() !== ''
+    && value.trim().length <= maximumLength;
+}
+
+function isBoundedStringArray(
+  value: unknown,
+  maximumItems: number,
+  maximumLength: number,
+): value is string[] {
+  return Array.isArray(value)
+    && value.length <= maximumItems
+    && value.every((item) => boundedNonEmptyString(item, maximumLength));
+}
+
+function isConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function dedupeBy<T>(values: readonly T[], keyFor: (value: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const value of values) {
+    const key = keyFor(value);
+    if (!byKey.has(key)) byKey.set(key, value);
+  }
+  return [...byKey.values()];
+}
+
+function objectKey(value: VisibleObject): string {
+  return `${value.label.toLocaleLowerCase()}:${value.attributes.join('|').toLocaleLowerCase()}`;
+}
+
+function textKey(value: ExtractedTextSpan): string {
+  return value.text.toLocaleLowerCase();
+}
+
+function numericKey(value: NumericEvidence): string {
+  return `${value.kind}:${value.value.toLocaleLowerCase()}`;
 }
 
 function defaultCreateId(): string {

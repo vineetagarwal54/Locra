@@ -63,7 +63,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     const { runtime } = makeRuntime(completion);
     await runtime.loadModel(load);
 
-    await runtime.generate({
+    const result = await runtime.generate({
       messages: MESSAGES,
       responseMode,
       signal: new AbortController().signal,
@@ -75,6 +75,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
       expect.objectContaining({ n_predict: expected }),
       expect.any(Function),
     );
+    expect(result.generationDiagnostics.structuredOutputMode).toBe('not-used');
   });
 
   it('passes Qwen official visible-VL sampling and records the actual profile', async () => {
@@ -108,7 +109,7 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     const { runtime } = makeRuntime(completion);
     await runtime.loadModel(load);
 
-    await runtime.generate({
+    const result = await runtime.generate({
       messages: MESSAGES,
       kind: 'extraction',
       responseMode: 'High',
@@ -117,9 +118,24 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     });
 
     expect(completion).toHaveBeenCalledWith(
-      expect.objectContaining({ temperature: 0, top_p: 1, top_k: 1 }),
+      expect.objectContaining({
+        temperature: 0,
+        top_p: 1,
+        top_k: 1,
+        response_format: expect.objectContaining({
+          type: 'json_schema',
+          json_schema: expect.objectContaining({
+            name: 'locra_visual_evidence',
+            strict: true,
+          }),
+        }),
+      }),
       expect.any(Function),
     );
+    expect(result.generationDiagnostics).toEqual(expect.objectContaining({
+      structuredOutputMode: 'native-json-schema',
+      structuredOutputSchemaVersion: 'structured-visual-extraction-v2',
+    }));
   });
 
   it('reports a natural finish when the model stops on its own', async () => {

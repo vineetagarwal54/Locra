@@ -3,6 +3,9 @@ import type { StructuredImageEvidence } from '../persistence/StructuredImageEvid
 import type { TurnPlan } from '../planning/types';
 import type {
   CanonicalConversationContext,
+  CanonicalConversationSnapshot,
+  CanonicalContextTurn,
+  ConversationMessage,
   ContextMediaEvidence,
 } from '../types/models';
 
@@ -52,6 +55,79 @@ export function assembleControlledImageContext(
       usedUnits,
     },
   };
+}
+
+export function assemblePlannedTurnContext(
+  plan: TurnPlan,
+  snapshot: CanonicalConversationSnapshot,
+  sources: readonly ControlledImageContextSource[],
+): CanonicalConversationContext {
+  const imageContext = assembleControlledImageContext(plan, sources);
+  const recentTurns = plannedRecentTurns(plan, snapshot);
+  const recentUnits = recentTurns.reduce(
+    (total, turn) => total + turn.question.length + (turn.answer?.length ?? 0),
+    0,
+  );
+  return {
+    ...imageContext,
+    recentTurns,
+    budget: {
+      policyId: 'authoritative-turn-plan-v1',
+      maximumUnits: imageContext.budget.usedUnits + recentUnits,
+      usedUnits: imageContext.budget.usedUnits + recentUnits,
+    },
+  };
+}
+
+function plannedRecentTurns(
+  plan: TurnPlan,
+  snapshot: CanonicalConversationSnapshot,
+): CanonicalContextTurn[] {
+  const requiredMessageIds = new Set(
+    plan.requiredContextSources
+      .filter((source) =>
+        source.sourceType === 'recent-turn'
+        || source.sourceType === 'code'
+        || source.sourceType === 'document',
+      )
+      .flatMap((source) => [source.sourceId, ...source.sourceMessageIds]),
+  );
+  const messages = snapshot.priorMessages;
+  const selected = new Map<string, CanonicalContextTurn>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message === undefined || !requiredMessageIds.has(message.id)) continue;
+    const pair = pairFor(messages, index);
+    if (pair !== null) selected.set(pair.key, pair.turn);
+  }
+  return [...selected.values()];
+}
+
+function pairFor(
+  messages: readonly ConversationMessage[],
+  index: number,
+): { readonly key: string; readonly turn: CanonicalContextTurn } | null {
+  const message = messages[index];
+  if (message === undefined) return null;
+  if (message.role === 'user') {
+    const assistant = messages.slice(index + 1).find(
+      (candidate) => candidate.role === 'assistant' && candidate.status === 'completed',
+    );
+    return {
+      key: message.id,
+      turn: { question: message.text, answer: assistant?.text ?? null },
+    };
+  }
+  for (let userIndex = index - 1; userIndex >= 0; userIndex -= 1) {
+    const user = messages[userIndex];
+    if (user?.role === 'user') {
+      return {
+        key: user.id,
+        turn: { question: user.text, answer: message.text },
+      };
+    }
+  }
+  return null;
 }
 
 function toContextEvidence(

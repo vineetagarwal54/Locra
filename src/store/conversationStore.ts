@@ -1,6 +1,7 @@
 import {
   diagnosticsTraceStore,
   type DiagnosticRequestKind,
+  type ProductionConversationFocusSummary,
   type ProductionDiagnosticTurnSummary,
 } from '../diagnostics/DiagnosticsTraceStore';
 import {
@@ -26,7 +27,7 @@ import {
   type ImageSelectionResult,
 } from '../inference/ContextOrchestrator';
 import {
-  assembleControlledImageContext,
+  assemblePlannedTurnContext,
 } from '../inference/ControlledImageContextAssembler';
 import {
   ControlledImageTurnExecutor,
@@ -63,22 +64,34 @@ import {
 import {
   buildRuntimeIndependentRecoveryCandidates,
 } from '../inference/RuntimeIndependentRecoveryCandidates';
-import { VisionExecutor } from '../inference/VisionExecutor';
+import {
+  normalizeHiddenVisualEvidence,
+} from '../inference/StructuredVisualExtraction';
+import {
+  VisionExecutor,
+  type VisionExecutionResult,
+} from '../inference/VisionExecutor';
 import { durableImageStorage } from '../media/DurableImageStorage';
 import {
-  planControlledImageTurn,
-  type ControlledImageTurnPlanningResult,
-  type ControlledPlanningImage,
-} from '../planning/ControlledImageTurnPlanner';
+  emptyConversationFocusLedger,
+  deriveConversationFocusLedger,
+  toConversationFocusPlannerInput,
+  type ConversationFocusLedger,
+} from '../memory/ConversationStateLedger';
+import type { ControlledPlanningImage } from '../planning/ControlledImageTurnPlanner';
 import {
   DEFAULT_PLANNER_ACTIVATION,
   plannerActivationForRuntime,
   resolvePlannerActivation,
   type PlannerActivationConfig,
 } from '../planning/PlannerActivation';
-import { runShadowPlanningLifecycle } from '../planning/ShadowPlanningLifecycle';
 import { TurnPlanner } from '../planning/TurnPlanner';
 import type { TurnPlan } from '../planning/types';
+import {
+  planUniversalTurn,
+  type UniversalTurnAction,
+  type UniversalTurnPlanningResult,
+} from '../planning/UniversalTurnPlanner';
 import { ChunkingService } from '../retrieval/ChunkingService';
 import type { EmbeddingService } from '../retrieval/EmbeddingService';
 import { HybridRetriever } from '../retrieval/HybridRetriever';
@@ -93,6 +106,7 @@ import type {
   Draft,
   GenerationFinishReason,
   InferenceRequest,
+  InferenceEvidenceState,
   InferenceExecutionDiagnostics,
   InferenceState,
   MessageStatus,
@@ -103,6 +117,7 @@ import {
   benchmarkRepository,
   chunkRepository,
   conversationRepository,
+  conversationStateLedgerRepository,
   embeddingRepository,
   evidenceRepository,
   factRepository,
@@ -159,6 +174,8 @@ export interface ConversationStoreDependencies {
     conversationId: string,
   ) => readonly ControlledPlanningImage[];
   visionExecutor?: VisionExecutor;
+  getConversationFocusLedger?: (conversationId: string) => ConversationFocusLedger;
+  publishConversationFocusLedger?: (conversationId: string) => ConversationFocusLedger;
 }
 
 interface ActiveGeneration {
@@ -187,6 +204,9 @@ interface ActiveGeneration {
    * so the visible/persisted answer is seamless while the model never re-emits it.
    */
   seedText: string;
+  focusLedgerBefore: ConversationFocusLedger;
+  focusLedger: ConversationFocusLedger;
+  focusLedgerPublicationStatus: 'current' | 'updated' | 'rebuild-required';
 }
 
 const STREAM_CHECKPOINT_INTERVAL_MS = 1000;
@@ -206,8 +226,6 @@ export class ConversationStore implements IConversationStore {
     Set<(state: ConversationRuntimeState | null) => void>
   >();
   private activeGeneration: ActiveGeneration | null = null;
-  private readonly activeComparisonImageIds = new Map<string, readonly string[]>();
-
   constructor(private readonly dependencies: Required<ConversationStoreDependencies>) {
     this.dependencies.inferenceQueue.subscribe((state) => this.handleInferenceState(state));
   }
@@ -248,6 +266,8 @@ export class ConversationStore implements IConversationStore {
     const previousConversation = this.dependencies.historyStore.get(resolvedConversationId);
     const baseConversation =
       previousConversation ?? this.createEmptyConversation(resolvedConversationId);
+    const focusLedger =
+      this.dependencies.getConversationFocusLedger(resolvedConversationId);
     const timestamp = this.dependencies.now();
     const effectiveResponseMode = conversationId === 'new'
       ? this.getResponseMode('new')
@@ -295,6 +315,9 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointText: '',
       lastCheckpointAt: 0,
       seedText: '',
+      focusLedgerBefore: focusLedger,
+      focusLedger,
+      focusLedgerPublicationStatus: 'current',
     };
     let planningConversation = updatedConversation;
     if (durableRequest.imagePath !== null) {
@@ -304,23 +327,43 @@ export class ConversationStore implements IConversationStore {
       planningConversation =
         this.dependencies.historyStore.get(resolvedConversationId) ?? updatedConversation;
     }
-    let planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
-    const controlledPreflight =
-      this.dependencies.plannerActivation.configuredMode === 'controlled'
-      && !this.dependencies.plannerActivation.rollbackToLegacy
-      && (durableRequest.imagePath !== null || planningImages.length > 0);
-    if (controlledPreflight) {
-      // Persist the current message before controlled planning so references use
-      // canonical source-message IDs rather than transient local state.
-      this.dependencies.historyStore.save(planningConversation);
-      planningConversation =
-        this.dependencies.historyStore.get(resolvedConversationId) ?? planningConversation;
-      planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
-    }
+    // Canonical persistence precedes universal planning so attached image
+    // identities and message relationships use durable IDs.
+    this.dependencies.historyStore.save(planningConversation);
+    planningConversation =
+      this.dependencies.historyStore.get(resolvedConversationId) ?? planningConversation;
+    const planningImages =
+      this.dependencies.listControlledPlanningImages(resolvedConversationId);
     const snapshot = createCanonicalConversationSnapshot(
       planningConversation,
       originatingUserMessageId,
     );
+    const universalPlanning = planUniversalTurn({
+      snapshot,
+      activation: this.dependencies.plannerActivation,
+      images: planningImages,
+      focusLedger: toConversationFocusPlannerInput(focusLedger),
+      action: 'submit',
+      planner: this.dependencies.turnPlanner,
+    });
+    const activation = resolvePlannerActivation(
+      this.dependencies.plannerActivation,
+      universalPlanning.planning.plan.scenarioClass,
+    );
+    if (!activation.useLegacySemantics) {
+      return this.startPlannedTurn({
+        activeGeneration,
+        conversation: planningConversation,
+        request: durableRequest,
+        requestId,
+        snapshot,
+        planning: universalPlanning,
+        draftConversationId: conversationId,
+      });
+    }
+
+    // Explicit whole-turn rollback boundary. All obsolete legacy semantic
+    // routing is contained below this branch and is unreachable otherwise.
     const recoveryCandidates = this.dependencies.listIndependentRecoveryCandidates(
       snapshot,
       {
@@ -330,35 +373,9 @@ export class ConversationStore implements IConversationStore {
           sourceMessageId: image.entity.sourceMessageId,
           aliases: image.aliases,
         })),
-        activeComparisonImageIds:
-          this.activeComparisonImageIds.get(resolvedConversationId) ?? [],
+        activeComparisonImageIds: focusImageIds(focusLedger),
       },
     );
-    const controlledPlanning = controlledPreflight
-      ? planControlledImageTurn({
-          snapshot,
-          activation: this.dependencies.plannerActivation,
-          images: planningImages,
-          activeComparisonImageIds:
-            this.activeComparisonImageIds.get(resolvedConversationId) ?? [],
-          planner: this.dependencies.turnPlanner,
-        })
-      : null;
-    if (
-      controlledPlanning !== null
-      && controlledPlanning.planning.plan.planOwner
-        === this.dependencies.plannerActivation.newPlanOwner
-    ) {
-      return this.startControlledImageTurn({
-        activeGeneration,
-        conversation: planningConversation,
-        request: durableRequest,
-        requestId,
-        planning: controlledPlanning,
-        recoveryCandidates,
-        draftConversationId: conversationId,
-      });
-    }
     const crossChat = this.dependencies.getCrossChatOptions(resolvedConversationId);
     const queryVector = await this.resolveEligibleQueryVector(
       snapshot,
@@ -378,12 +395,18 @@ export class ConversationStore implements IConversationStore {
         },
       },
     );
-    activeGeneration.architectureDiagnostics = runShadowPlanningLifecycle({
-      snapshot,
-      orchestration,
-      activation: this.dependencies.plannerActivation,
-      action: 'answer',
-    }, this.dependencies.turnPlanner) ?? undefined;
+    activeGeneration.architectureDiagnostics = createTurnArchitectureDiagnostics({
+      activation,
+      planning: universalPlanning.planning,
+      recovery: {
+        enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+        classifiedIndependent: false,
+        considered: recoveryCandidates.length,
+        recovered: recoveryCandidates,
+      },
+      scenarioClass: universalPlanning.planning.plan.scenarioClass,
+      legacySemanticDecisionCount: 1,
+    });
     const inferenceRequest = this.applyImageSelection(
       activeGeneration,
       this.createInferenceRequest(activeGeneration, durableRequest, requestId),
@@ -437,42 +460,43 @@ export class ConversationStore implements IConversationStore {
     };
   }
 
-  private async startControlledImageTurn(input: {
+  private async startPlannedTurn(input: {
     readonly activeGeneration: ActiveGeneration;
     readonly conversation: Conversation;
     readonly request: { readonly question: string; readonly imagePath: string | null };
     readonly requestId: string;
-    readonly planning: ControlledImageTurnPlanningResult;
-    readonly recoveryCandidates: readonly IndependentRecoveryCandidate[];
+    readonly snapshot: ReturnType<typeof createCanonicalConversationSnapshot>;
+    readonly planning: UniversalTurnPlanningResult;
     readonly draftConversationId: string | 'new';
   }): Promise<SubmitResult> {
     const plan = input.planning.planning.plan;
     const activation = resolvePlannerActivation(
       this.dependencies.plannerActivation,
-      input.planning.scenarioClass,
+      plan.scenarioClass,
     );
     const recovery = recoverIndependentRoutingSources({
-      enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+      enabled: false,
       classifiedIndependent: false,
-      candidates: input.recoveryCandidates,
+      candidates: [],
     });
     input.activeGeneration.architectureDiagnostics = createTurnArchitectureDiagnostics({
       activation,
       planning: input.planning.planning,
       recovery: {
         ...recovery,
-        considered: input.recoveryCandidates.length,
-        recovered: input.recoveryCandidates,
+        considered: 0,
+        recovered: [],
       },
-      scenarioClass: input.planning.scenarioClass,
+      scenarioClass: plan.scenarioClass,
       legacySemanticDecisionCount: 0,
     });
 
     const selectedImages = plan.vision.imageReferenceIds.map((imageId) =>
       input.planning.orderedImages.find((image) => image.entity.id === imageId),
     ).filter((image): image is ControlledPlanningImage => image !== undefined);
-    const context = assembleControlledImageContext(
+    const context = assemblePlannedTurnContext(
       plan,
+      input.snapshot,
       selectedImages.map((image) => ({
         image: image.entity,
         evidence: image.evidence ?? null,
@@ -480,9 +504,16 @@ export class ConversationStore implements IConversationStore {
     );
     const generationPlan = createGenerationPlanFromTurnPlan(
       input.activeGeneration.responseMode,
-      plan.generationTaskKind,
+      plan,
     );
     const controller = new AbortController();
+    const selectedById = new Map(
+      selectedImages.map((image) => [image.entity.id, image]),
+    );
+    const plannedVisionExecutor = new VisionExecutor({
+      getImage: (imageId) => selectedById.get(imageId)?.entity ?? null,
+      getEvidence: (imageId) => selectedById.get(imageId)?.evidence ?? null,
+    });
     let executedVision: ReturnType<VisionExecutor['execute']> | null = null;
     const executor = new ControlledImageTurnExecutor({
       resolveReferences: (authoritativePlan) => authoritativePlan.references,
@@ -490,7 +521,9 @@ export class ConversationStore implements IConversationStore {
       selectContextSources: (authoritativePlan) => authoritativePlan.requiredContextSources,
       assembleContext: () => context,
       executeVision: (visionPlan, _images, signal) => {
-        executedVision = this.dependencies.visionExecutor.execute(visionPlan, signal);
+        executedVision = plannedVisionExecutor.execute(visionPlan, signal, {
+          question: input.request.question,
+        });
         return executedVision;
       },
       projectGeneration: () => generationPlan,
@@ -502,6 +535,18 @@ export class ConversationStore implements IConversationStore {
           (image) => image.localAssetReference !== null,
         );
         const imagePath = pixelInput?.localAssetReference ?? null;
+        const groundedContext = assemblePlannedTurnContext(
+          authoritativePlan,
+          input.snapshot,
+          selectedImages.map((image) => ({
+            image: image.entity,
+            evidence: executedVision?.imageDiagnostics.find(
+              (diagnostic) => diagnostic.imageId === image.entity.id,
+            )?.action === 'reused-evidence'
+              ? image.evidence ?? null
+              : null,
+          })),
+        );
         if (
           pixelInput !== undefined
           && pixelInput.sourceMessageId !== input.activeGeneration.originatingUserMessageId
@@ -511,12 +556,21 @@ export class ConversationStore implements IConversationStore {
         const inferenceRequest = this.createInferenceRequest(
           input.activeGeneration,
           {
-            question: controlledQuestion(authoritativePlan, input.request.question),
+            question: controlledQuestion(
+              authoritativePlan,
+              input.request.question,
+              executedVision,
+            ),
             imagePath,
           },
           input.requestId,
         );
         inferenceRequest.visionExecutionPlan = authoritativePlan.vision;
+        inferenceRequest.visionEvidenceExecution = {
+          pixelInspectionImageIds: [...executedVision.pixelInspectionImageIds],
+          requiresStructuredExtraction: executedVision.requiresStructuredExtraction,
+          failureReason: executedVision.failureReason,
+        };
         inferenceRequest.softTargetTokens = generationPlan.softTargetTokens;
         inferenceRequest.hardSafetyLimitTokens = generationPlan.hardSafetyLimitTokens;
         inferenceRequest.gracefulCompletionReserveTokens =
@@ -526,7 +580,7 @@ export class ConversationStore implements IConversationStore {
         inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
         input.activeGeneration.generationPlan = generationPlan;
         input.activeGeneration.softTargetTokens = generationPlan.softTargetTokens;
-        input.activeGeneration.selectedContext = context;
+        input.activeGeneration.selectedContext = groundedContext;
         input.activeGeneration.requestKind = imagePath === null ? 'text' : 'image';
         input.activeGeneration.imageSupplied = imagePath !== null;
 
@@ -536,10 +590,10 @@ export class ConversationStore implements IConversationStore {
           conversationId: input.activeGeneration.conversationId,
           originatingUserMessageId: input.activeGeneration.originatingUserMessageId,
           assistantMessageId: input.activeGeneration.assistantMessageId,
-          streamingText: '',
+          streamingText: input.activeGeneration.seedText,
           isOwnerOfActiveInference: true,
         });
-        this.startQueueSubmission(input.activeGeneration, inferenceRequest, context);
+        this.startQueueSubmission(input.activeGeneration, inferenceRequest, groundedContext);
         return { answer: '' };
       },
     });
@@ -548,12 +602,6 @@ export class ConversationStore implements IConversationStore {
       input.activeGeneration.architectureDiagnostics,
       execution.audit,
     );
-    if (input.planning.scenarioClass === 'image-comparison') {
-      this.activeComparisonImageIds.set(
-        input.activeGeneration.conversationId,
-        [...plan.vision.imageReferenceIds],
-      );
-    }
     this.clearDraft(input.draftConversationId);
     return {
       conversationId: input.activeGeneration.conversationId,
@@ -597,6 +645,7 @@ export class ConversationStore implements IConversationStore {
       imagePath: firstImagePath(userMessage),
       seedText: '',
       generationTaskKind: undefined,
+      action: 'retry',
     });
   }
 
@@ -632,6 +681,7 @@ export class ConversationStore implements IConversationStore {
       imagePath: firstImagePath(userMessage),
       seedText: '',
       generationTaskKind: undefined,
+      action: 'regenerate',
     });
   }
 
@@ -673,6 +723,7 @@ export class ConversationStore implements IConversationStore {
       imagePath: null,
       seedText: assistantMessage.text,
       generationTaskKind: 'continuation',
+      action: 'continue',
     });
   }
 
@@ -690,8 +741,10 @@ export class ConversationStore implements IConversationStore {
     imagePath: string | null;
     seedText: string;
     generationTaskKind?: import('../inference/GenerationTuning').GenerationTaskKind;
+    action: Exclude<UniversalTurnAction, 'submit'>;
   }): Promise<void> {
     const now = this.dependencies.now();
+    const focusLedger = this.dependencies.getConversationFocusLedger(input.conversationId);
     const replacementAssistantMessageId = this.dependencies.createId('assistant-message');
     const requestId = this.dependencies.createId('request');
     const activeGeneration: ActiveGeneration = {
@@ -705,6 +758,9 @@ export class ConversationStore implements IConversationStore {
       lastCheckpointText: '',
       lastCheckpointAt: 0,
       seedText: input.seedText,
+      focusLedgerBefore: focusLedger,
+      focusLedger,
+      focusLedgerPublicationStatus: 'current',
     };
     const messages: ConversationMessage[] = [
       ...input.conversation.messages,
@@ -731,11 +787,32 @@ export class ConversationStore implements IConversationStore {
     );
     const planningImages =
       this.dependencies.listControlledPlanningImages(input.conversationId);
-    const controlledPreflight =
-      input.generationTaskKind !== 'continuation'
-      && this.dependencies.plannerActivation.configuredMode === 'controlled'
-      && !this.dependencies.plannerActivation.rollbackToLegacy
-      && (input.imagePath !== null || planningImages.length > 0);
+    const universalPlanning = planUniversalTurn({
+      snapshot,
+      activation: this.dependencies.plannerActivation,
+      images: planningImages,
+      focusLedger: toConversationFocusPlannerInput(focusLedger),
+      action: input.action,
+      planner: this.dependencies.turnPlanner,
+    });
+    const activation = resolvePlannerActivation(
+      this.dependencies.plannerActivation,
+      universalPlanning.planning.plan.scenarioClass,
+    );
+    if (!activation.useLegacySemantics) {
+      await this.startPlannedTurn({
+        activeGeneration,
+        conversation: updatedConversationWithoutMemory,
+        request: { question: input.question, imagePath: input.imagePath },
+        requestId,
+        snapshot,
+        planning: universalPlanning,
+        draftConversationId: input.conversationId,
+      });
+      return;
+    }
+
+    // Explicit whole-turn rollback boundary.
     const recoveryCandidates = this.dependencies.listIndependentRecoveryCandidates(
       snapshot,
       {
@@ -745,36 +822,9 @@ export class ConversationStore implements IConversationStore {
           sourceMessageId: image.entity.sourceMessageId,
           aliases: image.aliases,
         })),
-        activeComparisonImageIds:
-          this.activeComparisonImageIds.get(input.conversationId) ?? [],
+        activeComparisonImageIds: focusImageIds(focusLedger),
       },
     );
-    const controlledPlanning = controlledPreflight
-      ? planControlledImageTurn({
-          snapshot,
-          activation: this.dependencies.plannerActivation,
-          images: planningImages,
-          activeComparisonImageIds:
-            this.activeComparisonImageIds.get(input.conversationId) ?? [],
-          planner: this.dependencies.turnPlanner,
-        })
-      : null;
-    if (
-      controlledPlanning !== null
-      && controlledPlanning.planning.plan.planOwner
-        === this.dependencies.plannerActivation.newPlanOwner
-    ) {
-      await this.startControlledImageTurn({
-        activeGeneration,
-        conversation: updatedConversationWithoutMemory,
-        request: { question: input.question, imagePath: input.imagePath },
-        requestId,
-        planning: controlledPlanning,
-        recoveryCandidates,
-        draftConversationId: input.conversationId,
-      });
-      return;
-    }
     const crossChat = this.dependencies.getCrossChatOptions(input.conversationId);
     const queryVector = await this.resolveEligibleQueryVector(
       snapshot,
@@ -804,18 +854,24 @@ export class ConversationStore implements IConversationStore {
                   aliases: image.aliases,
                 })),
               activeComparisonImageIds:
-                this.activeComparisonImageIds.get(input.conversationId) ?? [],
+                focusImageIds(focusLedger),
             },
           ),
         },
       },
     );
-    activeGeneration.architectureDiagnostics = runShadowPlanningLifecycle({
-      snapshot,
-      orchestration,
-      activation: this.dependencies.plannerActivation,
-      action: 'retry',
-    }, this.dependencies.turnPlanner) ?? undefined;
+    activeGeneration.architectureDiagnostics = createTurnArchitectureDiagnostics({
+      activation,
+      planning: universalPlanning.planning,
+      recovery: {
+        enabled: this.dependencies.plannerActivation.independentRecoveryEnabled,
+        classifiedIndependent: false,
+        considered: recoveryCandidates.length,
+        recovered: recoveryCandidates,
+      },
+      scenarioClass: universalPlanning.planning.plan.scenarioClass,
+      legacySemanticDecisionCount: 1,
+    });
     const generationPlan = createGenerationPlan(
       activeGeneration.responseMode,
       input.question,
@@ -1031,6 +1087,13 @@ export class ConversationStore implements IConversationStore {
         }
       }
       if (state.status === 'completed') {
+        try {
+          activeGeneration.focusLedger =
+            this.dependencies.publishConversationFocusLedger(activeGeneration.conversationId);
+          activeGeneration.focusLedgerPublicationStatus = 'updated';
+        } catch {
+          activeGeneration.focusLedgerPublicationStatus = 'rebuild-required';
+        }
         this.dependencies.persistRetrievalUnits(activeGeneration.conversationId, [
           activeGeneration.originatingUserMessageId,
           activeGeneration.assistantMessageId,
@@ -1114,7 +1177,30 @@ export class ConversationStore implements IConversationStore {
       requestKind: activeGeneration.requestKind,
       promptTokenCount: objective?.promptTokens ?? 0,
       generatedTokenCount: objective?.generatedTokens ?? 0,
+      extractionGeneratedTokenCount:
+        execution?.extractionGeneratedTokens
+        ?? objective?.extractionGeneratedTokens
+        ?? 0,
+      visibleGeneratedTokenCount:
+        execution?.visibleGeneratedTokens
+        ?? objective?.visibleGeneratedTokens
+        ?? objective?.generatedTokens
+        ?? 0,
+      extractionSchemaMode:
+        execution?.extractionSchemaMode
+        ?? objective?.extractionSchemaMode
+        ?? 'not-used',
+      extractionSchemaVersion:
+        execution?.extractionSchemaVersion
+        ?? objective?.extractionSchemaVersion
+        ?? null,
+      extractionAttemptLimitsTokens:
+        execution?.extractionAttemptLimitsTokens
+        ?? objective?.extractionAttemptLimitsTokens
+        ?? [],
       firstTokenTimeMs: objective?.answerTtftMs ?? state.metrics?.firstTokenLatencyMs ?? 0,
+      firstVisibleTokenLatencyMs:
+        objective?.answerTtftMs ?? state.metrics?.firstTokenLatencyMs ?? null,
       totalTimeMs:
         execution?.elapsedMs
         ?? objective?.totalEndToEndLatencyMs
@@ -1124,6 +1210,16 @@ export class ConversationStore implements IConversationStore {
       lastCompletedStage: execution?.lastCompletedStage ?? null,
       latencyStages: execution?.stages ?? [],
       evidenceState: execution?.evidenceState ?? 'not-applicable',
+      evidenceValidationOutcome:
+        execution?.evidenceValidationOutcome
+        ?? evidenceValidationOutcomeFor(execution?.evidenceState ?? 'not-applicable'),
+      evidencePersistenceOutcome: evidencePersistenceOutcomeFor(
+        execution?.evidenceState ?? 'not-applicable',
+        activeGeneration.evidencePersistence,
+      ),
+      cancellationStage:
+        execution?.cancellationStage
+        ?? (state.status === 'cancelled' ? execution?.activeStage ?? null : null),
       finishReason,
       looping: finishReason === 'looping' || objective?.looping === true,
       truncated: finishReason === 'length' || objective?.truncated === true,
@@ -1205,6 +1301,18 @@ export class ConversationStore implements IConversationStore {
           activeGeneration.requestKind === 'image' ? 'answer' : 'chat',
         ),
       imageSupplied: activeGeneration.imageSupplied,
+      conversationFocus: toProductionFocusSummary(
+        activeGeneration.focusLedger,
+        activeGeneration.focusLedgerPublicationStatus,
+      ),
+      conversationFocusBefore: toProductionFocusSummary(
+        activeGeneration.focusLedgerBefore,
+        'current',
+      ),
+      conversationFocusAfter: toProductionFocusSummary(
+        activeGeneration.focusLedger,
+        activeGeneration.focusLedgerPublicationStatus,
+      ),
       modelId:
         execution?.modelId
         ?? objective?.modelId
@@ -1218,10 +1326,21 @@ export class ConversationStore implements IConversationStore {
         ?? objective?.pipelineVariantId
         ?? CURRENT_PIPELINE_VARIANT_ID,
       appBuildId: execution?.appBuildId ?? objective?.appBuildId ?? 'unknown-build',
+      gitCommitSha: execution?.gitCommitSha ?? 'unknown',
+      gitBranch: execution?.gitBranch ?? 'unknown',
+      workingTreeState: execution?.workingTreeState ?? 'unknown',
+      buildIdentifier:
+        execution?.buildIdentifier
+        ?? execution?.appBuildId
+        ?? objective?.appBuildId
+        ?? 'unknown-build',
       deviceNameModel:
         execution?.deviceNameModel
         ?? objective?.deviceNameModel
         ?? 'unknown-device',
+      totalMemoryBytes: execution?.totalMemoryBytes ?? null,
+      runtimeUsedMemoryBytes: execution?.runtimeUsedMemoryBytes ?? null,
+      thermalState: execution?.thermalState ?? null,
     };
 
     diagnosticsTraceStore.append({
@@ -1456,20 +1575,71 @@ export class ConversationStore implements IConversationStore {
   }
 }
 
-function controlledQuestion(plan: TurnPlan, originalQuestion: string): string {
+function controlledQuestion(
+  plan: TurnPlan,
+  originalQuestion: string,
+  vision?: VisionExecutionResult,
+): string {
   if (plan.fallback === 'clarify-reference') {
     return 'Ask the user to clarify which image they mean. Do not claim that any image was inspected.';
   }
   if (plan.fallback === 'asset-unavailable') {
     return 'Explain that the requested image asset is unavailable. Do not substitute another image.';
   }
+  if (vision?.failureReason?.startsWith('comparison-side-unavailable:') === true) {
+    return [
+      'Explain that one planner-selected comparison image is unavailable.',
+      'Identify the unavailable selected side without substituting another image.',
+      'Do not claim a complete visual comparison.',
+    ].join(' ');
+  }
+  if (vision?.failureReason === 'comparison-multiple-reinspection-unavailable') {
+    return [
+      'Explain that both selected comparison images require pixel reinspection,',
+      'but this execution can inspect only one original image at a time.',
+      'Do not compare from insufficient evidence and do not substitute images.',
+    ].join(' ');
+  }
+  if (vision?.failureReason !== null && vision?.failureReason !== undefined) {
+    return [
+      'Explain that the planner-selected image evidence is insufficient and its original asset',
+      'cannot be inspected. Do not substitute another image or guess visual facts.',
+    ].join(' ');
+  }
   return originalQuestion;
+}
+
+function focusImageIds(ledger: ConversationFocusLedger): string[] {
+  if (ledger.activeImageFocus === null) return [];
+  return ledger.activeImageFocus.kind === 'single'
+    ? [ledger.activeImageFocus.imageId]
+    : [...ledger.activeImageFocus.imageIds];
+}
+
+function toProductionFocusSummary(
+  ledger: ConversationFocusLedger,
+  publicationStatus: ProductionConversationFocusSummary['publicationStatus'],
+): ProductionConversationFocusSummary {
+  return {
+    schemaVersion: ledger.schemaVersion,
+    lastCompletedTurnId: ledger.lastCompletedTurnId,
+    activeImageIds: focusImageIds(ledger),
+    lastExplicitlyReferencedImageIds: [
+      ...ledger.lastExplicitlyReferencedImageIds,
+    ],
+    activeAssistantMessageId: ledger.activeAssistantMessageId,
+    activeArtifact: ledger.activeArtifact,
+    activeTopicLabels: [...ledger.activeTopicLabels],
+    activeEntityLabels: [...ledger.activeEntityLabels],
+    unresolvedReference: ledger.unresolvedReference,
+    publicationStatus,
+  };
 }
 
 export function createConversationStore(
   dependencies: ConversationStoreDependencies
 ): ConversationStore {
-  return new ConversationStore({
+  const resolvedDependencies: Required<ConversationStoreDependencies> = {
     now: Date.now,
     createId: createStableId,
     contextOrchestrator: new ContextOrchestrator(),
@@ -1491,12 +1661,148 @@ export function createConversationStore(
     plannerActivation: DEFAULT_PLANNER_ACTIVATION,
     turnPlanner: new TurnPlanner(),
     listIndependentRecoveryCandidates: () => [],
-    listControlledPlanningImages: () => [],
+    listControlledPlanningImages: (conversationId) =>
+      fallbackPlanningImages(dependencies.historyStore, conversationId),
     visionExecutor: new VisionExecutor({
       getImage: () => null,
       getEvidence: () => null,
     }),
+    getConversationFocusLedger: (conversationId) =>
+      fallbackConversationFocusLedger(dependencies, conversationId),
+    publishConversationFocusLedger: (conversationId) =>
+      fallbackConversationFocusLedger(dependencies, conversationId),
     ...dependencies,
+  };
+  return new ConversationStore(resolvedDependencies);
+}
+
+function fallbackConversationFocusLedger(
+  dependencies: ConversationStoreDependencies,
+  conversationId: string,
+): ConversationFocusLedger {
+  const conversation = dependencies.historyStore.get(conversationId);
+  if (conversation === null) return emptyConversationFocusLedger(conversationId);
+  const attempts = new Map<string, number>();
+  const activeAssistantByUser = new Map<string, string>();
+  let currentUserId: string | null = null;
+  for (const message of conversation.messages) {
+    if (message.role === 'user') {
+      currentUserId = message.id;
+    } else if (currentUserId !== null) {
+      activeAssistantByUser.set(currentUserId, message.id);
+    }
+  }
+  currentUserId = null;
+  const sourceMessages = conversation.messages.map((message) => {
+    if (message.role === 'user') {
+      currentUserId = message.id;
+      return {
+        id: message.id,
+        role: message.role,
+        replyToMessageId: null,
+        attemptNumber: null,
+        activeAttempt: false,
+        text: message.text,
+        status: message.status,
+        createdAt: message.createdAt,
+        finalizedAt: message.status === 'completed' ? message.createdAt : null,
+      } as const;
+    }
+    const replyToMessageId = currentUserId;
+    const attemptNumber = replyToMessageId === null
+      ? 1
+      : (attempts.get(replyToMessageId) ?? 0) + 1;
+    if (replyToMessageId !== null) attempts.set(replyToMessageId, attemptNumber);
+    return {
+      id: message.id,
+      role: message.role,
+      replyToMessageId,
+      attemptNumber,
+      activeAttempt:
+        replyToMessageId !== null
+        && activeAssistantByUser.get(replyToMessageId) === message.id,
+      text: message.text,
+      status: message.status,
+      createdAt: message.createdAt,
+      finalizedAt: message.status === 'completed' ? message.createdAt : null,
+    } as const;
+  });
+  const images = (
+    dependencies.listControlledPlanningImages?.(conversationId)
+    ?? fallbackPlanningImages(dependencies.historyStore, conversationId)
+  )
+    .map((image) => ({
+      id: image.entity.id,
+      sourceMessageId: image.entity.sourceMessageId,
+      ordinal: image.entity.ordinal,
+      availability: image.entity.assetAvailability,
+      createdAt: image.entity.createdAt,
+    }));
+  return deriveConversationFocusLedger({
+    conversationId,
+    messages: sourceMessages,
+    images,
+  });
+}
+
+function fallbackPlanningImages(
+  store: IHistoryStore,
+  conversationId: string,
+): ControlledPlanningImage[] {
+  const conversation = store.get(conversationId);
+  if (conversation === null) return [];
+  return conversation.messages.flatMap((message, ordinal) => {
+    if (message.role !== 'user') return [];
+    const attachment = message.attachments.find((candidate) => candidate.kind === 'image');
+    if (attachment === undefined) return [];
+    const imageId = attachment.imageAssetId ?? `message-image:${message.id}`;
+    const memoryEvidence = conversation.contextMemory?.mediaEvidence.find(
+      (candidate) => candidate.sourceMessageId === message.id,
+    );
+    const sourceRevision = `attachment:${message.id}`;
+    return [{
+      entity: {
+        id: imageId,
+        conversationId,
+        sourceMessageId: message.id,
+        ordinal,
+        assetRevision: sourceRevision,
+        assetAvailability: attachment.available === false ? 'missing' : 'available',
+        localAssetReference: attachment.path,
+        evidenceIds: memoryEvidence === undefined ? [] : [memoryEvidence.id],
+        createdAt: message.createdAt,
+        updatedAt: message.createdAt,
+      },
+      aliases: [],
+      evidence: memoryEvidence === undefined
+        ? null
+        : {
+            id: memoryEvidence.id,
+            conversationId,
+            imageId,
+            sourceMessageIds: [message.id],
+            summary: memoryEvidence.summary,
+            visibleObjects: memoryEvidence.facts.map((fact, index) => ({
+              id: `fact-${index}`,
+              label: fact,
+              attributes: [],
+              confidence: 1,
+            })),
+            extractedText: memoryEvidence.extractedText.map((text) => ({
+              text,
+              confidence: 1,
+            })),
+            numericValues: [],
+            uncertainty: {
+              overallConfidence: memoryEvidence.uncertainty.length === 0 ? 1 : 0.8,
+              notes: [...memoryEvidence.uncertainty],
+            },
+            status: 'complete' as const,
+            sourceRevision,
+            createdAt: memoryEvidence.createdAt,
+            updatedAt: memoryEvidence.createdAt,
+          },
+    }];
   });
 }
 
@@ -1539,6 +1845,27 @@ function withEvidencePersistenceTiming(
     ],
     evidenceState: persistence.completed ? 'valid' : 'valid-unpersisted',
   };
+}
+
+function evidenceValidationOutcomeFor(
+  evidenceState: InferenceEvidenceState,
+): NonNullable<InferenceExecutionDiagnostics['evidenceValidationOutcome']> {
+  if (evidenceState === 'pending') return 'pending';
+  if (evidenceState === 'valid' || evidenceState === 'valid-unpersisted') return 'valid';
+  if (evidenceState === 'failed') return 'invalid';
+  if (evidenceState === 'cancelled') return 'cancelled';
+  return 'not-applicable';
+}
+
+function evidencePersistenceOutcomeFor(
+  evidenceState: InferenceEvidenceState,
+  persistence: ActiveGeneration['evidencePersistence'],
+): ProductionDiagnosticTurnSummary['evidencePersistenceOutcome'] {
+  if (persistence !== undefined) {
+    return persistence.completed ? 'persisted' : 'failed';
+  }
+  if (evidenceState === 'not-applicable') return 'not-applicable';
+  return 'not-attempted';
 }
 
 function listLexicalCandidates(conversationIds: readonly string[]): RetrievalCandidate[] {
@@ -1604,6 +1931,10 @@ export const conversationStore: IConversationStore = createConversationStore({
           );
     },
   }),
+  getConversationFocusLedger: (conversationId) =>
+    conversationStateLedgerRepository.get(conversationId),
+  publishConversationFocusLedger: (conversationId) =>
+    conversationStateLedgerRepository.publish(conversationId),
   listIndependentRecoveryCandidates: (snapshot, options = {}) => {
     const planningImages = listRuntimeControlledPlanningImages(snapshot.conversationId);
     return buildRuntimeIndependentRecoveryCandidates(snapshot, {
@@ -1645,6 +1976,9 @@ export const conversationStore: IConversationStore = createConversationStore({
     };
   },
   persistEvidence: (conversationId, sourceMessageId, evidence, target) => {
+    if (normalizeHiddenVisualEvidence(evidence) === null) {
+      return;
+    }
     const asset = target === undefined
       ? imageRepository.getAssetsForMessage(sourceMessageId)[0]
       : imageRepository.getAsset(target.imageAssetId) ?? undefined;

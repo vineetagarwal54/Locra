@@ -61,7 +61,7 @@ function containsExactLexical(normalizedText: string, normalizedCandidate: strin
 function normalizeLexical(value: string): string {
   return value
     .toLocaleLowerCase('en-US')
-    .replace(/[^a-z0-9_$.-]+/g, ' ')
+    .replace(/[^a-z0-9_$-]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
 }

@@ -33,6 +33,10 @@ import {
   getResponseModeConfig,
   type ResponseMode,
 } from '../ResponseMode';
+import {
+  STRUCTURED_VISUAL_EXTRACTION_JSON_SCHEMA,
+  STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION,
+} from '../StructuredVisualExtraction';
 
 import {
   convertToQwenMessages,
@@ -114,6 +118,14 @@ export interface QwenCompletionParams {
   logit_bias?: number[][];
   seed?: number;
   guide_tokens?: number[];
+  response_format?: {
+    readonly type: 'json_schema';
+    readonly json_schema: {
+      readonly name: 'locra_visual_evidence';
+      readonly strict: true;
+      readonly schema: object;
+    };
+  };
 }
 
 export interface LlamaContextLike {
@@ -188,6 +200,12 @@ export interface QwenGenerateResult {
 }
 
 // ── Typed errors (surfaced to the queue/store boundary) ──────────────────────
+
+function usesStructuredExtraction(
+  kind: QwenGenerateRequest['kind'],
+): boolean {
+  return kind === 'extraction' || kind === 'extractionRetry';
+}
 
 export class QwenLoadError extends Error {
   constructor(message: string) {
@@ -451,6 +469,18 @@ export class QwenLlamaRuntime {
           temperature: samplingProfile.temperature,
           top_p: samplingProfile.topP,
           top_k: samplingProfile.topK,
+          ...(usesStructuredExtraction(request.kind)
+            ? {
+                response_format: {
+                  type: 'json_schema' as const,
+                  json_schema: {
+                    name: 'locra_visual_evidence' as const,
+                    strict: true as const,
+                    schema: STRUCTURED_VISUAL_EXTRACTION_JSON_SCHEMA,
+                  },
+                },
+              }
+            : {}),
         },
         (data) => {
           if (firstTokenAt === null) {
@@ -563,6 +593,12 @@ export class QwenLlamaRuntime {
           softTargetTokens: targetTokenBudget,
           generationPlanId: request.generationPlanId ?? defaultPlanId(request.kind),
           taskKind,
+          structuredOutputMode: usesStructuredExtraction(request.kind)
+            ? 'native-json-schema'
+            : 'not-used',
+          structuredOutputSchemaVersion: usesStructuredExtraction(request.kind)
+            ? STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION
+            : null,
         },
       );
     } catch (error) {
@@ -694,7 +730,19 @@ function notifyRuntimeStage(
   stage: GenerationRuntimeStageEvent['stage'],
   status: GenerationRuntimeStageEvent['status'],
 ): void {
-  request.onRuntimeStage?.({ stage, status });
+  const nativeSchemaActive =
+    usesStructuredExtraction(request.kind)
+    && (stage === 'prefill' || stage === 'generation');
+  request.onRuntimeStage?.({
+    stage,
+    status,
+    ...(nativeSchemaActive
+      ? {
+          structuredOutputMode: 'native-json-schema',
+          structuredOutputSchemaVersion: STRUCTURED_VISUAL_EXTRACTION_SCHEMA_VERSION,
+        } as const
+      : {}),
+  });
 }
 
 function resolveGracefulCompletionReserve(

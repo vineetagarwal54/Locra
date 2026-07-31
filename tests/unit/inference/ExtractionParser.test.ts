@@ -56,12 +56,12 @@ describe('extraction parser', () => {
     expect(result.hiddenEvidence).toBeNull();
   });
 
-  it('deduplicates and bounds object and OCR arrays without mixing their contents', () => {
+  it('deduplicates bounded object and OCR arrays without mixing their contents', () => {
     const result = parseExtractionResponse(JSON.stringify({
       subjectObject: 'produce display',
       visibleObjects: [
         'apple', 'Apple', 'banana', 'carrot', 'orange', 'pear', 'lettuce',
-        'tomato', 'cucumber', 'pepper', 'onion', 'potato', 'extra object',
+        'tomato', 'cucumber', 'pepper', 'onion', 'potato',
       ],
       visibleFeatures: ['stacked', 'Stacked', 'colorful'],
       visibleText: ['SALE $3.99', 'sale $3.99', 'AISLE 4'],
@@ -71,11 +71,60 @@ describe('extraction parser', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.findings.visibleObjects).toHaveLength(12);
+    expect(result.findings.visibleObjects).toHaveLength(11);
     expect(result.findings.visibleObjects[0]).toBe('apple');
     expect(result.findings.visibleText).toEqual(['SALE $3.99', 'AISLE 4']);
     expect(result.findings.visibleText).not.toContain('apple');
     expect(result.findings.visibleFeatures).toEqual(['stacked', 'colorful']);
+  });
+
+  it('rejects oversized or repetitive extraction instead of truncating it', () => {
+    const oversized = parseExtractionResponse(JSON.stringify({
+      subjectObject: 'produce display',
+      visibleObjects: [
+        'apple', 'banana', 'carrot', 'orange', 'pear', 'lettuce', 'tomato',
+        'cucumber', 'pepper', 'onion', 'potato', 'melon', 'extra object',
+      ],
+      visibleFeatures: [],
+      visibleText: [],
+      visibleCondition: 'well lit',
+      uncertainty: [],
+    }));
+    const repetitive = parseExtractionResponse(JSON.stringify({
+      subjectObject: 'produce display',
+      visibleObjects: ['apple'],
+      visibleFeatures: [
+        'red', 'red', 'red', 'red', 'red', 'red', 'red', 'red',
+      ],
+      visibleText: [],
+      visibleCondition: 'well lit',
+      uncertainty: [],
+    }));
+
+    expect(oversized.ok).toBe(false);
+    expect(repetitive.ok).toBe(false);
+  });
+
+  it('does not retry an unchanged strategy after deterministic repetitive output', async () => {
+    const repetitive = JSON.stringify({
+      subjectObject: 'produce display',
+      visibleObjects: ['apple'],
+      visibleFeatures: ['red', 'red', 'red', 'red', 'red', 'red', 'red', 'red'],
+      visibleText: [],
+      visibleCondition: 'well lit',
+      uncertainty: [],
+    });
+    const retry = jest.fn(() => Promise.resolve(validExtraction));
+
+    const result = await parseExtractionWithRetry(
+      repetitive,
+      retry,
+      'What is visible?',
+      '/photo.jpg',
+    );
+
+    expect(retry).not.toHaveBeenCalled();
+    expect(result.hiddenEvidence).toBeNull();
   });
 
   it('rejects truncated JSON without attempting a formatting repair', async () => {

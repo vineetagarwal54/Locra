@@ -70,6 +70,8 @@ spikes/qwen3vl-llamarn/models/
 spikes/qwen3vl-llamarn/*.gguf
 spikes/qwen3vl-llamarn/*.log
 /spikes/qwen3vl-llamarn/
+.codex-input/
+.claude/settings.local.json
 
 # Environment files
 .env

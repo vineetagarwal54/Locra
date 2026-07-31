@@ -1,3 +1,4 @@
+import type { ConversationFocusPlannerInput } from '../memory/ConversationStateLedger';
 import type { ImageEntity } from '../persistence/ImageEntityRepository';
 import type { StructuredImageEvidence } from '../persistence/StructuredImageEvidenceRepository';
 import type { CanonicalConversationSnapshot } from '../types/models';
@@ -37,6 +38,7 @@ export interface ControlledImageTurnPlanningInput {
   readonly activation: PlannerActivationConfig;
   readonly images: readonly ControlledPlanningImage[];
   readonly activeComparisonImageIds?: readonly string[];
+  readonly focusLedger?: ConversationFocusPlannerInput;
   readonly planner?: TurnPlanner;
 }
 
@@ -102,6 +104,7 @@ export function planControlledImageTurn(
       activeComparisonTargetIds: [...(input.activeComparisonImageIds ?? [])],
       activeImageIds: orderedImages.map((image) => image.entity.id),
     },
+    focusLedger: input.focusLedger,
     signals: {
       referenceCandidates,
       explicitMemoryCandidates: [],

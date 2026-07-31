@@ -3,6 +3,7 @@ import {
   type ControlledPlanningImage,
 } from '../../../src/planning/ControlledImageTurnPlanner';
 import { DEFAULT_PLANNER_ACTIVATION } from '../../../src/planning/PlannerActivation';
+import { TurnPlanner } from '../../../src/planning/TurnPlanner';
 import type { CanonicalConversationSnapshot } from '../../../src/types/models';
 
 function image(
@@ -48,6 +49,34 @@ const activation = {
 };
 
 describe('planControlledImageTurn', () => {
+  it('passes derived focus to the planner as non-authoritative input', () => {
+    const planner = new TurnPlanner();
+    const plan = jest.spyOn(planner, 'plan');
+    planControlledImageTurn({
+      snapshot: snapshot('What is visible in the image?'),
+      activation,
+      images: [image('fruit', 1, ['fruit'])],
+      planner,
+      focusLedger: {
+        lastCompletedTurnId: 'turn-prior',
+        activeImageIds: ['fruit'],
+        lastExplicitlyReferencedImageIds: ['fruit'],
+        activeAssistantMessageId: 'assistant-prior',
+        activeArtifactMessageId: null,
+        activeTopicLabels: [],
+        activeEntityLabels: [],
+        unresolvedReference: null,
+      },
+    });
+
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({
+      focusLedger: expect.objectContaining({
+        lastCompletedTurnId: 'turn-prior',
+        activeImageIds: ['fruit'],
+      }),
+    }));
+  });
+
   it('resolves “their prices” to the only active image', () => {
     const result = planControlledImageTurn({
       snapshot: snapshot('What are their prices?'), activation,
