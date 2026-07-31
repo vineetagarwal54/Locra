@@ -6,6 +6,7 @@ import {
 
 const validExtraction = JSON.stringify({
   subjectObject: 'black notebook',
+  visibleObjects: ['black notebook'],
   visibleFeatures: ['rectangular', 'matte cover'],
   visibleText: ['Locra'],
   visibleCondition: 'closed on a desk',
@@ -19,6 +20,7 @@ describe('extraction parser', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.findings.subjectObject).toBe('black notebook');
+    expect(result.findings.visibleObjects).toEqual(['black notebook']);
     expect(result.findings.visibleFeatures).toEqual(['rectangular', 'matte cover']);
     expect(result.findings.visibleText).toEqual(['Locra']);
     expect(result.findings.visibleCondition).toBe('closed on a desk');
@@ -26,28 +28,84 @@ describe('extraction parser', () => {
     expect(formatExtractionAnswer(result.findings)).toContain('Subject/object: black notebook');
   });
 
-  it('retries malformed JSON exactly once with a corrective extraction prompt', async () => {
+  it('parses wrapped JSON locally without a model retry', async () => {
     const retry = jest.fn(() => Promise.resolve(validExtraction));
 
-    const result = await parseExtractionWithRetry('plain prose', retry, 'What is it?', '/photo.jpg');
+    const result = await parseExtractionWithRetry(
+      `Here are the findings:\n\`\`\`json\n${validExtraction}\n\`\`\``,
+      retry,
+      'What is it?',
+      '/photo.jpg',
+    );
 
-    expect(retry).toHaveBeenCalledTimes(1);
-    const retryPrompt = retry.mock.calls.at(0)?.at(0);
-    expect(retryPrompt).toMatch(/valid json/i);
+    expect(retry).not.toHaveBeenCalled();
     expect(result.pinnedExtraction).toContain('Subject/object: black notebook');
     expect(result.visibleAnswer).toContain('Visible features: rectangular, matte cover');
     expect(result.hiddenEvidence?.imagePath).toBe('/photo.jpg');
     expect(result.hiddenEvidence?.sourceQuestion).toBe('What is it?');
   });
 
-  it('falls back to the raw text after a second parse failure', async () => {
+  it('does not spend another generation on opaque malformed output', async () => {
     const retry = jest.fn(() => Promise.resolve('still plain prose'));
 
     const result = await parseExtractionWithRetry('plain prose', retry, 'What is it?');
 
-    expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry).not.toHaveBeenCalled();
     expect(result.pinnedExtraction).toMatch(/visual evidence unavailable/i);
     expect(result.visibleAnswer).toMatch(/couldn't extract reliable visual evidence/i);
     expect(result.hiddenEvidence).toBeNull();
+  });
+
+  it('deduplicates and bounds object and OCR arrays without mixing their contents', () => {
+    const result = parseExtractionResponse(JSON.stringify({
+      subjectObject: 'produce display',
+      visibleObjects: [
+        'apple', 'Apple', 'banana', 'carrot', 'orange', 'pear', 'lettuce',
+        'tomato', 'cucumber', 'pepper', 'onion', 'potato', 'extra object',
+      ],
+      visibleFeatures: ['stacked', 'Stacked', 'colorful'],
+      visibleText: ['SALE $3.99', 'sale $3.99', 'AISLE 4'],
+      visibleCondition: 'well lit',
+      uncertainty: ['small labels unreadable', 'Small labels unreadable'],
+    }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings.visibleObjects).toHaveLength(12);
+    expect(result.findings.visibleObjects[0]).toBe('apple');
+    expect(result.findings.visibleText).toEqual(['SALE $3.99', 'AISLE 4']);
+    expect(result.findings.visibleText).not.toContain('apple');
+    expect(result.findings.visibleFeatures).toEqual(['stacked', 'colorful']);
+  });
+
+  it('rejects truncated JSON without attempting a formatting repair', async () => {
+    const retry = jest.fn(() => Promise.resolve(validExtraction));
+    const truncated = validExtraction.slice(0, -1);
+
+    const result = await parseExtractionWithRetry(
+      truncated,
+      retry,
+      'List the visible items.',
+      '/photo.jpg',
+    );
+
+    expect(retry).not.toHaveBeenCalled();
+    expect(result.hiddenEvidence).toBeNull();
+  });
+
+  it('does not treat an object label as OCR text', () => {
+    const result = parseExtractionResponse(JSON.stringify({
+      subjectObject: 'bedroom',
+      visibleObjects: ['electrical outlet', 'mattress'],
+      visibleFeatures: ['white mattress'],
+      visibleText: ['outlet', 'ROOM 12'],
+      visibleCondition: 'well lit',
+      uncertainty: [],
+    }));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings.visibleObjects).toContain('electrical outlet');
+    expect(result.findings.visibleText).toEqual(['ROOM 12']);
   });
 });

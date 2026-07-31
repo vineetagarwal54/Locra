@@ -11,6 +11,8 @@ export interface HiddenVisualEvidence {
   imagePath: string;
   sourceQuestion: string;
   subjectObject: string;
+  /** Distinct visible object labels; never OCR text. */
+  visibleObjects?: string[];
   visibleFeatures: string[];
   visibleText: string[];
   visibleCondition: string;

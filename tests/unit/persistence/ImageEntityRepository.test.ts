@@ -25,6 +25,7 @@ describe('ImageEntityRepository', () => {
       id: 'image-1',
       conversationId: 'conversation-1',
       sourceMessageId: 'message-1',
+      ordinal: 2,
       localAssetReference: '/images/one.jpg',
       assetRevision: 'sha256:one',
     });
@@ -33,6 +34,7 @@ describe('ImageEntityRepository', () => {
     expect(entity).toEqual(expect.objectContaining({
       id: 'image-1',
       sourceMessageId: 'message-1',
+      ordinal: 2,
       assetRevision: 'sha256:one',
       assetAvailability: 'available',
       evidenceIds: [],

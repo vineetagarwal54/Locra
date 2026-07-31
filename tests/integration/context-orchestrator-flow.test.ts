@@ -81,6 +81,7 @@ class MemoryHistory implements IHistoryStore {
 
 const extractionJson = JSON.stringify({
   subjectObject: 'printed shipping label',
+  visibleObjects: ['shipping label'],
   visibleFeatures: ['white adhesive label'],
   visibleText: ['Tracking code LK-2048'],
   visibleCondition: 'flat and readable',

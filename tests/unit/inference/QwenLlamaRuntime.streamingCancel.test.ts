@@ -252,6 +252,130 @@ describe('QwenLlamaRuntime streaming and cancellation', () => {
     expect(runtime.getStatus()).toBe('loaded');
   });
 
+  it('does not stop concise prose merely because it passed its target', async () => {
+    const completion = jest.fn(
+      async (
+        _params: QwenCompletionParams,
+        onToken?: (data: QwenNativeTokenData) => void,
+      ): Promise<QwenNativeCompletionResult> => {
+        for (const token of ['A', ' short', ' answer', '.', ' Extra', ' text']) {
+          onToken?.({ token });
+        }
+        return {
+          content: 'A short answer. Extra text.',
+          tokens_predicted: 6,
+          stopped_eos: true,
+        };
+      },
+    );
+    const { runtime, context } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'High',
+      softTargetTokens: 3,
+      hardSafetyLimitTokens: 256,
+      gracefulCompletionReserveTokens: 32,
+      generationTaskKind: 'concise-prose',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(context.stopCompletion).not.toHaveBeenCalled();
+    expect(result.text).toBe('A short answer. Extra text.');
+    expect(result.finishReason).toBe('natural');
+    expect(result.generationDiagnostics).toMatchObject({
+      targetTokenBudget: 3,
+      emergencyHardCeilingTokens: 256,
+      semanticCompletionReached: true,
+      gracefulCompletionModeEntered: false,
+      actualStopReason: 'model-eos',
+    });
+  });
+
+  it('stops concise prose at a completed thought only after graceful mode begins', async () => {
+    const completion = jest.fn(
+      async (
+        _params: QwenCompletionParams,
+        onToken?: (data: QwenNativeTokenData) => void,
+      ): Promise<QwenNativeCompletionResult> => {
+        for (const token of ['One', ' useful', ' thought', ' continues', ' until', ' it', ' ends', '.']) {
+          onToken?.({ token });
+        }
+        return { content: 'One useful thought continues until it ends.', tokens_predicted: 8 };
+      },
+    );
+    const { runtime, context } = makeRuntime(completion);
+    await runtime.loadModel(load);
+
+    const result = await runtime.generate({
+      messages: MESSAGES,
+      responseMode: 'Low',
+      softTargetTokens: 3,
+      hardSafetyLimitTokens: 10,
+      gracefulCompletionReserveTokens: 3,
+      generationTaskKind: 'concise-prose',
+      signal: new AbortController().signal,
+      onToken: () => {},
+    });
+
+    expect(context.stopCompletion).toHaveBeenCalledTimes(1);
+    expect(result.finishReason).toBe('natural');
+    expect(result.generationDiagnostics).toMatchObject({
+      semanticCompletionReached: true,
+      gracefulCompletionModeEntered: true,
+      actualStopReason: 'semantic-completion',
+    });
+  });
+
+  it('marks only an incomplete emergency-ceiling stop as truncated', async () => {
+    const incompleteCompletion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({
+        content: '```ts\nfunction parse() {',
+        tokens_predicted: 10,
+        stopped_limit: true,
+      }),
+    );
+    const completeCompletion = jest.fn(
+      async (): Promise<QwenNativeCompletionResult> => ({
+        content: '```ts\nconst value = 1;\n```',
+        tokens_predicted: 10,
+        stopped_limit: true,
+      }),
+    );
+    const incompleteRuntime = makeRuntime(incompleteCompletion).runtime;
+    const completeRuntime = makeRuntime(completeCompletion).runtime;
+    await incompleteRuntime.loadModel(load);
+    await completeRuntime.loadModel(load);
+    const baseRequest = {
+      messages: MESSAGES,
+      responseMode: 'Low' as const,
+      softTargetTokens: 4,
+      hardSafetyLimitTokens: 10,
+      gracefulCompletionReserveTokens: 3,
+      generationTaskKind: 'coding' as const,
+      signal: new AbortController().signal,
+      onToken: () => {},
+    };
+
+    const incomplete = await incompleteRuntime.generate(baseRequest);
+    const complete = await completeRuntime.generate(baseRequest);
+
+    expect(incomplete.finishReason).toBe('length');
+    expect(incomplete.generationDiagnostics).toMatchObject({
+      semanticCompletionReached: false,
+      gracefulCompletionModeEntered: true,
+      actualStopReason: 'emergency-ceiling',
+    });
+    expect(complete.finishReason).toBe('natural');
+    expect(complete.generationDiagnostics).toMatchObject({
+      semanticCompletionReached: true,
+      gracefulCompletionModeEntered: true,
+      actualStopReason: 'emergency-ceiling',
+    });
+  });
+
   it('strips accidental <think> control tags without hiding the content', async () => {
     const completion = jest.fn(
       async (): Promise<QwenNativeCompletionResult> => ({ content: '<think>hmm</think>Answer' })

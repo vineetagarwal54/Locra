@@ -55,6 +55,7 @@ const request: InferenceRequest = {
 };
 const validExtractionJson = JSON.stringify({
   subjectObject: 'ceramic mug',
+  visibleObjects: ['ceramic mug'],
   visibleFeatures: ['blue glaze', 'chipped handle'],
   visibleText: [],
   visibleCondition: 'clean with a chipped handle',
@@ -589,6 +590,11 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(generatedRequests[1].messages.some((message) => message.mediaPath)).toBe(false);
     expect(generatedRequests[1].messages.at(-1)?.content).toContain('Image evidence: ceramic mug');
     expect(generatedRequests[1].messages.at(-1)?.content).toContain(request.question);
+    expect(generatedRequests[0]).toMatchObject({
+      softTargetTokens: 128,
+      hardSafetyLimitTokens: 192,
+      generationTaskKind: 'structured-extraction',
+    });
   });
 
   it('runs the image pipeline for an attributed image-bearing follow-up with prior context', async () => {
@@ -778,7 +784,210 @@ describe('InferenceQueue two-stage first image turns', () => {
     expect(queue.getState().response).toMatch(/couldn't extract reliable visual evidence/i);
     expect(queue.getState().response).not.toContain('not json from perception');
     expect(queue.getState().pinnedExtraction).toMatch(/visual evidence unavailable/i);
+    expect(generatedRequests).toHaveLength(1);
     await expect(queue.submit(request)).resolves.toBeUndefined();
+  });
+
+  it('records extraction and visible-answer runtime phases separately', async () => {
+    let call = 0;
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest, onToken) => {
+        call += 1;
+        for (const stage of [
+          'prompt-formatting',
+          'media-tokenization',
+          'prefill',
+          'generation',
+        ] as const) {
+          generateRequest.onRuntimeStage?.({ stage, status: 'started' });
+          generateRequest.onRuntimeStage?.({ stage, status: 'completed' });
+        }
+        const response = call === 1 ? validExtractionJson : 'A ceramic mug is visible.';
+        if (call === 2) onToken(response, 6);
+        return Promise.resolve({ response, tokenCount: 6 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(request);
+
+    expect(queue.getState().executionDiagnostics?.stages.map((stage) => stage.stage)).toEqual(
+      expect.arrayContaining([
+        'extraction-formatting',
+        'extraction-media-tokenization',
+        'extraction-prefill',
+        'hidden-generation',
+        'evidence-validation',
+        'visible-answer-formatting',
+        'visible-answer-media-tokenization',
+        'visible-answer-prefill',
+        'visible-generation',
+      ]),
+    );
+  });
+
+  it('preserves cancellation timing, stage, evidence state, trace, and runtime attribution', async () => {
+    const clock = makeClock();
+    const gate = deferred<{ response: string; tokenCount: number }>();
+    const terminalStates: InferenceState[] = [];
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (generateRequest) => {
+        generateRequest.onRuntimeStage?.({
+          stage: 'prompt-formatting',
+          status: 'started',
+        });
+        return gate.promise;
+      },
+    };
+    const queue = makeQueue({
+      createRecorder: () => new InferenceMetricsRecorder(clock.now),
+      engine,
+      isTraceEnabled: () => true,
+      getDeviceBuildMetadata: () => ({
+        deviceNameModel: 'Pixel 8 Pro',
+        appBuildId: 'locra-cancel-build',
+      }),
+      getModelAttribution: () => ({
+        modelId: 'ACTUAL_MODEL',
+        generationConfigId: 'actual-runtime-config',
+      }),
+    });
+    queue.subscribe((state) => {
+      if (state.status === 'cancelled') terminalStates.push(state);
+    });
+
+    clock.advanceTo(100);
+    const inFlight = queue.submit(request);
+    await flush();
+    clock.advanceTo(475);
+    queue.cancel();
+    gate.resolve({ response: validExtractionJson, tokenCount: 8 });
+    await inFlight;
+
+    expect(terminalStates).toHaveLength(1);
+    expect(terminalStates[0]).toEqual(expect.objectContaining({
+      inferenceTrace: expect.objectContaining({
+        conversationId: expect.any(String),
+      }),
+      executionDiagnostics: expect.objectContaining({
+        elapsedMs: 375,
+        activeStage: 'extraction-formatting',
+        evidenceState: 'cancelled',
+        modelId: 'ACTUAL_MODEL',
+        generationConfigId: 'actual-runtime-config',
+        appBuildId: 'locra-cancel-build',
+      }),
+    }));
+  });
+
+  it('reports cancellation during image preprocessing at the cancellation instant', async () => {
+    const clock = makeClock();
+    const preprocessGate = deferred<PreprocessedImage>();
+    const terminalStates: InferenceState[] = [];
+    const queue = makeQueue({
+      createRecorder: () => new InferenceMetricsRecorder(clock.now),
+      preprocess: () => preprocessGate.promise,
+    });
+    queue.subscribe((state) => {
+      if (state.status === 'cancelled') terminalStates.push(state);
+    });
+
+    clock.advanceTo(20);
+    const inFlight = queue.submit(request);
+    await flush();
+    clock.advanceTo(140);
+    queue.cancel();
+    preprocessGate.resolve({ path: request.imagePath ?? '', width: 512, height: 512 });
+    await inFlight;
+
+    expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
+      elapsedMs: 120,
+      activeStage: 'image-preprocessing',
+      lastCompletedStage: null,
+    }));
+  });
+
+  it.each([
+    ['media-tokenization', 'extraction-media-tokenization'],
+    ['prefill', 'extraction-prefill'],
+    ['generation', 'hidden-generation'],
+  ] as const)(
+    'reports cancellation during hidden runtime stage %s',
+    async (runtimeStage, expectedStage) => {
+      const clock = makeClock();
+      const gate = deferred<{ response: string; tokenCount: number }>();
+      const terminalStates: InferenceState[] = [];
+      const queue = makeQueue({
+        createRecorder: () => new InferenceMetricsRecorder(clock.now),
+        engine: {
+          loadModel: () => Promise.resolve(),
+          generate: (generateRequest) => {
+            generateRequest.onRuntimeStage?.({
+              stage: runtimeStage,
+              status: 'started',
+            });
+            return gate.promise;
+          },
+        },
+      });
+      queue.subscribe((state) => {
+        if (state.status === 'cancelled') terminalStates.push(state);
+      });
+
+      clock.advanceTo(10);
+      const inFlight = queue.submit(request);
+      await flush();
+      clock.advanceTo(90);
+      queue.cancel();
+      gate.resolve({ response: validExtractionJson, tokenCount: 8 });
+      await inFlight;
+
+      expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
+        elapsedMs: 80,
+        activeStage: expectedStage,
+      }));
+    },
+  );
+
+  it('reports cancellation while the visible answer is waiting to start', async () => {
+    const clock = makeClock();
+    const visibleGate = deferred<{ response: string; tokenCount: number }>();
+    const terminalStates: InferenceState[] = [];
+    let generateCalls = 0;
+    const queue = makeQueue({
+      createRecorder: () => new InferenceMetricsRecorder(clock.now),
+      engine: {
+        loadModel: () => Promise.resolve(),
+        generate: () => {
+          generateCalls += 1;
+          return generateCalls === 1
+            ? Promise.resolve({ response: validExtractionJson, tokenCount: 8 })
+            : visibleGate.promise;
+        },
+      },
+    });
+    queue.subscribe((state) => {
+      if (state.status === 'cancelled') terminalStates.push(state);
+    });
+
+    clock.advanceTo(5);
+    const inFlight = queue.submit(request);
+    for (let pass = 0; pass < 3 && generateCalls < 2; pass += 1) {
+      await flush();
+    }
+    expect(generateCalls).toBe(2);
+    clock.advanceTo(205);
+    queue.cancel();
+    visibleGate.resolve({ response: 'A visible answer.', tokenCount: 4 });
+    await inFlight;
+
+    expect(terminalStates[0]?.executionDiagnostics).toEqual(expect.objectContaining({
+      elapsedMs: 200,
+      activeStage: 'visible-answer-startup',
+      evidenceState: 'valid-unpersisted',
+    }));
   });
 
   it('cancels cleanly during hidden perception without starting answer generation', async () => {
@@ -952,7 +1161,7 @@ describe('InferenceQueue post-processing (FR-054)', () => {
     expect(state.response).toBe(markdown);
   });
 
-  it('trims the completed response and flags a truncated tail via the limit notice', async () => {
+  it('does not call a natural model stop truncated from a tail-shape heuristic', async () => {
     const engine: InferenceEngineAdapter = {
       loadModel: () => Promise.resolve(),
       generate: (generateRequest, onToken) => {
@@ -970,8 +1179,11 @@ describe('InferenceQueue post-processing (FR-054)', () => {
     const state = queue.getState();
     expect(state.status).toBe('completed');
     expect(state.response).toBe('The mug is blue and the');
-    expect(state.limitWarning).toMatch(/cut off/i);
-    expect(state.finishReason).toBe('length');
+    expect(state.limitWarning).toBeNull();
+    expect(state.finishReason).toBe('natural');
+    expect(state.objectiveResult?.truncated).toBe(false);
+    expect(state.objectiveResult?.semanticCompletionReached).toBe(false);
+    expect(state.objectiveResult?.actualStopReason).toBe('model-eos');
   });
 
   it('collapses a looping tail and flags it', async () => {

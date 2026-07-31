@@ -9,6 +9,8 @@ import type { IInferenceQueue } from '../types/interfaces';
 import type {
   CanonicalConversationContext,
   InferenceRequest,
+  InferenceEvidenceState,
+  InferenceExecutionDiagnostics,
   InferenceState,
   InferenceStatus,
 } from '../types/models';
@@ -30,6 +32,7 @@ import {
   CURRENT_GENERATION_CONFIG_ID,
   CURRENT_PIPELINE_VARIANT_ID,
   LOOPING_ANSWER_NOTICE,
+  createStructuredVisionGenerationPlan,
   samplingProfileForRequestKind,
   TRUNCATED_ANSWER_NOTICE,
 } from './GenerationTuning';
@@ -128,12 +131,22 @@ const IDLE_STATE: InferenceState = {
   hiddenEvidence: null,
   objectiveResult: null,
   inferenceTrace: null,
+  executionDiagnostics: null,
 };
 
 interface ActiveRequest {
   readonly controller: AbortController;
   readonly trace: InferenceTrace | null;
+  readonly recorder: InferenceMetricsRecorder;
+  readonly attribution: {
+    readonly modelId: string;
+    readonly generationConfigId: string;
+    readonly deviceNameModel: string;
+    readonly appBuildId: string;
+  };
   cancelled: boolean;
+  evidenceState: InferenceEvidenceState;
+  cancellationDiagnostics: InferenceExecutionDiagnostics | null;
 }
 
 interface LifecycleGate<T> {
@@ -210,10 +223,26 @@ export class InferenceQueue implements IInferenceQueue {
     }
 
     const lifecycleRequest = this.createLifecycleRequest(request, options);
+    const recorder = this.createRecorder();
+    recorder.markRequestStart();
     const traceEnabled = this.deps.isTraceEnabled?.() ?? isDevelopmentInferenceTraceEnabled();
     const trace = traceEnabled ? this.stampTraceAttribution(createInferenceTrace(), lifecycleRequest) : null;
+    const metadata = this.resolveDeviceBuildMetadata();
+    const modelAttribution = this.deps.getModelAttribution?.() ?? {
+      modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+      generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
+    };
     const active: ActiveRequest = {
-      controller: new AbortController(), trace, cancelled: false,
+      controller: new AbortController(),
+      trace,
+      recorder,
+      attribution: {
+        ...modelAttribution,
+        ...metadata,
+      },
+      cancelled: false,
+      evidenceState: requestRequiresStructuredVision(request) ? 'pending' : 'not-applicable',
+      cancellationDiagnostics: null,
     };
     this.active = active;
     const lifecycleGates = createLifecycleGates();
@@ -222,7 +251,6 @@ export class InferenceQueue implements IInferenceQueue {
       type: 'SUBMIT',
       request: lifecycleRequest,
     });
-    const recorder = this.createRecorder();
     const responseMode = options.responseMode
       ?? this.deps.getResponseMode?.()
       ?? DEFAULT_RESPONSE_MODE;
@@ -238,17 +266,19 @@ export class InferenceQueue implements IInferenceQueue {
       hiddenEvidence: null,
       objectiveResult: null,
       inferenceTrace: trace,
+      executionDiagnostics: this.buildExecutionDiagnostics(active),
     });
 
     try {
-      recorder.markRequestStart();
       recorder.markPreprocessingStart();
+      recorder.startLatencyStage('image-preprocessing');
       const requestImagePath = this.resolveRequestImagePath(request, options);
       processed = requestImagePath === null
         ? null
         : await this.deps.preprocess(requestImagePath);
       lifecycleGates.prepare.resolve(undefined);
       recorder.markPreprocessingEnd();
+      recorder.endLatencyStage('image-preprocessing');
       if (active.cancelled) return;
 
       const readiness = this.deps.getInferenceReadiness?.(processed !== null);
@@ -261,9 +291,11 @@ export class InferenceQueue implements IInferenceQueue {
 
       this.setState({ status: 'loading_model' });
       recorder.markModelLoadStart();
+      recorder.startLatencyStage('model-load');
       await this.deps.engine.loadModel();
       lifecycleGates.loadModel.resolve(undefined);
       recorder.markModelLoadEnd();
+      recorder.endLatencyStage('model-load');
       if (active.cancelled) return;
 
       this.setState({ status: 'streaming' });
@@ -294,6 +326,9 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markAnswerEnd();
       recorder.markInferenceEnd();
       const processedAnswer = postProcessAnswer(result.response);
+      if (result.hiddenEvidence !== null && result.hiddenEvidence !== undefined) {
+        active.evidenceState = 'valid';
+      }
       this.recordFinalTraceResponse(active, processedAnswer.text);
       const finishReason = resolveQualityFinishReason(
         result.finishReason ?? 'natural',
@@ -314,13 +349,18 @@ export class InferenceQueue implements IInferenceQueue {
         hiddenEvidence: result.hiddenEvidence ?? null,
         objectiveResult: this.buildObjectiveResult(
           processedAnswer.text,
-          finishReason === 'looping' ? 'looping' : processedAnswer.verdict,
+          finishReason === 'looping'
+            ? 'looping'
+            : finishReason === 'length'
+              ? 'truncated'
+              : 'complete',
           result,
           recorder,
           responseMode,
           request,
         ),
         inferenceTrace: active.trace,
+        executionDiagnostics: this.buildExecutionDiagnostics(active),
       });
       lifecycleGates.stream.resolve({
         response: processedAnswer.text,
@@ -328,6 +368,9 @@ export class InferenceQueue implements IInferenceQueue {
       });
     } catch (error) {
       if (active.cancelled) return;
+      if (active.evidenceState === 'pending') {
+        active.evidenceState = 'failed';
+      }
       settleLifecycleGates(lifecycleGates);
       this.setState({
         status: 'errored',
@@ -340,6 +383,7 @@ export class InferenceQueue implements IInferenceQueue {
         hiddenEvidence: null,
         objectiveResult: null,
         inferenceTrace: active.trace,
+        executionDiagnostics: this.buildExecutionDiagnostics(active),
       });
     } finally {
       const wasCancelled = active.cancelled;
@@ -367,7 +411,7 @@ export class InferenceQueue implements IInferenceQueue {
       // transition. Skip it if the turn actually finished (completed/errored)
       // between the stop request and settling — that result stands.
       if (wasCancelled && this.state.status === 'cancelling') {
-        this.emitCancellationTerminal();
+        this.emitCancellationTerminal(active);
       }
     }
   }
@@ -384,6 +428,9 @@ export class InferenceQueue implements IInferenceQueue {
     if (active === null || active.cancelled) return;
 
     active.cancelled = true;
+    active.evidenceState =
+      active.evidenceState === 'pending' ? 'cancelled' : active.evidenceState;
+    active.cancellationDiagnostics = this.buildExecutionDiagnostics(active);
     active.controller.abort();
     this.lifecycleActor.send({ type: 'CANCEL' });
     if (this.lifecycleGates !== null) {
@@ -400,12 +447,13 @@ export class InferenceQueue implements IInferenceQueue {
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
-      inferenceTrace: null,
+      inferenceTrace: active.trace,
+      executionDiagnostics: active.cancellationDiagnostics,
     });
   }
 
   /** Publishes the observable terminal cancellation, then returns to idle. */
-  private emitCancellationTerminal(): void {
+  private emitCancellationTerminal(active: ActiveRequest): void {
     this.setState({
       status: 'cancelled',
       response: '',
@@ -416,7 +464,9 @@ export class InferenceQueue implements IInferenceQueue {
       pinnedExtraction: null,
       hiddenEvidence: null,
       objectiveResult: null,
-      inferenceTrace: null,
+      inferenceTrace: active.trace,
+      executionDiagnostics:
+        active.cancellationDiagnostics ?? this.buildExecutionDiagnostics(active),
     });
     this.setState({ ...IDLE_STATE });
   }
@@ -459,6 +509,7 @@ export class InferenceQueue implements IInferenceQueue {
     }
 
     recorder.markPerceptionStart();
+    const extractionPlan = createStructuredVisionGenerationPlan('extraction');
     const extractionRequest: EngineGenerateRequest = {
       messages: buildPerceptionModelMessages(
         buildStructuredExtractionPrompt(request.question),
@@ -467,6 +518,13 @@ export class InferenceQueue implements IInferenceQueue {
       kind: 'extraction',
       originalQuestion: request.question,
       responseMode,
+      softTargetTokens: extractionPlan.softTargetTokens,
+      hardSafetyLimitTokens: extractionPlan.hardSafetyLimitTokens,
+      gracefulCompletionReserveTokens: extractionPlan.gracefulCompletionReserveTokens,
+      generationPlanId: extractionPlan.diagnosticsId,
+      generationTaskKind: extractionPlan.taskKind,
+      loopDetectionEligible: false,
+      onRuntimeStage: this.createRuntimeStageHandler(active, 'hidden'),
     };
     const extractionResult = await this.deps.engine.generate(
       extractionRequest,
@@ -480,14 +538,23 @@ export class InferenceQueue implements IInferenceQueue {
       return extractionResult;
     }
 
+    recorder.startLatencyStage('evidence-validation');
     const extractionOutcome = await parseExtractionWithRetry(
       extractionResult.response,
       async (retryPrompt) => {
+        const retryPlan = createStructuredVisionGenerationPlan('extractionRetry');
         const retryRequest: EngineGenerateRequest = {
           messages: buildPerceptionRetryModelMessages(retryPrompt),
           kind: 'extractionRetry',
           originalQuestion: request.question,
           responseMode,
+          softTargetTokens: retryPlan.softTargetTokens,
+          hardSafetyLimitTokens: retryPlan.hardSafetyLimitTokens,
+          gracefulCompletionReserveTokens: retryPlan.gracefulCompletionReserveTokens,
+          generationPlanId: retryPlan.diagnosticsId,
+          generationTaskKind: retryPlan.taskKind,
+          loopDetectionEligible: false,
+          onRuntimeStage: this.createRuntimeStageHandler(active, 'hidden'),
         };
         const retryResult = await this.deps.engine.generate(
           retryRequest,
@@ -501,7 +568,11 @@ export class InferenceQueue implements IInferenceQueue {
       },
       request.question,
       processed.path,
+      { allowRetry: extractionResult.finishReason !== 'length' },
     );
+    recorder.endLatencyStage('evidence-validation');
+    active.evidenceState =
+      extractionOutcome.hiddenEvidence === null ? 'failed' : 'valid-unpersisted';
     this.recordTraceStage(active, 'perception', extractionRequest, extractionResult, {
       parsedOutput: extractionOutcome.hiddenEvidence,
       processedOutput: extractionOutcome.visibleAnswer,
@@ -517,8 +588,10 @@ export class InferenceQueue implements IInferenceQueue {
     if (extractionOutcome.hiddenEvidence === null) {
       lifecycleGates.contextAssembly.resolve(undefined);
       recorder.markAnswerStart();
+      recorder.startLatencyStage('visible-answer-startup');
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
+      recorder.endLatencyStage('visible-answer-startup');
       this.setState({ response: extractionOutcome.visibleAnswer });
       return {
         response: extractionOutcome.visibleAnswer,
@@ -528,6 +601,7 @@ export class InferenceQueue implements IInferenceQueue {
       };
     }
 
+    recorder.startLatencyStage('context-assembly');
     const answerPrompt = buildAnswerPrompt({
       question: request.question,
       hiddenEvidence: extractionOutcome.hiddenEvidence,
@@ -536,6 +610,7 @@ export class InferenceQueue implements IInferenceQueue {
       pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
     });
     lifecycleGates.contextAssembly.resolve(undefined);
+    recorder.endLatencyStage('context-assembly');
     const answerResult = await this.generateVisibleAnswer(
       buildCanonicalModelMessages({
         conversationContext,
@@ -600,15 +675,18 @@ export class InferenceQueue implements IInferenceQueue {
     inferenceRequest?: InferenceRequest,
   ): Promise<EngineGenerateResult> {
     recorder.markAnswerStart();
+    recorder.startLatencyStage('visible-answer-startup');
     const generateRequest: EngineGenerateRequest = {
       messages,
       responseMode,
       ...requestPatch,
       softTargetTokens: inferenceRequest?.softTargetTokens,
       hardSafetyLimitTokens: inferenceRequest?.hardSafetyLimitTokens,
+      gracefulCompletionReserveTokens: inferenceRequest?.gracefulCompletionReserveTokens,
       generationPlanId: inferenceRequest?.generationPlanId,
       generationTaskKind: inferenceRequest?.generationTaskKind,
       loopDetectionEligible: inferenceRequest?.loopDetectionEligible,
+      onRuntimeStage: this.createRuntimeStageHandler(active, 'visible'),
     };
     const stage: InferenceTraceStageKind =
       generateRequest.kind === 'chat' ? 'followUp' : 'answer';
@@ -617,6 +695,7 @@ export class InferenceQueue implements IInferenceQueue {
       if (active.cancelled) return;
       recorder.markFirstToken();
       recorder.markAnswerFirstToken();
+      recorder.endLatencyStage('visible-answer-startup');
       this.lifecycleActor.send({
         type: 'TOKEN',
         response: cumulative,
@@ -630,6 +709,7 @@ export class InferenceQueue implements IInferenceQueue {
       onToken,
       active.controller.signal,
     );
+    recorder.endLatencyStage('visible-answer-startup');
     this.recordVisibleTraceStage(active, stage, generateRequest, result);
 
     const originalQuestion = generateRequest.originalQuestion ?? '';
@@ -693,6 +773,27 @@ export class InferenceQueue implements IInferenceQueue {
       deviceNameModel: metadata.deviceNameModel,
       appBuildId: metadata.appBuildId,
       responseMode,
+      targetTokenBudget:
+        result.generationDiagnostics?.targetTokenBudget
+        ?? result.generationDiagnostics?.softTargetTokens
+        ?? request.softTargetTokens
+        ?? getResponseModeConfig(responseMode).answerTargetTokens,
+      emergencyHardCeilingTokens:
+        result.generationDiagnostics?.emergencyHardCeilingTokens
+        ?? result.generationDiagnostics?.effectiveNativeGenerationLimit
+        ?? request.hardSafetyLimitTokens
+        ?? getResponseModeConfig(responseMode).generationLimit,
+      semanticCompletionReached:
+        result.generationDiagnostics?.semanticCompletionReached
+        ?? postProcessAnswer(answerText).verdict === 'complete',
+      gracefulCompletionModeEntered:
+        result.generationDiagnostics?.gracefulCompletionModeEntered
+        ?? false,
+      actualStopReason:
+        result.generationDiagnostics?.actualStopReason
+        ?? actualStopReasonForFinishReason(
+          verdict === 'truncated' ? 'length' : verdict === 'looping' ? 'looping' : 'natural',
+        ),
       targetTokenCount:
         result.generationDiagnostics?.softTargetTokens
         ?? request.softTargetTokens
@@ -751,6 +852,15 @@ export class InferenceQueue implements IInferenceQueue {
       modelInput: request.messages,
       rawOutput: result.response,
       generationDiagnostics: result.generationDiagnostics ?? {
+        targetTokenBudget:
+          request.softTargetTokens
+          ?? getResponseModeConfig(request.responseMode).answerTargetTokens,
+        emergencyHardCeilingTokens:
+          request.hardSafetyLimitTokens
+          ?? getResponseModeConfig(request.responseMode).generationLimit,
+        semanticCompletionReached: postProcessAnswer(result.response).verdict === 'complete',
+        gracefulCompletionModeEntered: false,
+        actualStopReason: 'model-eos',
         responseModeHardMaximum: getResponseModeConfig(request.responseMode).generationLimit,
         effectiveNativeGenerationLimit:
           request.hardSafetyLimitTokens
@@ -779,6 +889,34 @@ export class InferenceQueue implements IInferenceQueue {
     return this.deps.getDeviceBuildMetadata?.() ?? {
       deviceNameModel: 'unknown-device',
       appBuildId: 'unknown-build',
+    };
+  }
+
+  private createRuntimeStageHandler(
+    active: ActiveRequest,
+    generation: 'hidden' | 'visible',
+  ): NonNullable<EngineGenerateRequest['onRuntimeStage']> {
+    return (event): void => {
+      const stage = latencyStageForRuntimeEvent(event.stage, generation);
+      if (event.status === 'started') {
+        active.recorder.startLatencyStage(stage);
+      } else {
+        active.recorder.endLatencyStage(stage);
+      }
+    };
+  }
+
+  private buildExecutionDiagnostics(
+    active: ActiveRequest,
+  ): InferenceExecutionDiagnostics {
+    return {
+      ...active.recorder.captureExecutionTimings(),
+      evidenceState: active.evidenceState,
+      modelId: active.attribution.modelId,
+      generationConfigId: active.attribution.generationConfigId,
+      pipelineVariantId: CURRENT_PIPELINE_VARIANT_ID,
+      deviceNameModel: active.attribution.deviceNameModel,
+      appBuildId: active.attribution.appBuildId,
     };
   }
 
@@ -862,6 +1000,18 @@ export class InferenceQueue implements IInferenceQueue {
   }
 }
 
+function latencyStageForRuntimeEvent(
+  stage: import('./InferenceEngineHandle').GenerationRuntimeStage,
+  generation: 'hidden' | 'visible',
+): import('./InferenceMetrics').InferenceLatencyStage {
+  if (stage === 'generation') {
+    return generation === 'hidden' ? 'hidden-generation' : 'visible-generation';
+  }
+  const phase = generation === 'hidden' ? 'extraction' : 'visible-answer';
+  if (stage === 'prompt-formatting') return `${phase}-formatting`;
+  return `${phase}-${stage}`;
+}
+
 function validatePlannedVisionRequest(request: InferenceRequest): void {
   const strategy = request.visionExecutionPlan?.strategy;
   if (
@@ -870,6 +1020,12 @@ function validatePlannedVisionRequest(request: InferenceRequest): void {
   ) {
     throw new Error('The validated vision plan requires an available image asset.');
   }
+}
+
+function requestRequiresStructuredVision(request: InferenceRequest): boolean {
+  const strategy = request.visionExecutionPlan?.strategy;
+  return strategy === 'inspect-and-structure'
+    || (strategy === undefined && requiresStructuredVision(request.question));
 }
 
 export function createInferenceQueue(
@@ -894,10 +1050,10 @@ function resolveCompletionNotice(
   finishReason: 'natural' | 'length' | 'looping' | 'cancelled' | 'failed',
   inputShortenedWarning: string | null,
 ): string | null {
-  // The authoritative hard-cap stop, or the heuristic mid-sentence tail check,
-  // both mean the answer was cut off. A looping tail is its own notice.
+  // Only an incomplete emergency-ceiling stop is truncation. Tail-shape
+  // heuristics remain useful for assessment but cannot override a natural stop.
   const answerNotice =
-    finishReason === 'length' || verdict === 'truncated'
+    finishReason === 'length'
       ? TRUNCATED_ANSWER_NOTICE
       : finishReason === 'looping' || verdict === 'looping'
         ? LOOPING_ANSWER_NOTICE
@@ -912,10 +1068,17 @@ function resolveQualityFinishReason(
   if (verdict === 'looping' || runtimeReason === 'looping') {
     return 'looping';
   }
-  if (verdict === 'truncated' && runtimeReason === 'natural') {
-    return 'length';
-  }
   return runtimeReason;
+}
+
+function actualStopReasonForFinishReason(
+  finishReason: 'natural' | 'length' | 'looping' | 'cancelled' | 'failed',
+): import('./GenerationTuning').GenerationActualStopReason {
+  if (finishReason === 'length') return 'emergency-ceiling';
+  if (finishReason === 'looping') return 'loop-detected';
+  if (finishReason === 'cancelled') return 'cancelled';
+  if (finishReason === 'failed') return 'failed';
+  return 'model-eos';
 }
 
 function toMessage(error: unknown): string {

@@ -8,6 +8,11 @@ export const OBJECTIVE_INFERENCE_RESULT_RECORD_FIELDS = [
   'promptTokens',
   'estimatedPromptTokens',
   'finalNativePromptTokens',
+  'targetTokenBudget',
+  'emergencyHardCeilingTokens',
+  'semanticCompletionReached',
+  'gracefulCompletionModeEntered',
+  'actualStopReason',
   'softTargetTokens',
   'responseModeHardMaximum',
   'effectiveNativeGenerationLimit',
@@ -36,6 +41,11 @@ export interface ObjectiveInferenceResultRecord {
   promptTokens?: number;
   estimatedPromptTokens?: number;
   finalNativePromptTokens?: number;
+  targetTokenBudget?: number;
+  emergencyHardCeilingTokens?: number;
+  semanticCompletionReached?: boolean;
+  gracefulCompletionModeEntered?: boolean;
+  actualStopReason?: import('./GenerationTuning').GenerationActualStopReason;
   truncated: boolean;
   looping: boolean;
   timestamp: string;

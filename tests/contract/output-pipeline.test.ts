@@ -113,7 +113,7 @@ describe('output pipeline contract', () => {
     expect(preprocessSpy).not.toHaveBeenCalled();
     expect(loadModel).toHaveBeenCalledTimes(1);
     expect(generate).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         messages: [
           expect.objectContaining({
             role: 'system',
@@ -129,7 +129,8 @@ describe('output pipeline contract', () => {
         kind: 'chat',
         originalQuestion: request.question,
         responseMode: 'Medium',
-      },
+        onRuntimeStage: expect.any(Function),
+      }),
       expect.any(Function),
       expect.any(AbortSignal),
     );

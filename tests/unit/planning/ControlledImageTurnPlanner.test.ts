@@ -16,6 +16,7 @@ function image(
       id,
       conversationId: 'conversation-1',
       sourceMessageId: `message-${id}`,
+      ordinal: 0,
       assetRevision: `${id}-v1`,
       assetAvailability: availability,
       localAssetReference: `/images/${id}.jpg`,
@@ -69,9 +70,25 @@ describe('planControlledImageTurn', () => {
     expect(result?.planning.plan.vision.strategy).toBe('none');
   });
 
+  it('re-inspects a resolved image when its identity exists but evidence is missing', () => {
+    const failedImage = { ...image('fruit', 1, ['fruit']), evidence: null };
+    const result = planControlledImageTurn({
+      snapshot: snapshot('What was visible in the fruit image?'), activation,
+      images: [failedImage],
+    });
+
+    expect(result?.scenarioClass).toBe('image-follow-up');
+    expect(result?.planning.plan.vision).toEqual({
+      strategy: 'inspect-and-structure',
+      imageReferenceIds: ['fruit'],
+      evidenceIds: [],
+    });
+  });
+
   it.each([
     'Compare both images.',
     'Compare the first and second images.',
+    'Is there any difference between 2 images?',
     'Tell me about both images.',
     'Compare the fruit image and the mattress image.',
   ])('constructs a separated two-image comparison for “%s”', (text) => {
@@ -116,6 +133,43 @@ describe('planControlledImageTurn', () => {
       activeComparisonImageIds: ['fruit', 'mattress'],
     });
     expect(result?.planning.plan.vision.imageReferenceIds).toEqual(['fruit', 'mattress']);
+  });
+
+  it('uses the two obvious recent images for an unqualified two-image comparison', () => {
+    const result = planControlledImageTurn({
+      snapshot: snapshot('What is different between the two images?'), activation,
+      images: [
+        image('fruit', 1, ['fruit']),
+        image('mattress-front', 2, ['mattress']),
+        image('mattress-label', 3, ['mattress label']),
+      ],
+    });
+
+    expect(result?.scenarioClass).toBe('image-comparison');
+    expect(result?.planning.plan.vision.imageReferenceIds).toEqual([
+      'mattress-front',
+      'mattress-label',
+    ]);
+  });
+
+  it.each([
+    ['Show the first image.', 'fruit'],
+    ['This is the fiest image I sent.', 'fruit'],
+    ['What was in the previous image?', 'mattress-front'],
+    ['What is in the latest image?', 'mattress-label'],
+    ['What is in the 2nd image?', 'mattress-front'],
+  ])('resolves "%s" deterministically to %s', (text, expectedId) => {
+    const result = planControlledImageTurn({
+      snapshot: snapshot(text), activation,
+      images: [
+        image('fruit', 1, ['fruit']),
+        image('mattress-front', 2, ['mattress']),
+        image('mattress-label', 3, ['label']),
+      ],
+    });
+
+    expect(result?.scenarioClass).toBe('image-follow-up');
+    expect(result?.planning.plan.vision.imageReferenceIds).toEqual([expectedId]);
   });
 
   it('does not silently downgrade a requested comparison when only one image is known', () => {

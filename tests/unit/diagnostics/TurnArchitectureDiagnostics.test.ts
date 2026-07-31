@@ -1,5 +1,6 @@
 import {
   createTurnArchitectureDiagnostics,
+  assertControlledTurnOwnership,
   sanitizeTurnArchitectureDiagnostics,
   serializeTurnArchitectureDiagnostics,
   withTerminalVisionEvidenceDiagnostic,
@@ -11,6 +12,47 @@ import {
 import { TurnPlanner } from '../../../src/planning/TurnPlanner';
 
 describe('TurnArchitectureDiagnostics', () => {
+  it('rejects any legacy semantic decision attributed to a controlled turn', () => {
+    expect(() => assertControlledTurnOwnership({
+      authorityMode: 'controlled',
+      planOwner: 'turn-planner:v1',
+      scenarioClass: 'new-image',
+      executedPlanId: 'turn-1',
+      executedPlanVersion: 'turn-plan-mvp-v1',
+      legacySemanticDecisionCount: 1,
+      executedStages: [],
+      executionResult: 'planned',
+      vision: {
+        strategy: 'inspect-and-structure',
+        imageIds: ['image-1'],
+        missingImageIds: [],
+        evidenceAction: 'freshly-structured',
+        evidenceStatus: 'pending',
+        pixelsUsed: true,
+        storedEvidenceUsed: false,
+      },
+      shadowPlan: null,
+      planDelta: [],
+      independentRecovery: {
+        enabled: false,
+        classifiedIndependent: false,
+        considered: 0,
+        recoveredCandidateIds: [],
+        reasonCodes: [],
+      },
+      constrainedPlanner: {
+        invoked: false,
+        wouldInvoke: false,
+        gateReason: 'not-needed',
+        queueWaitMs: 0,
+        executionMs: 0,
+        result: 'not-invoked',
+        confidence: null,
+        fallback: 'execute',
+      },
+    })).toThrow(/whole-turn ownership invariant/i);
+  });
+
   it('records one authority mode, exact owner, plan/version, shadow delta, recovery, and Tier-3 gate', () => {
     const activation = resolvePlannerActivation({
       ...DEFAULT_PLANNER_ACTIVATION,
@@ -193,6 +235,15 @@ describe('TurnArchitectureDiagnostics', () => {
     }).vision).toEqual(expect.objectContaining({
       evidenceAction: 'freshly-structured',
       evidenceStatus: 'complete',
+    }));
+
+    expect(withTerminalVisionEvidenceDiagnostic(diagnostics, {
+      hiddenEvidencePresent: false,
+      extractionFailurePresent: false,
+      terminalStatus: 'cancelled',
+    }).vision).toEqual(expect.objectContaining({
+      evidenceAction: 'not-produced',
+      evidenceStatus: 'cancelled',
     }));
   });
 });

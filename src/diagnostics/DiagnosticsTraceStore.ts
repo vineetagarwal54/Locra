@@ -7,7 +7,11 @@ import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { ResponseMode } from '../inference/ResponseMode';
 import { storage } from '../storage/mmkv';
-import type { GenerationFinishReason } from '../types/models';
+import type {
+  GenerationFinishReason,
+  InferenceEvidenceState,
+  InferenceExecutionDiagnostics,
+} from '../types/models';
 
 import type { TurnArchitectureDiagnostics } from './TurnArchitectureDiagnostics';
 
@@ -41,6 +45,10 @@ export interface ProductionDiagnosticTurnSummary {
   readonly generatedTokenCount: number;
   readonly firstTokenTimeMs: number;
   readonly totalTimeMs: number;
+  readonly activeStage: InferenceExecutionDiagnostics['activeStage'];
+  readonly lastCompletedStage: InferenceExecutionDiagnostics['lastCompletedStage'];
+  readonly latencyStages: InferenceExecutionDiagnostics['stages'];
+  readonly evidenceState: InferenceEvidenceState;
   readonly finishReason: GenerationFinishReason;
   readonly looping: boolean;
   readonly truncated: boolean;
@@ -73,6 +81,11 @@ export interface ProductionDiagnosticTurnSummary {
   };
   readonly targetTokenCount: number;
   readonly generationLimit: number;
+  readonly targetTokenBudget: number;
+  readonly emergencyHardCeilingTokens: number;
+  readonly semanticCompletionReached: boolean;
+  readonly gracefulCompletionModeEntered: boolean;
+  readonly actualStopReason: import('../inference/GenerationTuning').GenerationActualStopReason;
   readonly softTargetTokens: number;
   readonly responseModeHardMaximum: number;
   readonly effectiveNativeGenerationLimit: number;
@@ -84,6 +97,7 @@ export interface ProductionDiagnosticTurnSummary {
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
   readonly appBuildId: string;
+  readonly deviceNameModel: string;
 }
 
 interface DiagnosticsIndexEntry {

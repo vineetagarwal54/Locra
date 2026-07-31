@@ -53,10 +53,10 @@ export function getResponseTokenBudget(mode: ResponseMode): number {
 }
 
 /**
- * Hard output cap handed to the Qwen runtime as `n_predict`. Generation cannot
- * exceed this; when it is reached the answer is reported as length-truncated.
- * Always >= the soft {@link getResponseTokenBudget} so the model has room to
- * finish the current sentence/section past its soft target.
+ * Emergency output ceiling handed to the Qwen runtime as `n_predict`.
+ * Generation cannot exceed it. Reaching it is reported as length-truncated only
+ * when the emitted answer has not reached semantic/structural completion.
+ * Always >= the soft {@link getResponseTokenBudget}.
  */
 export function getResponseGenerationLimit(mode: ResponseMode): number {
   return getResponseModeConfig(mode).generationLimit;
@@ -97,7 +97,10 @@ export function getResponseModeInstruction(
   return (
     `${detail} Aim for roughly ${config.answerTargetTokens} tokens as a soft target, ` +
     'not a quota — never add filler, repetition, or extra sections just to reach it. ' +
-    'Finish the current sentence and section cleanly rather than stopping mid-thought.'
+    'Complete every item and structure the user requested, including closing lists, code ' +
+    'blocks, and structured data. If output space is running low, omit optional detail, ' +
+    'compress the remaining required points, and finish the current sentence, paragraph, ' +
+    'and section cleanly.'
   );
 }
 

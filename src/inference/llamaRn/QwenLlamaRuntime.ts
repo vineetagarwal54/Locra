@@ -24,7 +24,10 @@ import {
   samplingProfileForRequestKind,
   type SamplingProfile,
 } from '../GenerationTuning';
-import type { GenerationRuntimeDiagnostics } from '../InferenceEngineHandle';
+import type {
+  GenerationRuntimeDiagnostics,
+  GenerationRuntimeStageEvent,
+} from '../InferenceEngineHandle';
 import {
   getResponseGenerationLimit,
   getResponseModeConfig,
@@ -159,9 +162,11 @@ export interface QwenGenerateRequest {
   kind?: 'extraction' | 'extractionRetry' | 'answer' | 'chat' | 'compaction';
   softTargetTokens?: number;
   hardSafetyLimitTokens?: number;
+  gracefulCompletionReserveTokens?: number;
   generationPlanId?: string;
   generationTaskKind?: import('../GenerationTuning').GenerationTaskKind;
   loopDetectionEligible?: boolean;
+  onRuntimeStage?: (event: GenerationRuntimeStageEvent) => void;
 }
 
 export interface QwenGenerateResult {
@@ -362,10 +367,26 @@ export class QwenLlamaRuntime {
           const qwenMessages = convertToQwenMessages([...candidate], {
             isReadableFile: this.deps.isReadableFile,
           });
-          const formatted = await context.getFormattedChat(qwenMessages);
-          const tokenized = await context.tokenize(formatted.prompt, {
-            media_paths: formatted.media_paths,
-          });
+          notifyRuntimeStage(request, 'prompt-formatting', 'started');
+          let formatted: Awaited<ReturnType<LlamaContextLike['getFormattedChat']>>;
+          try {
+            formatted = await context.getFormattedChat(qwenMessages);
+          } finally {
+            notifyRuntimeStage(request, 'prompt-formatting', 'completed');
+          }
+          const tokenizationStage =
+            formatted.media_paths === undefined || formatted.media_paths.length === 0
+              ? 'prompt-tokenization'
+              : 'media-tokenization';
+          notifyRuntimeStage(request, tokenizationStage, 'started');
+          let tokenized: Awaited<ReturnType<LlamaContextLike['tokenize']>>;
+          try {
+            tokenized = await context.tokenize(formatted.prompt, {
+              media_paths: formatted.media_paths,
+            });
+          } finally {
+            notifyRuntimeStage(request, tokenizationStage, 'completed');
+          }
           return tokenized.tokens.length;
         },
       );
@@ -399,15 +420,30 @@ export class QwenLlamaRuntime {
     let cumulativeRaw = '';
     let streamedTokenCount = 0;
     let loopStoppedText: string | null = null;
-    // Hard output cap handed to the native runtime. Reaching it means the answer
-    // is length-truncated (finishReason === 'length'), never a natural stop.
+    let semanticStoppedText: string | null = null;
+    let gracefulCompletionModeEntered = false;
+    let prefillActive = true;
+    let generationActive = false;
+    // This is an emergency device/runtime ceiling, not the answer-length target.
+    // Whether reaching it actually truncated the answer is decided from the
+    // completed output structure below.
     const generationLimit = Math.min(
       getResponseGenerationLimit(request.responseMode),
       request.hardSafetyLimitTokens ?? Number.POSITIVE_INFINITY,
     );
+    const targetTokenBudget =
+      request.softTargetTokens ?? getResponseModeConfig(request.responseMode).answerTargetTokens;
+    const gracefulCompletionReserveTokens = resolveGracefulCompletionReserve(
+      generationLimit,
+      request.gracefulCompletionReserveTokens,
+    );
+    const gracefulCompletionThreshold =
+      generationLimit - gracefulCompletionReserveTokens;
+    const taskKind = request.generationTaskKind ?? defaultTaskKind(request.kind);
     const samplingProfile = samplingProfileForRequestKind(request.kind);
 
     try {
+      notifyRuntimeStage(request, 'prefill', 'started');
       const result = await context.completion(
         {
           messages,
@@ -419,10 +455,17 @@ export class QwenLlamaRuntime {
         (data) => {
           if (firstTokenAt === null) {
             firstTokenAt = this.now();
+            prefillActive = false;
+            notifyRuntimeStage(request, 'prefill', 'completed');
+            generationActive = true;
+            notifyRuntimeStage(request, 'generation', 'started');
           }
           cumulativeRaw += data.token ?? '';
           streamedTokenCount += 1;
           const visible = stripControlTags(cumulativeRaw);
+          if (streamedTokenCount >= gracefulCompletionThreshold) {
+            gracefulCompletionModeEntered = true;
+          }
           if (
             (request.loopDetectionEligible ??
               (request.kind !== 'extraction' && request.kind !== 'extractionRetry')) &&
@@ -438,11 +481,31 @@ export class QwenLlamaRuntime {
               return;
             }
           }
-          if (loopStoppedText === null) {
+          if (
+            loopStoppedText === null
+            && semanticStoppedText === null
+            && gracefulCompletionModeEntered
+            && isGracefulRuntimeStopEligible(request.kind, taskKind)
+            && hasStrongSemanticCompletionBoundary(visible, taskKind)
+          ) {
+            semanticStoppedText = visible.trim();
+            request.onToken(semanticStoppedText, streamedTokenCount);
+            this.requestNativeStop(context);
+            return;
+          }
+          if (loopStoppedText === null && semanticStoppedText === null) {
             request.onToken(visible, streamedTokenCount);
           }
         }
       );
+      if (prefillActive) {
+        prefillActive = false;
+        notifyRuntimeStage(request, 'prefill', 'completed');
+      }
+      if (generationActive) {
+        generationActive = false;
+        notifyRuntimeStage(request, 'generation', 'completed');
+      }
 
       if (this.cancelRequested || request.signal.aborted) {
         this.status = 'loaded';
@@ -450,7 +513,32 @@ export class QwenLlamaRuntime {
       }
 
       const text = loopStoppedText
+        ?? semanticStoppedText
         ?? stripControlTags(result.content ?? result.text ?? cumulativeRaw).trim();
+      const generatedTokens =
+        result.tokens_predicted ?? result.timings?.predicted_n ?? streamedTokenCount;
+      if (generatedTokens >= gracefulCompletionThreshold) {
+        gracefulCompletionModeEntered = true;
+      }
+      const nativeFinishReason = resolveFinishReason(result, generatedTokens, generationLimit);
+      const semanticCompletionReached =
+        nativeFinishReason === 'length'
+          ? hasStrongSemanticCompletionBoundary(text, taskKind)
+          : assessSemanticCompletion(text, taskKind);
+      const actualStopReason =
+        loopStoppedText !== null
+          ? 'loop-detected'
+          : semanticStoppedText !== null
+            ? 'semantic-completion'
+            : nativeFinishReason === 'length'
+              ? 'emergency-ceiling'
+              : 'model-eos';
+      const finishReason =
+        loopStoppedText !== null
+          ? 'looping'
+          : nativeFinishReason === 'length' && !semanticCompletionReached
+            ? 'length'
+            : 'natural';
       this.status = 'loaded';
       return this.buildResult(
         text,
@@ -463,13 +551,18 @@ export class QwenLlamaRuntime {
         samplingProfile,
         reconciled.estimatedPromptTokens,
         reconciled.finalNativePromptTokens,
-        loopStoppedText === null ? undefined : 'looping',
+        finishReason,
         {
+          targetTokenBudget,
+          emergencyHardCeilingTokens: generationLimit,
+          semanticCompletionReached,
+          gracefulCompletionModeEntered,
+          actualStopReason,
           responseModeHardMaximum: getResponseGenerationLimit(request.responseMode),
           effectiveNativeGenerationLimit: generationLimit,
-          softTargetTokens: request.softTargetTokens ?? getResponseModeConfig(request.responseMode).answerTargetTokens,
+          softTargetTokens: targetTokenBudget,
           generationPlanId: request.generationPlanId ?? defaultPlanId(request.kind),
-          taskKind: request.generationTaskKind ?? defaultTaskKind(request.kind),
+          taskKind,
         },
       );
     } catch (error) {
@@ -485,6 +578,12 @@ export class QwenLlamaRuntime {
       this.error = toMessage(error);
       throw new QwenGenerationError(toMessage(error));
     } finally {
+      if (prefillActive) {
+        notifyRuntimeStage(request, 'prefill', 'completed');
+      }
+      if (generationActive) {
+        notifyRuntimeStage(request, 'generation', 'completed');
+      }
       request.signal.removeEventListener('abort', onAbort);
     }
   }
@@ -572,6 +671,14 @@ export class QwenLlamaRuntime {
       inputShortenedWarning,
       samplingProfile,
       generationDiagnostics: generationDiagnostics ?? {
+        targetTokenBudget: Math.max(1, generationLimit - 128),
+        emergencyHardCeilingTokens: generationLimit,
+        semanticCompletionReached: assessSemanticCompletion(text, 'concise-prose'),
+        gracefulCompletionModeEntered: false,
+        actualStopReason:
+          resolveFinishReason(result, generatedTokens, generationLimit) === 'length'
+            ? 'emergency-ceiling'
+            : 'model-eos',
         responseModeHardMaximum: generationLimit,
         effectiveNativeGenerationLimit: generationLimit,
         softTargetTokens: Math.max(1, generationLimit - 128),
@@ -580,6 +687,133 @@ export class QwenLlamaRuntime {
       },
     };
   }
+}
+
+function notifyRuntimeStage(
+  request: QwenGenerateRequest,
+  stage: GenerationRuntimeStageEvent['stage'],
+  status: GenerationRuntimeStageEvent['status'],
+): void {
+  request.onRuntimeStage?.({ stage, status });
+}
+
+function resolveGracefulCompletionReserve(
+  generationLimit: number,
+  requestedReserve: number | undefined,
+): number {
+  const defaultReserve = Math.min(128, Math.max(16, Math.floor(generationLimit / 8)));
+  return Math.max(
+    0,
+    Math.min(generationLimit - 1, requestedReserve ?? defaultReserve),
+  );
+}
+
+function isGracefulRuntimeStopEligible(
+  kind: QwenGenerateRequest['kind'],
+  taskKind: import('../GenerationTuning').GenerationTaskKind,
+): boolean {
+  if (kind === 'extraction' || kind === 'extractionRetry' || kind === 'compaction') {
+    return false;
+  }
+  return (
+    taskKind === 'concise-prose'
+    || taskKind === 'visual-description'
+    || taskKind === 'structured-extraction'
+  );
+}
+
+function hasStrongSemanticCompletionBoundary(
+  text: string,
+  taskKind: import('../GenerationTuning').GenerationTaskKind,
+): boolean {
+  const trimmed = text.trim();
+  if (!hasBalancedStructure(trimmed, taskKind)) {
+    return false;
+  }
+  return (
+    /[.!?…](?:["')\]]+)?$/.test(trimmed)
+    || /```$/.test(trimmed)
+    || (
+      (taskKind === 'structured-extraction' || taskKind === 'coding')
+      && /[}\]]$/.test(trimmed)
+    )
+  );
+}
+
+function assessSemanticCompletion(
+  text: string,
+  taskKind: import('../GenerationTuning').GenerationTaskKind,
+): boolean {
+  const trimmed = text.trim();
+  if (trimmed === '' || !hasBalancedStructure(trimmed, taskKind)) {
+    return false;
+  }
+  if (hasStrongSemanticCompletionBoundary(trimmed, taskKind)) {
+    return true;
+  }
+  if (/\b(?:and|or|because|with|to|the|a|an|of|for|that|which)\s*$/i.test(trimmed)) {
+    return false;
+  }
+  if (/[,;:=-]\s*$/.test(trimmed)) {
+    return false;
+  }
+  const words = trimmed.split(/\s+/);
+  return taskKind === 'concise-prose' && words.length <= 12;
+}
+
+function hasBalancedStructure(
+  text: string,
+  taskKind: import('../GenerationTuning').GenerationTaskKind,
+): boolean {
+  const fenceCount = (text.match(/^```/gm) ?? []).length;
+  if (fenceCount % 2 !== 0) {
+    return false;
+  }
+  if (
+    taskKind !== 'coding'
+    && taskKind !== 'structured-extraction'
+    && !/^\s*(?:\{|\[)/.test(text)
+  ) {
+    return true;
+  }
+
+  const expectedClosers: string[] = [];
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== null) {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    const apostropheInsideWord =
+      character === "'"
+      && /[A-Za-z0-9]/.test(text[index - 1] ?? '')
+      && /[A-Za-z0-9]/.test(text[index + 1] ?? '');
+    if ((character === '"' || character === "'") && !apostropheInsideWord) {
+      quote = character;
+      continue;
+    }
+    if (character === '{') expectedClosers.push('}');
+    if (character === '[') expectedClosers.push(']');
+    if (taskKind === 'coding' && character === '(') expectedClosers.push(')');
+    if (character === '}' || character === ']' || character === ')') {
+      if (expectedClosers.pop() !== character) {
+        return false;
+      }
+    }
+  }
+  return quote === null && expectedClosers.length === 0;
 }
 
 function defaultTaskKind(

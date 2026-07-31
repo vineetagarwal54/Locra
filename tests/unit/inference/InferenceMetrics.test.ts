@@ -155,6 +155,33 @@ describe('InferenceMetricsRecorder', () => {
     });
   });
 
+  it('freezes elapsed time, the active stage, and completed stage durations on cancellation', () => {
+    const clock = makeClock();
+    const recorder = new InferenceMetricsRecorder(clock.now);
+
+    clock.advanceTo(100);
+    recorder.markRequestStart();
+    recorder.startLatencyStage('image-preprocessing');
+    clock.advanceTo(180);
+    recorder.endLatencyStage('image-preprocessing');
+    recorder.startLatencyStage('extraction-formatting');
+    clock.advanceTo(230);
+
+    const snapshot = recorder.captureExecutionTimings();
+    clock.advanceTo(900);
+    recorder.endLatencyStage('extraction-formatting');
+
+    expect(snapshot).toEqual({
+      elapsedMs: 130,
+      activeStage: 'extraction-formatting',
+      lastCompletedStage: 'image-preprocessing',
+      stages: [
+        { stage: 'image-preprocessing', durationMs: 80, completed: true },
+        { stage: 'extraction-formatting', durationMs: 50, completed: false },
+      ],
+    });
+  });
+
   it('throws rather than emitting a partial metrics object when a mark is missing', () => {
     const clock = makeClock();
     const recorder = new InferenceMetricsRecorder(clock.now);

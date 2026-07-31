@@ -15,6 +15,44 @@ export interface ObjectiveInferenceTimings {
   totalEndToEndLatencyMs: number;
 }
 
+export type InferenceLatencyStage =
+  | 'image-preprocessing'
+  | 'model-load'
+  | 'context-assembly'
+  | 'extraction-formatting'
+  | 'extraction-prompt-tokenization'
+  | 'extraction-media-tokenization'
+  | 'extraction-prefill'
+  | 'hidden-generation'
+  | 'evidence-validation'
+  | 'evidence-persistence'
+  | 'visible-answer-startup'
+  | 'visible-answer-formatting'
+  | 'visible-answer-prompt-tokenization'
+  | 'visible-answer-media-tokenization'
+  | 'visible-answer-prefill'
+  | 'visible-generation';
+
+export interface InferenceLatencyStageTiming {
+  readonly stage: InferenceLatencyStage;
+  readonly durationMs: number;
+  readonly completed: boolean;
+}
+
+export interface InferenceExecutionTimings {
+  readonly elapsedMs: number;
+  readonly activeStage: InferenceLatencyStage | null;
+  readonly lastCompletedStage: InferenceLatencyStage | null;
+  readonly stages: readonly InferenceLatencyStageTiming[];
+}
+
+interface MutableLatencyStage {
+  durationMs: number;
+  activeSince: number | null;
+  lastStartedAt: number;
+  completedCount: number;
+}
+
 /**
  * Records lifecycle timestamps for a single inference and computes the five
  * {@link PerformanceMetrics} fields from them. Inject a {@link Clock} for
@@ -37,6 +75,9 @@ export class InferenceMetricsRecorder {
   private answerFirstTokenAt: number | null = null;
   private answerEnd: number | null = null;
   private tokenCount = 0;
+  private readonly latencyStages =
+    new Map<InferenceLatencyStage, MutableLatencyStage>();
+  private lastCompletedLatencyStage: InferenceLatencyStage | null = null;
 
   constructor(now: Clock = Date.now) {
     this.now = now;
@@ -60,6 +101,61 @@ export class InferenceMetricsRecorder {
 
   markRequestStart(): void {
     this.requestStart = this.now();
+  }
+
+  startLatencyStage(stage: InferenceLatencyStage): void {
+    const timestamp = this.now();
+    const existing = this.latencyStages.get(stage);
+    if (existing !== undefined && existing.activeSince !== null) {
+      return;
+    }
+    this.latencyStages.set(stage, {
+      durationMs: existing?.durationMs ?? 0,
+      activeSince: timestamp,
+      lastStartedAt: timestamp,
+      completedCount: existing?.completedCount ?? 0,
+    });
+  }
+
+  endLatencyStage(stage: InferenceLatencyStage): void {
+    const existing = this.latencyStages.get(stage);
+    if (existing === undefined || existing.activeSince === null) {
+      return;
+    }
+    existing.durationMs += Math.max(0, this.now() - existing.activeSince);
+    existing.activeSince = null;
+    existing.completedCount += 1;
+    this.lastCompletedLatencyStage = stage;
+  }
+
+  captureExecutionTimings(): InferenceExecutionTimings {
+    const capturedAt = this.now();
+    const requestStart = this.requestStart ?? capturedAt;
+    let activeStage: InferenceLatencyStage | null = null;
+    let latestActiveStart = Number.NEGATIVE_INFINITY;
+    const stages: InferenceLatencyStageTiming[] = [];
+
+    for (const [stage, timing] of this.latencyStages) {
+      const activeDuration = timing.activeSince === null
+        ? 0
+        : Math.max(0, capturedAt - timing.activeSince);
+      if (timing.activeSince !== null && timing.lastStartedAt >= latestActiveStart) {
+        activeStage = stage;
+        latestActiveStart = timing.lastStartedAt;
+      }
+      stages.push({
+        stage,
+        durationMs: timing.durationMs + activeDuration,
+        completed: timing.activeSince === null && timing.completedCount > 0,
+      });
+    }
+
+    return {
+      elapsedMs: Math.max(0, capturedAt - requestStart),
+      activeStage,
+      lastCompletedStage: this.lastCompletedLatencyStage,
+      stages,
+    };
   }
 
   markPerceptionStart(): void {

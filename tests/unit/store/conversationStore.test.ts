@@ -60,6 +60,7 @@ function planningImage(id: string): ControlledPlanningImage {
       id,
       conversationId: 'conversation-a',
       sourceMessageId: `message-${id}`,
+      ordinal: 0,
       assetRevision: `${id}-v1`,
       assetAvailability: 'available',
       localAssetReference: `/images/${id}.jpg`,
@@ -384,6 +385,126 @@ describe('conversationStore', () => {
           strategy: 'reuse-evidence', imageIds: ['fruit'], evidenceAction: 'reused',
           storedEvidenceUsed: true,
         }),
+      }),
+    }));
+    append.mockRestore();
+  });
+
+  it('keeps an image retry under the original controlled owner', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const controlledImage = planningImage('fruit');
+    history.save({
+      ...conversationWithImage(controlledImage),
+      status: 'errored',
+      messages: [
+        conversationWithImage(controlledImage).messages[0],
+        {
+          ...conversationWithImage(controlledImage).messages[1],
+          status: 'failed',
+          errorMessage: 'Structured extraction failed.',
+        },
+      ],
+    });
+    const orchestrate = jest.fn(() => {
+      throw new Error('legacy semantic routing must not run');
+    });
+    const ids = ['assistant-retry', 'request-retry'];
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: () => ids.shift() ?? 'fallback',
+      contextOrchestrator: { orchestrate } as unknown as ContextOrchestrator,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled',
+        controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
+      },
+      listControlledPlanningImages: () => [controlledImage],
+      visionExecutor: visionExecutorFor([controlledImage]),
+    });
+
+    await store.retryFailedMessage('conversation-a', 'assistant-fruit');
+
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(queue.submitted).toHaveLength(1);
+    expect(queue.submitted[0]?.visionExecutionPlan).toEqual(expect.objectContaining({
+      strategy: 'inspect-and-structure',
+      imageReferenceIds: ['fruit'],
+    }));
+    queue.emit(makeInferenceState('completed', 'Controlled retry response.'));
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      architectureDiagnostics: expect.objectContaining({
+        planOwner: 'turn-planner:v1',
+        legacySemanticDecisionCount: 0,
+      }),
+    }));
+    append.mockRestore();
+  });
+
+  it('registers an attached image identity before controlled planning even without evidence', async () => {
+    const append = jest.spyOn(diagnosticsTraceStore, 'append').mockImplementation(() => {});
+    const queue = new FakeInferenceQueue();
+    const history = new FakeHistoryStore();
+    const controlledImage = {
+      ...planningImage('new-image'),
+      entity: {
+        ...planningImage('new-image').entity,
+        sourceMessageId: 'user-a',
+        localAssetReference: '/durable/new-image.jpg',
+        evidenceIds: [],
+      },
+      aliases: [],
+      evidence: null,
+    };
+    const listControlledPlanningImages = jest.fn(() => {
+      const attachment = history.get('conversation-a')?.messages[0]?.attachments[0];
+      return attachment === undefined ? [] : [controlledImage];
+    });
+    const persistEvidence = jest.fn();
+    const store = createConversationStore({
+      inferenceQueue: queue,
+      historyStore: history,
+      createId: (() => {
+        const ids = [...ID_SEQUENCE];
+        return () => ids.shift() ?? 'fallback';
+      })(),
+      persistImage: async () => '/durable/new-image.jpg',
+      persistEvidence,
+      plannerActivation: {
+        ...DEFAULT_PLANNER_ACTIVATION,
+        configuredMode: 'controlled',
+        controlledScenarioClasses: ['new-image', 'image-follow-up', 'image-comparison'],
+      },
+      listControlledPlanningImages,
+      visionExecutor: visionExecutorFor([controlledImage]),
+    });
+
+    await store.submit('new', { question: 'List the visible items.', imagePath: '/capture.jpg' });
+    queue.emit({
+      ...makeInferenceState('completed',
+        "I couldn't extract reliable visual evidence from this image."),
+      pinnedExtraction: 'Visual evidence unavailable.',
+    });
+
+    expect(listControlledPlanningImages).toHaveBeenCalledTimes(2);
+    expect(queue.submitted[0]?.visionExecutionPlan).toEqual(expect.objectContaining({
+      strategy: 'inspect-and-structure',
+      imageReferenceIds: ['new-image'],
+    }));
+    expect(controlledImage.entity.evidenceIds).toEqual([]);
+    expect(persistEvidence).not.toHaveBeenCalled();
+    expect(history.get('conversation-a')?.messages[0]).toEqual(expect.objectContaining({
+      id: 'user-a',
+      attachments: [expect.objectContaining({ path: '/durable/new-image.jpg' })],
+    }));
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      architectureDiagnostics: expect.objectContaining({
+        planOwner: 'turn-planner:v1',
+        scenarioClass: 'new-image',
+        legacySemanticDecisionCount: 0,
+        vision: expect.objectContaining({ evidenceStatus: 'failed' }),
       }),
     }));
     append.mockRestore();
@@ -951,10 +1072,32 @@ describe('conversationStore', () => {
         uncertainty: [],
         createdAt: '2026-07-26T00:00:00.000Z',
       },
+      executionDiagnostics: {
+        elapsedMs: 900,
+        activeStage: null,
+        lastCompletedStage: 'evidence-validation',
+        stages: [
+          { stage: 'evidence-validation', durationMs: 10, completed: true },
+        ],
+        evidenceState: 'valid-unpersisted',
+        modelId: 'ACTUAL_MODEL',
+        generationConfigId: 'actual-config',
+        pipelineVariantId: 'actual-pipeline',
+        deviceNameModel: 'Pixel',
+        appBuildId: 'build-1',
+      },
     });
 
     expect(append).toHaveBeenCalledWith(expect.objectContaining({
       summary: expect.objectContaining({
+        evidenceState: 'valid',
+        lastCompletedStage: 'evidence-persistence',
+        latencyStages: expect.arrayContaining([
+          expect.objectContaining({
+            stage: 'evidence-persistence',
+            completed: true,
+          }),
+        ]),
         contextSelection: expect.objectContaining({
           groundingVerdict: 'supported',
         }),
@@ -1281,6 +1424,11 @@ describe('conversationStore', () => {
         responseMode: string;
         targetTokenCount: number;
         generationLimit: number;
+        targetTokenBudget: number;
+        emergencyHardCeilingTokens: number;
+        semanticCompletionReached: boolean;
+        gracefulCompletionModeEntered: boolean;
+        actualStopReason: string;
         softTargetTokens: number;
         responseModeHardMaximum: number;
         effectiveNativeGenerationLimit: number;
@@ -1292,10 +1440,60 @@ describe('conversationStore', () => {
       responseMode: 'Medium',
       targetTokenCount: 128,
       generationLimit: 640,
+      targetTokenBudget: 128,
+      emergencyHardCeilingTokens: 640,
+      semanticCompletionReached: true,
+      gracefulCompletionModeEntered: false,
+      actualStopReason: 'model-eos',
       softTargetTokens: 128,
       responseModeHardMaximum: 640,
       effectiveNativeGenerationLimit: 640,
-      generationPlanId: 'visual-description-v2',
+      generationPlanId: 'visual-description-v3',
+    }));
+  });
+
+  it('preserves cancelled elapsed time, stage, evidence, and actual runtime attribution', async () => {
+    const setSpy = jest.spyOn(storage, 'set');
+    setSpy.mockClear();
+    const { store, queue } = makeStore();
+    await store.submit('new', { question: 'Read this image.', imagePath: '/capture.jpg' });
+
+    queue.emit({
+      ...makeInferenceState('cancelled'),
+      executionDiagnostics: {
+        elapsedMs: 3_250,
+        activeStage: 'hidden-generation',
+        lastCompletedStage: 'visible-answer-prefill',
+        stages: [
+          { stage: 'visible-answer-prefill', durationMs: 800, completed: true },
+          { stage: 'hidden-generation', durationMs: 2_100, completed: false },
+        ],
+        evidenceState: 'cancelled',
+        modelId: 'ACTUAL_DEVICE_MODEL',
+        generationConfigId: 'actual-device-config',
+        pipelineVariantId: 'qwen-visible-sampling-v2',
+        deviceNameModel: 'Pixel 8 Pro',
+        appBuildId: 'physical-build-42',
+      },
+    });
+
+    const recordCall = [...setSpy.mock.calls].reverse().find(([key]) =>
+      String(key).startsWith('diagnostics:turn:record:'),
+    );
+    const persisted = JSON.parse(String(recordCall?.[1])) as {
+      summary: Record<string, unknown>;
+    };
+    expect(persisted.summary).toEqual(expect.objectContaining({
+      totalTimeMs: 3_250,
+      activeStage: 'hidden-generation',
+      lastCompletedStage: 'visible-answer-prefill',
+      evidenceState: 'cancelled',
+      semanticCompletionReached: false,
+      actualStopReason: 'cancelled',
+      modelId: 'ACTUAL_DEVICE_MODEL',
+      generationConfigId: 'actual-device-config',
+      deviceNameModel: 'Pixel 8 Pro',
+      appBuildId: 'physical-build-42',
     }));
   });
 

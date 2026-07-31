@@ -6,6 +6,7 @@ export interface ImageEntity {
   readonly id: string;
   readonly conversationId: string;
   readonly sourceMessageId: string;
+  readonly ordinal: number;
   readonly assetRevision: string;
   readonly assetAvailability: AssetAvailability;
   readonly localAssetReference: string;
@@ -18,6 +19,7 @@ export interface CreateImageEntityInput {
   readonly id: string;
   readonly conversationId: string;
   readonly sourceMessageId: string;
+  readonly ordinal?: number;
   readonly localAssetReference: string;
   readonly assetRevision: string;
   readonly contentHash?: string | null;
@@ -37,6 +39,7 @@ interface ImageEntityRow {
   readonly created_at: number;
   readonly updated_at: number;
   readonly source_message_id: string;
+  readonly message_ordinal: number;
 }
 
 export class ImageEntityRepository {
@@ -80,8 +83,8 @@ export class ImageEntityRepository {
       this.driver.runSync(
         `INSERT OR IGNORE INTO message_image
           (message_id, image_asset_id, ordinal, created_at)
-         VALUES (?, ?, 0, ?)`,
-        [input.sourceMessageId, input.id, createdAt],
+         VALUES (?, ?, ?, ?)`,
+        [input.sourceMessageId, input.id, input.ordinal ?? 0, createdAt],
       );
     });
     return this.require(input.id);
@@ -92,7 +95,8 @@ export class ImageEntityRepository {
       `SELECT asset.id, asset.conversation_id, asset.local_path,
               asset.asset_revision, asset.asset_availability,
               asset.created_at, asset.updated_at,
-              link.message_id AS source_message_id
+              link.message_id AS source_message_id,
+              link.ordinal AS message_ordinal
          FROM image_asset asset
          JOIN message_image link ON link.image_asset_id = asset.id
         WHERE asset.id = ?
@@ -108,7 +112,8 @@ export class ImageEntityRepository {
       `SELECT asset.id, asset.conversation_id, asset.local_path,
               asset.asset_revision, asset.asset_availability,
               asset.created_at, asset.updated_at,
-              link.message_id AS source_message_id
+              link.message_id AS source_message_id,
+              link.ordinal AS message_ordinal
          FROM image_asset asset
          JOIN message_image link ON link.image_asset_id = asset.id
         WHERE asset.conversation_id = ?
@@ -171,6 +176,7 @@ export class ImageEntityRepository {
       id: row.id,
       conversationId: row.conversation_id,
       sourceMessageId: row.source_message_id,
+      ordinal: row.message_ordinal,
       assetRevision: row.asset_revision,
       assetAvailability: row.asset_availability,
       localAssetReference: row.local_path,

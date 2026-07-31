@@ -47,7 +47,10 @@ describe('response modes', () => {
       const instruction = getResponseModeInstruction(mode);
       expect(instruction).toContain(String(getResponseTokenBudget(mode)));
       expect(instruction).toMatch(/soft target/i);
-      expect(instruction).toMatch(/finish the current sentence and section cleanly/i);
+      expect(instruction).toMatch(/finish the current sentence, paragraph, and section cleanly/i);
+      expect(instruction).toMatch(/complete every item and structure/i);
+      expect(instruction).toMatch(/closing lists, code blocks, and structured data/i);
+      expect(instruction).toMatch(/omit optional detail|compress the remaining required points/i);
       // A soft target must never read as a requirement to fill space.
       expect(instruction).toMatch(/never add filler/i);
     },

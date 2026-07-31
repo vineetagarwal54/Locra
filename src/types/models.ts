@@ -1,5 +1,6 @@
 // Shared domain types — data-model.md is the source of truth for field shapes.
 
+import type { InferenceExecutionTimings } from '../inference/InferenceMetrics';
 import type { InferenceTrace } from '../inference/InferenceTrace';
 import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
@@ -226,6 +227,7 @@ export interface InferenceRequest {
   question: string;
   softTargetTokens?: number;
   hardSafetyLimitTokens?: number;
+  gracefulCompletionReserveTokens?: number;
   generationPlanId?: string;
   generationTaskKind?: import('../inference/GenerationTuning').GenerationTaskKind;
   loopDetectionEligible?: boolean;
@@ -245,6 +247,24 @@ export interface InferenceState {
   hiddenEvidence?: HiddenVisualEvidence | null;
   objectiveResult?: ObjectiveInferenceResultRecord | null;
   inferenceTrace?: InferenceTrace | null;
+  executionDiagnostics?: InferenceExecutionDiagnostics | null;
+}
+
+export type InferenceEvidenceState =
+  | 'not-applicable'
+  | 'pending'
+  | 'valid-unpersisted'
+  | 'valid'
+  | 'failed'
+  | 'cancelled';
+
+export interface InferenceExecutionDiagnostics extends InferenceExecutionTimings {
+  readonly evidenceState: InferenceEvidenceState;
+  readonly modelId: string;
+  readonly generationConfigId: string;
+  readonly pipelineVariantId: string;
+  readonly deviceNameModel: string;
+  readonly appBuildId: string;
 }
 
 export interface ModelState {

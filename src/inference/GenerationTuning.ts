@@ -29,20 +29,42 @@ export interface SamplingProfile {
 export type GenerationTaskKind =
   | 'concise-prose'
   | 'detailed-prose'
+  | 'coding'
+  | 'comparison'
+  | 'multi-part-explanation'
+  | 'detailed-instructions'
   | 'visual-description'
   | 'visual-extraction'
   | 'long-synthesis'
   | 'continuation'
   | 'structured-extraction';
 
+export type GenerationActualStopReason =
+  | 'model-eos'
+  | 'semantic-completion'
+  | 'emergency-ceiling'
+  | 'loop-detected'
+  | 'cancelled'
+  | 'failed';
+
 export interface GenerationPlan {
+  /** Guidance for answer length; reaching it never directly stops generation. */
+  readonly targetTokenBudget: number;
+  /** Last-resort native ceiling used only to protect the device/runtime. */
+  readonly emergencyHardCeilingTokens: number;
+  /** Output headroom in which optional content should be shortened and closed cleanly. */
+  readonly gracefulCompletionReserveTokens: number;
+  /** Compatibility alias for targetTokenBudget. */
   readonly softTargetTokens: number;
+  /** Compatibility alias for emergencyHardCeilingTokens. */
   readonly hardSafetyLimitTokens: number;
   readonly samplingProfile: SamplingProfile;
   readonly loopDetectionEligible: boolean;
   readonly diagnosticsId: string;
   readonly taskKind: GenerationTaskKind;
 }
+
+export type StructuredVisionRequestKind = 'extraction' | 'extractionRetry';
 
 export function createGenerationPlan(
   mode: ResponseMode,
@@ -61,12 +83,32 @@ export function createGenerationPlan(
       config.generationLimit,
     );
   }
+  if (isStructurallyBoundedRequest(question, taskModality)) {
+    const target = Math.min(config.answerTargetTokens, mode === 'Low' ? 64 : 96);
+    return plan(
+      target,
+      config.generationLimit,
+      'structured-visible-v2',
+      'structured-extraction',
+      config.generationLimit,
+    );
+  }
+  const requestedTaskKind = classifyRequestedTaskKind(question);
+  if (requestedTaskKind !== null) {
+    return plan(
+      config.answerTargetTokens,
+      config.generationLimit,
+      `${requestedTaskKind}-v1`,
+      requestedTaskKind,
+      config.generationLimit,
+    );
+  }
   const detailed = classification.requestsDetailedAnswer || hasDetailedRequestCue(question);
   if (detailed) {
     return plan(
       config.answerTargetTokens,
       config.generationLimit,
-      'detailed-prose-v2',
+      'detailed-prose-v3',
       'detailed-prose',
       config.generationLimit,
     );
@@ -80,16 +122,6 @@ export function createGenerationPlan(
       config.generationLimit,
     );
   }
-  if (isStructurallyBoundedRequest(question, taskModality)) {
-    const softTarget = Math.min(config.answerTargetTokens, mode === 'Low' ? 64 : 96);
-    return plan(
-      softTarget,
-      Math.min(config.generationLimit, softTarget + 128),
-      'structured-extraction-v1',
-      'structured-extraction',
-      config.generationLimit,
-    );
-  }
   if (taskModality === 'image' && isVisualExtractionRequest(question, classification)) {
     return plan(
       Math.min(config.answerTargetTokens, mode === 'High' ? 320 : mode === 'Medium' ? 256 : 160),
@@ -100,18 +132,20 @@ export function createGenerationPlan(
     );
   }
   if (taskModality === 'image') {
+    const softTarget = Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128);
     return plan(
-      Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128),
+      softTarget,
       config.generationLimit,
-      'visual-description-v2',
+      'visual-description-v3',
       'visual-description',
       config.generationLimit,
     );
   }
+  const softTarget = resolveGenerationTarget(mode, classification);
   return plan(
-    resolveGenerationTarget(mode, classification),
+    softTarget,
     config.generationLimit,
-    'concise-prose-v2',
+    'concise-prose-v4',
     'concise-prose',
     config.generationLimit,
   );
@@ -126,8 +160,8 @@ export function createGenerationPlanFromTurnPlan(
     return plan(
       config.answerTargetTokens,
       config.generationLimit,
-      'turn-plan-comparison-v1',
-      'detailed-prose',
+      'turn-plan-comparison-v2',
+      'comparison',
       config.generationLimit,
     );
   }
@@ -143,19 +177,40 @@ export function createGenerationPlanFromTurnPlan(
   if (taskKind === 'clarification') {
     return plan(
       Math.min(config.answerTargetTokens, 96),
-      Math.min(config.generationLimit, 224),
-      'turn-plan-clarification-v1',
+      config.generationLimit,
+      'turn-plan-clarification-v2',
       'concise-prose',
       config.generationLimit,
     );
   }
+  const softTarget = Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128);
   return plan(
-    Math.min(config.answerTargetTokens, mode === 'Low' ? 96 : 128),
+    softTarget,
     config.generationLimit,
-    'turn-plan-image-answer-v1',
+    'turn-plan-image-answer-v2',
     'visual-description',
     config.generationLimit,
   );
+}
+
+export function createStructuredVisionGenerationPlan(
+  kind: StructuredVisionRequestKind,
+): GenerationPlan {
+  return kind === 'extraction'
+    ? plan(
+        128,
+        192,
+        'structured-vision-extraction-v2',
+        'structured-extraction',
+        192,
+      )
+    : plan(
+        64,
+        96,
+        'structured-vision-repair-v2',
+        'structured-extraction',
+        96,
+      );
 }
 
 export function resolveGenerationTarget(
@@ -188,23 +243,101 @@ function plan(
   taskKind: GenerationTaskKind,
   responseModeMaximum: number,
 ): GenerationPlan {
-  const hardSafetyLimitTokens = Math.max(
+  const emergencyHardCeilingTokens = Math.max(
     1,
     Math.min(responseModeMaximum, requestedHardLimit),
   );
-  const requiredHeadroom = Math.min(128, Math.max(0, hardSafetyLimitTokens - 1));
-  const softTargetTokens = Math.max(
+  const gracefulCompletionReserveTokens = resolveGracefulCompletionReserve(
+    emergencyHardCeilingTokens,
+  );
+  const targetTokenBudget = Math.max(
     1,
-    Math.min(requestedSoftTarget, hardSafetyLimitTokens - requiredHeadroom),
+    Math.min(
+      requestedSoftTarget,
+      Math.max(1, emergencyHardCeilingTokens - gracefulCompletionReserveTokens),
+    ),
   );
   return {
-    softTargetTokens,
-    hardSafetyLimitTokens,
+    targetTokenBudget,
+    emergencyHardCeilingTokens,
+    gracefulCompletionReserveTokens,
+    softTargetTokens: targetTokenBudget,
+    hardSafetyLimitTokens: emergencyHardCeilingTokens,
     samplingProfile: QWEN_VISIBLE_SAMPLING_PROFILE,
     loopDetectionEligible: true,
     diagnosticsId,
     taskKind,
   };
+}
+
+function resolveGracefulCompletionReserve(emergencyHardCeilingTokens: number): number {
+  if (emergencyHardCeilingTokens <= 2) {
+    return 0;
+  }
+  if (emergencyHardCeilingTokens <= 192) {
+    return Math.min(24, emergencyHardCeilingTokens - 1);
+  }
+  if (emergencyHardCeilingTokens <= 320) {
+    return 64;
+  }
+  if (emergencyHardCeilingTokens <= 640) {
+    return 96;
+  }
+  return Math.min(
+    128,
+    emergencyHardCeilingTokens - 1,
+  );
+}
+
+function classifyRequestedTaskKind(question: string): GenerationTaskKind | null {
+  if (isComparisonRequest(question)) {
+    return 'comparison';
+  }
+  if (isCodingRequest(question)) {
+    return 'coding';
+  }
+  if (isDetailedInstructionRequest(question)) {
+    return 'detailed-instructions';
+  }
+  if (isMultiPartRequest(question)) {
+    return 'multi-part-explanation';
+  }
+  return null;
+}
+
+function isCodingRequest(question: string): boolean {
+  return (
+    /```/.test(question)
+    || /\b(?:write|implement|create|generate|provide|show|refactor|debug|fix|complete|review)\b[\s\S]{0,80}\b(?:code|function|class|method|script|program|query|regex|component|api|typescript|javascript|python|java|kotlin|sql)\b/i
+      .test(question)
+  );
+}
+
+function isComparisonRequest(question: string): boolean {
+  return /\b(?:compare|comparison|contrast|versus|vs\.?|differences?|trade-?offs?|pros and cons)\b/i
+    .test(question);
+}
+
+function isDetailedInstructionRequest(question: string): boolean {
+  return (
+    /\b(?:step[- ]by[- ]step|detailed instructions?|setup guide|walk me through)\b/i.test(question)
+    || /\b(?:how (?:do|can|should) i|how to)\b[\s\S]{0,100}\b(?:install|configure|set up|build|deploy|migrate|repair|troubleshoot)\b/i
+      .test(question)
+    || /\b(?:instructions?|guide)\b[\s\S]{0,80}\b(?:install|configure|set up|build|deploy|migrate|repair|troubleshoot)\b/i
+      .test(question)
+  );
+}
+
+function isMultiPartRequest(question: string): boolean {
+  if ((question.match(/\?/g) ?? []).length >= 2) {
+    return true;
+  }
+  if (/\b(?:address|answer|cover|explain|describe)\s+(?:all|each|both|the following)\b/i.test(question)) {
+    return true;
+  }
+  const asksForExplanation = /\b(?:address|answer|cover|explain|describe|include)\b/i.test(question);
+  const commaSeparatedItems = (question.match(/,/g) ?? []).length >= 2;
+  return asksForExplanation && commaSeparatedItems && /\b(?:and|plus)\b/i.test(question);
 }
 
 function isStructurallyBoundedRequest(

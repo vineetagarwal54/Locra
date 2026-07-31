@@ -2,6 +2,7 @@ import type { ImageEntity } from '../persistence/ImageEntityRepository';
 import type { CanonicalConversationSnapshot, ContextMemoryFact } from '../types/models';
 
 import type { IndependentRecoveryCandidate } from './IndependentRoutingRecovery';
+import { isToolRefusalResponse } from './ToolRefusalRecovery';
 
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'did', 'do', 'does', 'for', 'from', 'how', 'i', 'in',
@@ -27,17 +28,37 @@ export function buildRuntimeIndependentRecoveryCandidates(
 ): IndependentRecoveryCandidate[] {
   const queryTokens = meaningfulTokens(snapshot.currentMessage.text);
   const candidates: IndependentRecoveryCandidate[] = [];
+  const eligibleMessages = snapshot.priorMessages.filter((message) =>
+    message.status === 'completed'
+    && (
+      message.role === 'user'
+      || (message.role === 'assistant' && !isToolRefusalResponse(message.text))
+    ),
+  );
+  const uniqueSingleTokenMatches = findUniqueSingleTokenMatches(
+    queryTokens,
+    eligibleMessages.map((message) => ({
+      id: message.id,
+      tokens: meaningfulTokens(message.text),
+    })),
+  );
+  const directSlots = possessiveFactSlots(snapshot.currentMessage.text);
 
-  for (const message of snapshot.priorMessages) {
-    if (message.role !== 'user' || message.status !== 'completed') {
+  for (const message of eligibleMessages) {
+    const sourceTokens = meaningfulTokens(message.text);
+    const hasDirectSlot = message.role === 'user'
+      && [...directSlots].some((slot) => sourceHasPossessiveSlot(message.text, slot));
+    if (
+      !hasBoundedExactOverlap(queryTokens, sourceTokens)
+      && !uniqueSingleTokenMatches.has(message.id)
+      && !hasDirectSlot
+    ) {
       continue;
     }
-    if (!hasBoundedExactOverlap(queryTokens, meaningfulTokens(message.text))) {
-      continue;
-    }
+    const userFact = message.role === 'user' && (isUserFact(message.text) || hasDirectSlot);
     candidates.push({
-      id: `${isUserFact(message.text) ? 'user-fact' : 'same-chat'}:${message.id}`,
-      kind: isUserFact(message.text) ? 'user-fact' : 'same-chat-lexical',
+      id: `${userFact ? 'user-fact' : 'same-chat'}:${message.id}`,
+      kind: userFact ? 'user-fact' : 'same-chat-lexical',
       sourceMessageId: message.id,
       content: message.text,
       exactOrDirect: true,
@@ -185,6 +206,51 @@ function hasBoundedExactOverlap(
     if (matches >= 2) return true;
   }
   return false;
+}
+
+function findUniqueSingleTokenMatches(
+  query: ReadonlySet<string>,
+  sources: readonly {
+    readonly id: string;
+    readonly tokens: ReadonlySet<string>;
+  }[],
+): ReadonlySet<string> {
+  const matchedSourceIds = new Set<string>();
+  for (const token of query) {
+    if (!isStrongExactToken(token)) continue;
+    const matches = sources.filter((source) => source.tokens.has(token));
+    if (matches.length === 1 && matches[0] !== undefined) {
+      matchedSourceIds.add(matches[0].id);
+    }
+  }
+  return matchedSourceIds;
+}
+
+function isStrongExactToken(token: string): boolean {
+  return token.length >= 4 && ![
+    'answer', 'detail', 'explain', 'image', 'meaning', 'question', 'thing',
+  ].includes(token);
+}
+
+function possessiveFactSlots(value: string): ReadonlySet<string> {
+  const slots = new Set<string>();
+  const pattern = /\b(?:my|our)\s+([a-z0-9]+(?:-[a-z0-9]+)*)\b/gi;
+  for (const match of value.matchAll(pattern)) {
+    const slot = match[1]?.toLowerCase();
+    if (slot !== undefined && isStrongExactToken(slot)) {
+      slots.add(slot);
+    }
+  }
+  return slots;
+}
+
+function sourceHasPossessiveSlot(value: string, slot: string): boolean {
+  const tokens = normalizedTokens(value);
+  return tokens.some(
+    (token, index) =>
+      (token === 'my' || token === 'our')
+      && tokens[index + 1] === slot,
+  );
 }
 
 function isUserFact(value: string): boolean {

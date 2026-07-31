@@ -125,9 +125,11 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             kind: request.kind,
             softTargetTokens: request.softTargetTokens,
             hardSafetyLimitTokens: request.hardSafetyLimitTokens,
+            gracefulCompletionReserveTokens: request.gracefulCompletionReserveTokens,
             generationPlanId: request.generationPlanId,
             generationTaskKind: request.generationTaskKind,
             loopDetectionEligible: request.loopDetectionEligible,
+            onRuntimeStage: request.onRuntimeStage,
             signal: controller.signal,
             onToken: (cumulativeText, generatedTokenCount) => {
               setState({

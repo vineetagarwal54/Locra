@@ -12,6 +12,7 @@ const hiddenEvidence: HiddenVisualEvidence = {
   imagePath: '/images/market.jpg',
   sourceQuestion: 'What is visible?',
   subjectObject: 'market stall',
+  visibleObjects: ['apple', 'banana'],
   visibleFeatures: ['apples', 'two price labels'],
   visibleText: ['$3.99', 'BEST BY 2027-08-10', 'COUNT 12', 'SN A-184'],
   visibleCondition: 'readable',
@@ -62,7 +63,8 @@ describe('StructuredImageEvidenceRepository', () => {
       summary: expect.stringContaining('market stall'),
       status: 'complete',
       visibleObjects: expect.arrayContaining([
-        expect.objectContaining({ label: 'market stall' }),
+        expect.objectContaining({ label: 'apple' }),
+        expect.objectContaining({ label: 'banana' }),
       ]),
       extractedText: expect.arrayContaining([
         expect.objectContaining({ text: '$3.99' }),
@@ -77,6 +79,8 @@ describe('StructuredImageEvidenceRepository', () => {
         notes: ['one label is partly obscured'],
       }),
     }));
+    expect(saved.visibleObjects.map((object) => object.label)).not.toContain('$3.99');
+    expect(saved.extractedText.map((span) => span.text)).not.toContain('apple');
     expect(repository.getLatestCompatible('image-1', 'asset-v1')).toEqual(saved);
   });
 

@@ -110,25 +110,30 @@ export class StructuredImageEvidenceRepository {
   }
 
   saveFromHiddenEvidence(input: SaveHiddenEvidenceInput): StructuredImageEvidence {
-    const objectId = 'object-1';
+    const objectLabels = uniqueStrings(
+      input.hiddenEvidence.visibleObjects ?? [input.hiddenEvidence.subjectObject],
+    ).slice(0, 12);
+    const visibleObjects = objectLabels.map((label, index) => ({
+      id: `object-${index + 1}`,
+      label,
+      attributes:
+        index === 0 ? uniqueStrings(input.hiddenEvidence.visibleFeatures).slice(0, 12) : [],
+      confidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
+    }));
+    const unambiguousObjectId = visibleObjects.length === 1 ? visibleObjects[0].id : undefined;
     const normalized: NormalizedExtraction = {
       summary: [
         input.hiddenEvidence.subjectObject,
         input.hiddenEvidence.visibleCondition,
       ].filter((value) => value.trim() !== '').join(' — '),
-      visibleObjects: [{
-        id: objectId,
-        label: input.hiddenEvidence.subjectObject,
-        attributes: [...input.hiddenEvidence.visibleFeatures],
-        confidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
-      }],
-      extractedText: input.hiddenEvidence.visibleText.map((text) => ({
+      visibleObjects,
+      extractedText: uniqueStrings(input.hiddenEvidence.visibleText).slice(0, 16).map((text) => ({
         text,
         confidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
-        objectId,
+        ...(unambiguousObjectId === undefined ? {} : { objectId: unambiguousObjectId }),
       })),
-      numericValues: input.hiddenEvidence.visibleText.flatMap(
-        (text) => numericEvidenceFromText(text, objectId),
+      numericValues: uniqueStrings(input.hiddenEvidence.visibleText).slice(0, 16).flatMap(
+        (text) => numericEvidenceFromText(text, unambiguousObjectId),
       ),
       uncertainty: {
         overallConfidence: confidenceFromUncertainty(input.hiddenEvidence.uncertainty),
@@ -282,7 +287,7 @@ function failedExtraction(): NormalizedExtraction {
   };
 }
 
-function numericEvidenceFromText(text: string, objectId: string): NumericEvidence[] {
+function numericEvidenceFromText(text: string, objectId?: string): NumericEvidence[] {
   const price = text.match(/[$€£]\s?\d+(?:[.,]\d{1,2})?/);
   if (price !== null) {
     return [{
@@ -290,7 +295,7 @@ function numericEvidenceFromText(text: string, objectId: string): NumericEvidenc
       value: price[0].replace(/\s/g, ''),
       rawText: text,
       confidence: 0.95,
-      objectId,
+      ...(objectId === undefined ? {} : { objectId }),
     }];
   }
   const date = text.match(/\b\d{4}-\d{2}-\d{2}\b/);
@@ -300,7 +305,7 @@ function numericEvidenceFromText(text: string, objectId: string): NumericEvidenc
       value: date[0],
       rawText: text,
       confidence: 0.9,
-      objectId,
+      ...(objectId === undefined ? {} : { objectId }),
     }];
   }
   const count = /\bcount\s*[:#]?\s*(\d+)\b/i.exec(text);
@@ -310,7 +315,7 @@ function numericEvidenceFromText(text: string, objectId: string): NumericEvidenc
       value: count[1],
       rawText: text,
       confidence: 0.9,
-      objectId,
+      ...(objectId === undefined ? {} : { objectId }),
     }];
   }
   const serial = /\b(?:sn|serial)\s*[:#]?\s*([a-z0-9-]+)\b/i.exec(text);
@@ -320,7 +325,7 @@ function numericEvidenceFromText(text: string, objectId: string): NumericEvidenc
       value: serial[1],
       rawText: text,
       confidence: 0.9,
-      objectId,
+      ...(objectId === undefined ? {} : { objectId }),
     }];
   }
   return [];

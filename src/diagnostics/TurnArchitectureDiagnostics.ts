@@ -67,6 +67,7 @@ export type VisionEvidenceDiagnosticStatus =
   | 'complete'
   | 'partial'
   | 'failed'
+  | 'cancelled'
   | 'stale'
   | 'unavailable';
 
@@ -109,14 +110,20 @@ export function createTurnArchitectureDiagnostics(input: {
 }): TurnArchitectureDiagnostics {
   const plan = input.planning.plan;
   const legacyExecution = input.activation.semanticAuthority === 'legacy';
+  const legacySemanticDecisionCount =
+    input.legacySemanticDecisionCount ?? (legacyExecution ? 1 : 0);
+  if (!legacyExecution && legacySemanticDecisionCount !== 0) {
+    throw new Error(
+      'Whole-turn ownership invariant violated: controlled turns cannot use legacy semantics.',
+    );
+  }
   return {
     authorityMode: input.activation.authorityMode,
     planOwner: input.activation.planOwner,
     scenarioClass: input.scenarioClass,
     executedPlanId: legacyExecution ? `legacy:${plan.turnId}` : plan.turnId,
     executedPlanVersion: legacyExecution ? 'legacy-routing-v1' : plan.planVersion,
-    legacySemanticDecisionCount:
-      input.legacySemanticDecisionCount ?? (legacyExecution ? 1 : 0),
+    legacySemanticDecisionCount,
     executedStages: [],
     executionResult: 'planned',
     vision: visionDiagnosticFor(plan, input.missingImageIds ?? []),
@@ -218,6 +225,8 @@ export function withTerminalVisionEvidenceDiagnostic(
       evidenceAction: input.hiddenEvidencePresent ? 'freshly-structured' : 'not-produced',
       evidenceStatus: input.hiddenEvidencePresent
         ? 'complete'
+        : input.terminalStatus === 'cancelled'
+          ? 'cancelled'
         : input.extractionFailurePresent
           ? 'failed'
           : 'not-applicable',
@@ -229,11 +238,15 @@ export function withControlledExecutionDiagnostic(
   diagnostics: TurnArchitectureDiagnostics,
   audit: ControlledImageTurnAudit,
 ): TurnArchitectureDiagnostics {
+  assertControlledTurnOwnership(diagnostics);
   if (audit.semanticAuthority !== diagnostics.planOwner) {
     throw new Error('Controlled execution owner diverged from architecture diagnostics.');
   }
   if (audit.stagePlanIds.some((stage) => stage.planId !== diagnostics.executedPlanId)) {
     throw new Error('Controlled execution stage used a different TurnPlan ID.');
+  }
+  if (audit.legacySemanticDecisionCount !== 0) {
+    throw new Error('Controlled execution invoked a legacy semantic decision.');
   }
   return {
     ...diagnostics,
@@ -250,6 +263,19 @@ export function withControlledExecutionDiagnostic(
       storedEvidenceUsed: audit.storedEvidenceUsed,
     },
   };
+}
+
+export function assertControlledTurnOwnership(
+  diagnostics: TurnArchitectureDiagnostics,
+): void {
+  if (
+    diagnostics.planOwner === 'turn-planner:v1'
+    && diagnostics.legacySemanticDecisionCount !== 0
+  ) {
+    throw new Error(
+      'Whole-turn ownership invariant violated: controlled turns cannot use legacy semantics.',
+    );
+  }
 }
 
 export function serializeTurnArchitectureDiagnostics(
@@ -332,7 +358,7 @@ function visionDiagnosticFor(
 function evidenceStatusForAudit(
   audit: ControlledImageTurnAudit,
 ): VisionEvidenceDiagnosticStatus {
-  if (audit.result === 'cancelled') return 'failed';
+  if (audit.result === 'cancelled') return 'cancelled';
   if (audit.evidenceStatus === 'partial') return 'partial';
   if (
     audit.evidenceStatus === 'asset-unavailable'

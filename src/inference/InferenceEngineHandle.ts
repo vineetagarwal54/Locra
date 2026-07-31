@@ -52,9 +52,12 @@ export interface EngineGenerateRequest {
   /** Effective output cap selected for this task; passed to native `n_predict`. */
   softTargetTokens?: number;
   hardSafetyLimitTokens?: number;
+  gracefulCompletionReserveTokens?: number;
   generationPlanId?: string;
   generationTaskKind?: GenerationTaskKind;
   loopDetectionEligible?: boolean;
+  /** Request-scoped native phase events used only for latency diagnostics. */
+  onRuntimeStage?: (event: GenerationRuntimeStageEvent) => void;
 }
 
 export interface EngineGenerateResult {
@@ -75,11 +78,28 @@ export interface EngineGenerateResult {
 }
 
 export interface GenerationRuntimeDiagnostics {
+  readonly targetTokenBudget?: number;
+  readonly emergencyHardCeilingTokens?: number;
+  readonly semanticCompletionReached?: boolean;
+  readonly gracefulCompletionModeEntered?: boolean;
+  readonly actualStopReason?: import('./GenerationTuning').GenerationActualStopReason;
   readonly responseModeHardMaximum: number;
   readonly effectiveNativeGenerationLimit: number;
   readonly softTargetTokens: number;
   readonly generationPlanId: string;
   readonly taskKind: GenerationTaskKind;
+}
+
+export type GenerationRuntimeStage =
+  | 'prompt-formatting'
+  | 'prompt-tokenization'
+  | 'media-tokenization'
+  | 'prefill'
+  | 'generation';
+
+export interface GenerationRuntimeStageEvent {
+  readonly stage: GenerationRuntimeStage;
+  readonly status: 'started' | 'completed';
 }
 
 /** Runtime-neutral contract consumed by the single-flight inference queue. */

@@ -184,6 +184,11 @@ describe('QwenLlamaRuntime lifecycle', () => {
       expect.any(Function),
     );
     expect(result.generationDiagnostics).toEqual({
+      targetTokenBudget: 128,
+      emergencyHardCeilingTokens: 640,
+      semanticCompletionReached: true,
+      gracefulCompletionModeEntered: false,
+      actualStopReason: 'model-eos',
       responseModeHardMaximum: 640,
       effectiveNativeGenerationLimit: 640,
       softTargetTokens: 128,

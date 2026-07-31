@@ -93,6 +93,7 @@ import type {
   Draft,
   GenerationFinishReason,
   InferenceRequest,
+  InferenceExecutionDiagnostics,
   InferenceState,
   MessageStatus,
   PerformanceMetrics,
@@ -173,6 +174,10 @@ interface ActiveGeneration {
   requestKind: DiagnosticRequestKind;
   imageSupplied: boolean;
   reinferenceImageAssetId?: string;
+  evidencePersistence?: {
+    readonly durationMs: number;
+    readonly completed: boolean;
+  };
   lastObservedText: string;
   lastCheckpointText: string;
   lastCheckpointAt: number;
@@ -292,17 +297,24 @@ export class ConversationStore implements IConversationStore {
       seedText: '',
     };
     let planningConversation = updatedConversation;
+    if (durableRequest.imagePath !== null) {
+      // Image identity is durable before planning or extraction. Evidence is a
+      // later, independently validated record and may legitimately remain absent.
+      this.dependencies.historyStore.save(updatedConversation);
+      planningConversation =
+        this.dependencies.historyStore.get(resolvedConversationId) ?? updatedConversation;
+    }
     let planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
     const controlledPreflight =
       this.dependencies.plannerActivation.configuredMode === 'controlled'
       && !this.dependencies.plannerActivation.rollbackToLegacy
       && (durableRequest.imagePath !== null || planningImages.length > 0);
     if (controlledPreflight) {
-      // Persist the canonical user/image identity before controlled planning so
-      // image candidates use stable repository IDs rather than local paths.
-      this.dependencies.historyStore.save(updatedConversation);
+      // Persist the current message before controlled planning so references use
+      // canonical source-message IDs rather than transient local state.
+      this.dependencies.historyStore.save(planningConversation);
       planningConversation =
-        this.dependencies.historyStore.get(resolvedConversationId) ?? updatedConversation;
+        this.dependencies.historyStore.get(resolvedConversationId) ?? planningConversation;
       planningImages = this.dependencies.listControlledPlanningImages(resolvedConversationId);
     }
     const snapshot = createCanonicalConversationSnapshot(
@@ -394,6 +406,8 @@ export class ConversationStore implements IConversationStore {
     activeGeneration.softTargetTokens = generationPlan.softTargetTokens;
     inferenceRequest.softTargetTokens = activeGeneration.softTargetTokens;
     inferenceRequest.hardSafetyLimitTokens = generationPlan.hardSafetyLimitTokens;
+    inferenceRequest.gracefulCompletionReserveTokens =
+      generationPlan.gracefulCompletionReserveTokens;
     inferenceRequest.generationPlanId = generationPlan.diagnosticsId;
     inferenceRequest.generationTaskKind = generationPlan.taskKind;
     inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
@@ -484,9 +498,16 @@ export class ConversationStore implements IConversationStore {
         if (executedVision === null) {
           throw new Error('Controlled vision execution result is unavailable.');
         }
-        const imagePath = executedVision.imageInputs.find(
+        const pixelInput = executedVision.imageInputs.find(
           (image) => image.localAssetReference !== null,
-        )?.localAssetReference ?? null;
+        );
+        const imagePath = pixelInput?.localAssetReference ?? null;
+        if (
+          pixelInput !== undefined
+          && pixelInput.sourceMessageId !== input.activeGeneration.originatingUserMessageId
+        ) {
+          input.activeGeneration.reinferenceImageAssetId = pixelInput.imageId;
+        }
         const inferenceRequest = this.createInferenceRequest(
           input.activeGeneration,
           {
@@ -498,6 +519,8 @@ export class ConversationStore implements IConversationStore {
         inferenceRequest.visionExecutionPlan = authoritativePlan.vision;
         inferenceRequest.softTargetTokens = generationPlan.softTargetTokens;
         inferenceRequest.hardSafetyLimitTokens = generationPlan.hardSafetyLimitTokens;
+        inferenceRequest.gracefulCompletionReserveTokens =
+          generationPlan.gracefulCompletionReserveTokens;
         inferenceRequest.generationPlanId = generationPlan.diagnosticsId;
         inferenceRequest.generationTaskKind = generationPlan.taskKind;
         inferenceRequest.loopDetectionEligible = generationPlan.loopDetectionEligible;
@@ -706,6 +729,52 @@ export class ConversationStore implements IConversationStore {
       updatedConversationWithoutMemory,
       input.userMessageId,
     );
+    const planningImages =
+      this.dependencies.listControlledPlanningImages(input.conversationId);
+    const controlledPreflight =
+      input.generationTaskKind !== 'continuation'
+      && this.dependencies.plannerActivation.configuredMode === 'controlled'
+      && !this.dependencies.plannerActivation.rollbackToLegacy
+      && (input.imagePath !== null || planningImages.length > 0);
+    const recoveryCandidates = this.dependencies.listIndependentRecoveryCandidates(
+      snapshot,
+      {
+        imageEntities: planningImages.map((image) => image.entity),
+        entityAliases: planningImages.map((image) => ({
+          id: image.entity.id,
+          sourceMessageId: image.entity.sourceMessageId,
+          aliases: image.aliases,
+        })),
+        activeComparisonImageIds:
+          this.activeComparisonImageIds.get(input.conversationId) ?? [],
+      },
+    );
+    const controlledPlanning = controlledPreflight
+      ? planControlledImageTurn({
+          snapshot,
+          activation: this.dependencies.plannerActivation,
+          images: planningImages,
+          activeComparisonImageIds:
+            this.activeComparisonImageIds.get(input.conversationId) ?? [],
+          planner: this.dependencies.turnPlanner,
+        })
+      : null;
+    if (
+      controlledPlanning !== null
+      && controlledPlanning.planning.plan.planOwner
+        === this.dependencies.plannerActivation.newPlanOwner
+    ) {
+      await this.startControlledImageTurn({
+        activeGeneration,
+        conversation: updatedConversationWithoutMemory,
+        request: { question: input.question, imagePath: input.imagePath },
+        requestId,
+        planning: controlledPlanning,
+        recoveryCandidates,
+        draftConversationId: input.conversationId,
+      });
+      return;
+    }
     const crossChat = this.dependencies.getCrossChatOptions(input.conversationId);
     const queryVector = await this.resolveEligibleQueryVector(
       snapshot,
@@ -932,19 +1001,33 @@ export class ConversationStore implements IConversationStore {
         ),
       });
       if (state.status === 'completed' && state.hiddenEvidence != null) {
-        if (activeGeneration.reinferenceImageAssetId === undefined) {
-          this.dependencies.persistEvidence(
-            activeGeneration.conversationId,
-            activeGeneration.originatingUserMessageId,
-            state.hiddenEvidence,
-          );
-        } else {
-          this.dependencies.persistEvidence(
-            activeGeneration.conversationId,
-            activeGeneration.originatingUserMessageId,
-            state.hiddenEvidence,
-            { imageAssetId: activeGeneration.reinferenceImageAssetId, reinferred: true },
-          );
+        const persistenceStartedAt = this.dependencies.now();
+        let persistenceCompleted = false;
+        try {
+          if (activeGeneration.reinferenceImageAssetId === undefined) {
+            this.dependencies.persistEvidence(
+              activeGeneration.conversationId,
+              activeGeneration.originatingUserMessageId,
+              state.hiddenEvidence,
+            );
+          } else {
+            this.dependencies.persistEvidence(
+              activeGeneration.conversationId,
+              activeGeneration.originatingUserMessageId,
+              state.hiddenEvidence,
+              { imageAssetId: activeGeneration.reinferenceImageAssetId, reinferred: true },
+            );
+          }
+          persistenceCompleted = true;
+        } catch {
+          // A storage failure must not crash or duplicate a completed controlled
+          // answer. Diagnostics retain valid-unpersisted so the image can be
+          // re-inspected from its independently registered identity.
+        } finally {
+          activeGeneration.evidencePersistence = {
+            durationMs: Math.max(0, this.dependencies.now() - persistenceStartedAt),
+            completed: persistenceCompleted,
+          };
         }
       }
       if (state.status === 'completed') {
@@ -993,6 +1076,10 @@ export class ConversationStore implements IConversationStore {
     const trace = state.inferenceTrace;
     const development = isDevelopmentInferenceTraceEnabled();
     const objective = state.objectiveResult ?? null;
+    const execution = withEvidencePersistenceTiming(
+      state.executionDiagnostics ?? null,
+      activeGeneration.evidencePersistence,
+    );
     const modeConfig = getResponseModeConfig(activeGeneration.responseMode);
     const context = activeGeneration.contextDiagnostics;
     const groundingVerdict = activeGeneration.selectedContext === undefined
@@ -1028,7 +1115,15 @@ export class ConversationStore implements IConversationStore {
       promptTokenCount: objective?.promptTokens ?? 0,
       generatedTokenCount: objective?.generatedTokens ?? 0,
       firstTokenTimeMs: objective?.answerTtftMs ?? state.metrics?.firstTokenLatencyMs ?? 0,
-      totalTimeMs: objective?.totalEndToEndLatencyMs ?? state.metrics?.totalWallTimeMs ?? 0,
+      totalTimeMs:
+        execution?.elapsedMs
+        ?? objective?.totalEndToEndLatencyMs
+        ?? state.metrics?.totalWallTimeMs
+        ?? 0,
+      activeStage: execution?.activeStage ?? null,
+      lastCompletedStage: execution?.lastCompletedStage ?? null,
+      latencyStages: execution?.stages ?? [],
+      evidenceState: execution?.evidenceState ?? 'not-applicable',
       finishReason,
       looping: finishReason === 'looping' || objective?.looping === true,
       truncated: finishReason === 'length' || objective?.truncated === true,
@@ -1069,6 +1164,26 @@ export class ConversationStore implements IConversationStore {
         objective?.effectiveNativeGenerationLimit
         ?? activeGeneration.generationPlan?.hardSafetyLimitTokens
         ?? modeConfig.generationLimit,
+      targetTokenBudget:
+        objective?.targetTokenBudget
+        ?? objective?.softTargetTokens
+        ?? activeGeneration.generationPlan?.targetTokenBudget
+        ?? activeGeneration.softTargetTokens
+        ?? modeConfig.answerTargetTokens,
+      emergencyHardCeilingTokens:
+        objective?.emergencyHardCeilingTokens
+        ?? objective?.effectiveNativeGenerationLimit
+        ?? activeGeneration.generationPlan?.emergencyHardCeilingTokens
+        ?? modeConfig.generationLimit,
+      semanticCompletionReached:
+        objective?.semanticCompletionReached
+        ?? (finishReason === 'natural' && state.status === 'completed'),
+      gracefulCompletionModeEntered:
+        objective?.gracefulCompletionModeEntered
+        ?? false,
+      actualStopReason:
+        objective?.actualStopReason
+        ?? diagnosticStopReason(finishReason),
       softTargetTokens:
         objective?.softTargetTokens
         ?? activeGeneration.softTargetTokens
@@ -1090,10 +1205,23 @@ export class ConversationStore implements IConversationStore {
           activeGeneration.requestKind === 'image' ? 'answer' : 'chat',
         ),
       imageSupplied: activeGeneration.imageSupplied,
-      modelId: objective?.modelId ?? 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
-      generationConfigId: objective?.generationConfigId ?? CURRENT_GENERATION_CONFIG_ID,
-      pipelineVariantId: objective?.pipelineVariantId ?? CURRENT_PIPELINE_VARIANT_ID,
-      appBuildId: objective?.appBuildId ?? 'unknown-build',
+      modelId:
+        execution?.modelId
+        ?? objective?.modelId
+        ?? 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+      generationConfigId:
+        execution?.generationConfigId
+        ?? objective?.generationConfigId
+        ?? CURRENT_GENERATION_CONFIG_ID,
+      pipelineVariantId:
+        execution?.pipelineVariantId
+        ?? objective?.pipelineVariantId
+        ?? CURRENT_PIPELINE_VARIANT_ID,
+      appBuildId: execution?.appBuildId ?? objective?.appBuildId ?? 'unknown-build',
+      deviceNameModel:
+        execution?.deviceNameModel
+        ?? objective?.deviceNameModel
+        ?? 'unknown-device',
     };
 
     diagnosticsTraceStore.append({
@@ -1164,6 +1292,8 @@ export class ConversationStore implements IConversationStore {
       imagePath: request.imagePath,
       softTargetTokens: activeGeneration.softTargetTokens,
       hardSafetyLimitTokens: activeGeneration.generationPlan?.hardSafetyLimitTokens,
+      gracefulCompletionReserveTokens:
+        activeGeneration.generationPlan?.gracefulCompletionReserveTokens,
       generationPlanId: activeGeneration.generationPlan?.diagnosticsId,
       generationTaskKind: activeGeneration.generationPlan?.taskKind,
       loopDetectionEligible: activeGeneration.generationPlan?.loopDetectionEligible,
@@ -1389,6 +1519,28 @@ function createRuntimeContextOrchestrator(): ContextOrchestrator {
   });
 }
 
+function withEvidencePersistenceTiming(
+  execution: InferenceExecutionDiagnostics | null,
+  persistence: ActiveGeneration['evidencePersistence'],
+): InferenceExecutionDiagnostics | null {
+  if (execution === null || persistence === undefined) return execution;
+  return {
+    ...execution,
+    elapsedMs: execution.elapsedMs + persistence.durationMs,
+    lastCompletedStage:
+      persistence.completed ? 'evidence-persistence' : execution.lastCompletedStage,
+    stages: [
+      ...execution.stages.filter((stage) => stage.stage !== 'evidence-persistence'),
+      {
+        stage: 'evidence-persistence',
+        durationMs: persistence.durationMs,
+        completed: persistence.completed,
+      },
+    ],
+    evidenceState: persistence.completed ? 'valid' : 'valid-unpersisted',
+  };
+}
+
 function listLexicalCandidates(conversationIds: readonly string[]): RetrievalCandidate[] {
   const chunks = chunkRepository.listRetrievalSourceUnits(conversationIds);
   const evidence = conversationIds.flatMap((conversationId) =>
@@ -1413,15 +1565,19 @@ function listRuntimeControlledPlanningImages(
       entity.id,
       entity.assetRevision,
     );
+    const sourceText = messageRepository.getMessage(entity.sourceMessageId)?.text ?? '';
     return {
       entity,
       evidence,
-      aliases: evidence === null
-        ? []
-        : [
-            evidence.summary,
-            ...evidence.visibleObjects.map((object) => object.label),
-          ].filter((alias) => alias.trim() !== ''),
+      aliases: [
+        sourceText,
+        ...(evidence === null
+          ? []
+          : [
+              evidence.summary,
+              ...evidence.visibleObjects.map((object) => object.label),
+            ]),
+      ].filter((alias) => alias.trim() !== ''),
     };
   });
 }
@@ -1629,6 +1785,16 @@ function resolveMessageFinishReason(
     return state.finishReason ?? 'natural';
   }
   return messageStatus === 'interrupted' ? 'cancelled' : 'failed';
+}
+
+function diagnosticStopReason(
+  finishReason: GenerationFinishReason,
+): import('../inference/GenerationTuning').GenerationActualStopReason {
+  if (finishReason === 'length') return 'emergency-ceiling';
+  if (finishReason === 'looping') return 'loop-detected';
+  if (finishReason === 'cancelled') return 'cancelled';
+  if (finishReason === 'failed') return 'failed';
+  return 'model-eos';
 }
 
 function conversationStatusForMessageStatus(

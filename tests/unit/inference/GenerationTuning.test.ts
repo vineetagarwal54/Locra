@@ -9,6 +9,7 @@ import {
   QWEN_EXTRACTION_SAMPLING_PROFILE,
   QWEN_VISIBLE_SAMPLING_PROFILE,
   createGenerationPlan,
+  createStructuredVisionGenerationPlan,
   resolveGenerationTarget,
 } from '../../../src/inference/GenerationTuning';
 import type { RequestClassification } from '../../../src/inference/RequestClassifier';
@@ -58,7 +59,7 @@ describe('generation tuning', () => {
   it.each([
     ['What is a mutex?', 192],
     ['Give the short definition of a mutex.', 192],
-  ])('uses a concise soft target without shrinking the High hard limit for "%s"', (question) => {
+  ])('uses a concise target with a separate emergency High ceiling for "%s"', (question) => {
     const plan = createGenerationPlan(
       'High',
       question,
@@ -66,16 +67,20 @@ describe('generation tuning', () => {
       'text',
     );
     expect(plan.softTargetTokens).toBeLessThanOrEqual(192);
+    expect(plan.targetTokenBudget).toBe(plan.softTargetTokens);
+    expect(plan.emergencyHardCeilingTokens).toBe(1024);
     expect(plan.hardSafetyLimitTokens).toBe(1024);
-    expect(plan.hardSafetyLimitTokens).toBeGreaterThanOrEqual(plan.softTargetTokens + 128);
+    expect(plan.gracefulCompletionReserveTokens).toBeGreaterThan(0);
     expect(plan.taskKind).toBe('concise-prose');
-    expect(plan.diagnosticsId).toBe('concise-prose-v2');
+    expect(plan.diagnosticsId).toBe('concise-prose-v4');
   });
 
   it.each([
-    'Explain the entire process step by step and include examples.',
-    'Provide a comprehensive comparison of all the options.',
-  ])('preserves the mode hard limit for detailed wording: "%s"', (question) => {
+    ['Write a TypeScript function that parses this input.', 'coding'],
+    ['Compare mutexes and semaphores, including their tradeoffs.', 'comparison'],
+    ['Explain the cause, the impact, and the available mitigations.', 'multi-part-explanation'],
+    ['Give detailed step-by-step instructions to configure the project.', 'detailed-instructions'],
+  ] as const)('selects a completion-aware plan for "%s"', (question, taskKind) => {
     const plan = createGenerationPlan(
       'High',
       question,
@@ -83,10 +88,12 @@ describe('generation tuning', () => {
       'text',
     );
     expect(plan.hardSafetyLimitTokens).toBe(1024);
-    expect(plan.taskKind).toBe('detailed-prose');
+    expect(plan.taskKind).toBe(taskKind);
+    expect(plan.targetTokenBudget).toBe(768);
+    expect(plan.gracefulCompletionReserveTokens).toBeGreaterThanOrEqual(128);
   });
 
-  it('keeps full mode headroom for image descriptions and unbounded extraction lists', () => {
+  it('keeps an emergency ceiling for both image descriptions and extraction lists', () => {
     const extraction = createGenerationPlan(
       'High',
       'List every readable line in these screenshots.',
@@ -105,6 +112,26 @@ describe('generation tuning', () => {
     expect(identification.taskKind).toBe('visual-description');
   });
 
+  it('uses response-mode-independent budgets for structured vision and repair', () => {
+    const extraction = createStructuredVisionGenerationPlan('extraction');
+    const repair = createStructuredVisionGenerationPlan('extractionRetry');
+
+    expect(extraction).toMatchObject({
+      softTargetTokens: 128,
+      hardSafetyLimitTokens: 192,
+      targetTokenBudget: 128,
+      emergencyHardCeilingTokens: 192,
+      taskKind: 'structured-extraction',
+    });
+    expect(repair).toMatchObject({
+      softTargetTokens: 64,
+      hardSafetyLimitTokens: 96,
+      targetTokenBudget: 64,
+      emergencyHardCeilingTokens: 96,
+      taskKind: 'structured-extraction',
+    });
+  });
+
   it('uses full response-mode headroom for an explicit continuation', () => {
     const continuation = createGenerationPlan(
       'Medium',
@@ -120,7 +147,7 @@ describe('generation tuning', () => {
       .toBeGreaterThanOrEqual(continuation.softTargetTokens + 128);
   });
 
-  it('may reduce the native cap only for a structurally bounded answer', () => {
+  it('treats a structurally bounded visible target as guidance with emergency headroom', () => {
     const bounded = createGenerationPlan(
       'High',
       'Reply yes or no.',
@@ -129,9 +156,8 @@ describe('generation tuning', () => {
     );
 
     expect(bounded.taskKind).toBe('structured-extraction');
-    expect(bounded.hardSafetyLimitTokens).toBeLessThan(1024);
-    expect(bounded.hardSafetyLimitTokens)
-      .toBeGreaterThanOrEqual(bounded.softTargetTokens + 128);
+    expect(bounded.softTargetTokens).toBeLessThan(128);
+    expect(bounded.hardSafetyLimitTokens).toBe(1024);
   });
   it('pins visible and structured sampling separately', () => {
     expect(QWEN_VISIBLE_SAMPLING_PROFILE).toEqual({
