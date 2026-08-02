@@ -80,6 +80,20 @@ export class InferenceMetricsRecorder {
     }
   }
 
+  /**
+   * Records the first VISIBLE token for both first-token latency and answer TTFT.
+   * Empty or control-only callbacks (whitespace-only visible text) are ignored so
+   * TTFT is never marked before real output appears; only the first non-empty call
+   * sets the timestamps. See FR-008 first-visible-token timing.
+   */
+  markFirstVisibleToken(visibleCumulativeText: string): void {
+    if (visibleCumulativeText.trim() === '') {
+      return;
+    }
+    this.markFirstToken();
+    this.markAnswerFirstToken();
+  }
+
   markAnswerEnd(): void {
     this.answerEnd = this.now();
   }

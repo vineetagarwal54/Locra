@@ -124,18 +124,41 @@ export class MessageRepository {
     errorMessage: string | null = null,
     finishReason: GenerationFinishReason | null = null,
   ): void {
-    this.driver.runSync(
-      `UPDATE message SET status = ?, error_message = ?, finish_reason = ?, finalized_at = ?
-         WHERE id = ? AND role = 'assistant' AND status = 'generating'`,
-      [status, errorMessage, finishReason, this.now(), attemptId],
-    );
+    runInTransaction(this.driver, () => {
+      const attempt = this.driver.getFirstSync<{ reply_to_message_id: string | null }>(
+        `SELECT reply_to_message_id FROM message
+           WHERE id = ? AND role = 'assistant' AND status = 'generating'`,
+        [attemptId],
+      );
+      if (attempt?.reply_to_message_id == null) {
+        return;
+      }
+      const finalized = this.driver.runSync(
+        `UPDATE message SET status = ?, error_message = ?, finish_reason = ?, finalized_at = ?
+           WHERE id = ? AND role = 'assistant' AND status = 'generating'`,
+        [status, errorMessage, finishReason, this.now(), attemptId],
+      );
+      if (finalized.changes !== 1 || status !== 'completed') {
+        return;
+      }
+      this.driver.runSync(
+        `UPDATE message SET is_active_attempt = 0 WHERE reply_to_message_id = ?`,
+        [attempt.reply_to_message_id],
+      );
+      this.driver.runSync(
+        `UPDATE message SET is_active_attempt = 1 WHERE id = ? AND status = 'completed'`,
+        [attemptId],
+      );
+    });
   }
 
   /**
    * Creates a new assistant attempt for a user message (a retry appends rather
    * than overwrites, FR-011). The new attempt gets the next `attempt_number` and
-   * becomes the active attempt; any prior active attempt for the same user
-   * message is cleared first so the one-active partial unique index holds.
+   * remains non-canonical while a completed attempt is already active. With no
+   * completed answer yet, it remains active so first-attempt failure/retry UI can
+   * still represent its lifecycle. A replacement becomes canonical only when
+   * successful finalization atomically promotes it.
    */
   createAssistantAttempt(
     replyToUserMessageId: string,
@@ -154,18 +177,26 @@ export class MessageRepository {
         [replyToUserMessageId],
       );
       const attemptNumber = (maxRow?.n ?? 0) + 1;
-      this.driver.runSync(
-        `UPDATE message SET is_active_attempt = 0
-           WHERE reply_to_message_id = ? AND is_active_attempt = 1`,
+      const canonical = this.driver.getFirstSync<{ id: string }>(
+        `SELECT id FROM message
+           WHERE reply_to_message_id = ? AND is_active_attempt = 1 AND status = 'completed'`,
         [replyToUserMessageId],
       );
+      const isActiveAttempt = canonical === null ? 1 : 0;
+      if (isActiveAttempt === 1) {
+        this.driver.runSync(
+          `UPDATE message SET is_active_attempt = 0
+             WHERE reply_to_message_id = ? AND is_active_attempt = 1`,
+          [replyToUserMessageId],
+        );
+      }
       const row: MessageRow = {
         id: input.id ?? this.createId(),
         conversation_id: user.conversation_id,
         role: 'assistant',
         reply_to_message_id: replyToUserMessageId,
         attempt_number: attemptNumber,
-        is_active_attempt: 1,
+        is_active_attempt: isActiveAttempt,
         text: '',
         status: 'generating',
         error_message: null,
@@ -177,8 +208,15 @@ export class MessageRepository {
         `INSERT INTO message
            (id, conversation_id, role, reply_to_message_id, attempt_number, is_active_attempt,
             text, status, error_message, finish_reason, finalized_at, created_at)
-         VALUES (?, ?, 'assistant', ?, ?, 1, '', 'generating', NULL, NULL, NULL, ?)`,
-        [row.id, row.conversation_id, row.reply_to_message_id, row.attempt_number, row.created_at],
+         VALUES (?, ?, 'assistant', ?, ?, ?, '', 'generating', NULL, NULL, NULL, ?)`,
+        [
+          row.id,
+          row.conversation_id,
+          row.reply_to_message_id,
+          row.attempt_number,
+          row.is_active_attempt,
+          row.created_at,
+        ],
       );
       return row;
     });
@@ -242,7 +280,11 @@ export class MessageRepository {
     return projection;
   }
 
-  /** User rows plus the selected attempt in any state for bounded UI rendering. */
+  /**
+   * UI projection: show a generating replacement immediately, otherwise show
+   * the canonical active attempt. A replacement does not become canonical
+   * context until successful finalization.
+   */
   getActiveProjection(conversationId: string): MessageRow[] {
     const users = this.driver.getAllSync<MessageRow>(
       `SELECT * FROM message WHERE conversation_id = ? AND role = 'user'
@@ -251,13 +293,16 @@ export class MessageRepository {
     );
     const attempts = this.driver.getAllSync<MessageRow>(
       `SELECT * FROM message WHERE conversation_id = ? AND role = 'assistant'
-         AND is_active_attempt = 1`,
+         AND (is_active_attempt = 1 OR status = 'generating')`,
       [conversationId],
     );
     const byReply = new Map<string, MessageRow>();
     for (const attempt of attempts) {
       if (attempt.reply_to_message_id !== null) {
-        byReply.set(attempt.reply_to_message_id, attempt);
+        const selected = byReply.get(attempt.reply_to_message_id);
+        if (selected === undefined || shouldPreferForUi(attempt, selected)) {
+          byReply.set(attempt.reply_to_message_id, attempt);
+        }
       }
     }
     return users.flatMap((user) => {
@@ -275,4 +320,14 @@ export class MessageRepository {
       [conversationId],
     );
   }
+}
+
+function shouldPreferForUi(candidate: MessageRow, selected: MessageRow): boolean {
+  if (candidate.status === 'generating' && selected.status !== 'generating') {
+    return true;
+  }
+  if (candidate.status !== 'generating' || selected.status !== 'generating') {
+    return false;
+  }
+  return (candidate.attempt_number ?? 0) > (selected.attempt_number ?? 0);
 }

@@ -88,4 +88,89 @@ describe('MessageRepository', () => {
     row = db.driver.getFirstSync('SELECT text, status FROM message WHERE id = ?', ['a1']);
     expect(row?.text).toBe('partial');
   });
+
+  it('keeps the completed attempt canonical when a regeneration is cancelled', () => {
+    const repo = new MessageRepository(db.driver, { now: () => 99 });
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'original');
+    repo.finalizeAttempt('a1', 'completed');
+
+    repo.createAssistantAttempt('u1', { id: 'a2', createdAt: 3 });
+    repo.updateAssistantStreamingText('a2', 'replacement partial');
+    repo.finalizeAttempt('a2', 'interrupted', null, 'cancelled');
+
+    expect(repo.getCanonicalProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+    expect(repo.getActiveProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+    expect(repo.listAllAttempts('c1')).toEqual([
+      expect.objectContaining({ id: 'a1', status: 'completed', text: 'original' }),
+      expect.objectContaining({ id: 'a2', status: 'interrupted', text: 'replacement partial' }),
+    ]);
+  });
+
+  it('shows a streaming replacement while retaining the completed canonical fallback', () => {
+    const repo = new MessageRepository(db.driver, { now: () => 99 });
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'original');
+    repo.finalizeAttempt('a1', 'completed');
+
+    repo.createAssistantAttempt('u1', { id: 'a2', createdAt: 3 });
+    repo.updateAssistantStreamingText('a2', 'replacement partial');
+
+    expect(repo.getActiveProjection('c1')).toEqual([
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ id: 'a2', status: 'generating', text: 'replacement partial' }),
+    ]);
+    expect(repo.getCanonicalProjection('c1')).toEqual([
+      expect.objectContaining({ id: 'u1' }),
+      expect.objectContaining({ id: 'a1', status: 'completed', text: 'original' }),
+    ]);
+  });
+
+  it('keeps the completed attempt canonical when a regeneration fails', () => {
+    const repo = new MessageRepository(db.driver, { now: () => 99 });
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'original');
+    repo.finalizeAttempt('a1', 'completed');
+
+    repo.createAssistantAttempt('u1', { id: 'a2', createdAt: 3 });
+    repo.finalizeAttempt('a2', 'failed', 'replacement failed', 'failed');
+
+    expect(repo.getCanonicalProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+    expect(repo.getActiveProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+  });
+
+  it('atomically promotes a successful regeneration to canonical', () => {
+    const repo = new MessageRepository(db.driver, { now: () => 99 });
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'original');
+    repo.finalizeAttempt('a1', 'completed');
+
+    repo.createAssistantAttempt('u1', { id: 'a2', createdAt: 3 });
+    expect(repo.getCanonicalProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+    repo.updateAssistantStreamingText('a2', 'replacement');
+    repo.finalizeAttempt('a2', 'completed');
+
+    expect(repo.getCanonicalProjection('c1').map((row) => row.id)).toEqual(['u1', 'a2']);
+    expect(repo.getActiveProjection('c1').map((row) => row.id)).toEqual(['u1', 'a2']);
+    expect(repo.listAllAttempts('c1').map((row) => row.id)).toEqual(['a1', 'a2']);
+  });
+
+  it('preserves the canonical attempt when the conversation is reloaded from SQLite', () => {
+    const repo = new MessageRepository(db.driver, { now: () => 99 });
+    repo.appendUserMessage({ id: 'u1', conversationId: 'c1', text: 'q', createdAt: 1 });
+    repo.createAssistantAttempt('u1', { id: 'a1', createdAt: 2 });
+    repo.updateAssistantStreamingText('a1', 'original');
+    repo.finalizeAttempt('a1', 'completed');
+    repo.createAssistantAttempt('u1', { id: 'a2', createdAt: 3 });
+    repo.finalizeAttempt('a2', 'interrupted', null, 'cancelled');
+
+    const reloadedRepo = new MessageRepository(db.driver, { now: () => 100 });
+
+    expect(reloadedRepo.getCanonicalProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+    expect(reloadedRepo.getActiveProjection('c1').map((row) => row.id)).toEqual(['u1', 'a1']);
+  });
 });

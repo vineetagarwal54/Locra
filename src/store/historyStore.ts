@@ -245,7 +245,30 @@ function materializeConversation(id: string): Conversation | null {
 }
 
 function activeProjection(rows: MessageRow[]): MessageRow[] {
-  return rows.filter((row) => row.role === 'user' || row.is_active_attempt === 1);
+  const uiAttemptByUser = new Map<string, MessageRow>();
+  for (const row of rows) {
+    if (row.role !== 'assistant' || row.reply_to_message_id === null) {
+      continue;
+    }
+    if (row.is_active_attempt !== 1 && row.status !== 'generating') {
+      continue;
+    }
+    const selected = uiAttemptByUser.get(row.reply_to_message_id);
+    if (
+      selected === undefined ||
+      (row.status === 'generating' && selected.status !== 'generating') ||
+      (row.status === 'generating' &&
+        selected.status === 'generating' &&
+        (row.attempt_number ?? 0) > (selected.attempt_number ?? 0))
+    ) {
+      uiAttemptByUser.set(row.reply_to_message_id, row);
+    }
+  }
+  return rows.filter(
+    (row) =>
+      row.role === 'user' ||
+      (row.reply_to_message_id !== null && uiAttemptByUser.get(row.reply_to_message_id)?.id === row.id),
+  );
 }
 
 function toConversationMessage(row: MessageRow): ConversationMessage {

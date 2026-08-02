@@ -1,0 +1,6 @@
+- Preserve recent same-chat context.
+- Preserve direct image-to-answer behavior.
+- Failed or cancelled replacement attempts cannot erase a completed answer.
+- Only completed canonical attempts enter summaries, chunks or embeddings.
+- Optional memory/evidence work cannot block visible answers.
+- Change one behavioral layer at a time.

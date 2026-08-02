@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import type { GenerationFinishReason } from '../../types/models';
 import type { SamplingProfile } from '../GenerationTuning';
 import type { EngineGenerateRequest, InferenceEngineHandle } from '../InferenceEngineHandle';
+import type { NativeCompletionDiagnostics } from '../ObjectiveInferenceResultRecord';
 
 import { QwenLlamaRuntime, type LlamaBinding } from './QwenLlamaRuntime';
 
@@ -29,6 +30,7 @@ interface EngineState {
   finishReason: GenerationFinishReason | null;
   inputShortenedWarning: string | null;
   samplingProfile: SamplingProfile | null;
+  nativeCompletion: NativeCompletionDiagnostics | null;
 }
 
 const INITIAL_ENGINE_STATE: EngineState = {
@@ -42,6 +44,7 @@ const INITIAL_ENGINE_STATE: EngineState = {
   finishReason: null,
   inputShortenedWarning: null,
   samplingProfile: null,
+  nativeCompletion: null,
 };
 
 function loadLlamaBinding(): LlamaBinding {
@@ -131,6 +134,7 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
             finishReason: result.finishReason,
             inputShortenedWarning: result.inputShortenedWarning,
             samplingProfile: result.samplingProfile,
+            nativeCompletion: result.nativeCompletion,
           });
           return result.text;
         } catch (error) {
@@ -159,6 +163,8 @@ export function useQwenInferenceEngine(paths: QwenArtifactPaths): InferenceEngin
       getFinishReason: (): GenerationFinishReason | null => stateRef.current.finishReason,
       getInputShortenedWarning: (): string | null => stateRef.current.inputShortenedWarning,
       getSamplingProfile: (): SamplingProfile | null => stateRef.current.samplingProfile,
+      getNativeCompletion: (): NativeCompletionDiagnostics | null =>
+        stateRef.current.nativeCompletion,
       // Locra owns all conversation context; the runtime keeps no native history.
       getMessageHistoryLength: (): number => 0,
       clearHistory: (): void => {},

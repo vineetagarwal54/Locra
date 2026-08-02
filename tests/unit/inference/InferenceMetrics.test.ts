@@ -155,6 +155,44 @@ describe('InferenceMetricsRecorder', () => {
     });
   });
 
+  it('does not set first-visible-token time for empty or control-only callbacks', () => {
+    const clock = makeClock();
+    const recorder = new InferenceMetricsRecorder(clock.now);
+
+    clock.advanceTo(100);
+    recorder.markRequestStart();
+    recorder.markAnswerStart();
+    // Empty and whitespace-only visible cumulative text must NOT start the clock.
+    clock.advanceTo(200);
+    recorder.markFirstVisibleToken('');
+    clock.advanceTo(300);
+    recorder.markFirstVisibleToken('   ');
+    recorder.markAnswerEnd();
+
+    // TTFT was never marked, so timings cannot be built (never a bogus 0/partial).
+    expect(() => recorder.buildObjectiveTimings()).toThrow(/answer first token/);
+  });
+
+  it('sets TTFT once on the first non-empty visible output and never moves it', () => {
+    const clock = makeClock();
+    const recorder = new InferenceMetricsRecorder(clock.now);
+
+    clock.advanceTo(100);
+    recorder.markRequestStart();
+    recorder.markAnswerStart();
+    // Leading empty callbacks are ignored; the first non-empty visible text marks it.
+    clock.advanceTo(200);
+    recorder.markFirstVisibleToken('');
+    clock.advanceTo(325);
+    recorder.markFirstVisibleToken('Hello');
+    clock.advanceTo(500);
+    recorder.markFirstVisibleToken('Hello, world'); // growth must not move TTFT
+    clock.advanceTo(900);
+    recorder.markAnswerEnd();
+
+    expect(recorder.buildObjectiveTimings().answerTtftMs).toBe(225);
+  });
+
   it('throws rather than emitting a partial metrics object when a mark is missing', () => {
     const clock = makeClock();
     const recorder = new InferenceMetricsRecorder(clock.now);

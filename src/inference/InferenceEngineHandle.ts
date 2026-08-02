@@ -2,6 +2,7 @@ import type { GenerationFinishReason, InferenceState } from '../types/models';
 
 import type { ModelRequestMessage } from './ContextBuilder';
 import type { SamplingProfile } from './GenerationTuning';
+import type { NativeCompletionDiagnostics } from './ObjectiveInferenceResultRecord';
 
 /** Plain runtime handle registered by the selected React host. */
 export interface InferenceEngineHandle {
@@ -26,6 +27,8 @@ export interface InferenceEngineHandle {
   /** Warning when the last generation's input was shortened to fit, or null. */
   getInputShortenedWarning?(): string | null;
   getSamplingProfile?(): SamplingProfile | null;
+  /** Raw native completion diagnostics from the last generation, or null. */
+  getNativeCompletion?(): NativeCompletionDiagnostics | null;
   /** Runtime-managed history length; expected to stay empty. */
   getMessageHistoryLength(): number;
   /** Clears request-local native state left by older runtime paths. */
@@ -55,6 +58,8 @@ export interface EngineGenerateResult {
   /** Set when the supplied input was shortened to fit the context window. */
   inputShortenedWarning?: string | null;
   samplingProfile?: SamplingProfile | null;
+  /** Raw native completion diagnostics from the runtime (observe-only), or null. */
+  nativeCompletion?: NativeCompletionDiagnostics | null;
 }
 
 /** Runtime-neutral contract consumed by the single-flight inference queue. */

@@ -1,7 +1,10 @@
 // Shared domain types — data-model.md is the source of truth for field shapes.
 
 import type { InferenceTrace } from '../inference/InferenceTrace';
-import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
+import type {
+  CancellationStage,
+  ObjectiveInferenceResultRecord,
+} from '../inference/ObjectiveInferenceResultRecord';
 import type { HiddenVisualEvidence } from '../inference/OutputPipelineTypes';
 
 export type QASessionStatus = 'streaming' | 'completed' | 'cancelled' | 'errored';
@@ -235,6 +238,8 @@ export interface InferenceState {
   hiddenEvidence?: HiddenVisualEvidence | null;
   objectiveResult?: ObjectiveInferenceResultRecord | null;
   inferenceTrace?: InferenceTrace | null;
+  /** Stage a cancellation was requested in; diagnostics-only, null otherwise. */
+  cancellationStage?: CancellationStage | null;
 }
 
 export interface ModelState {

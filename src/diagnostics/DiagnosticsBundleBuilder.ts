@@ -13,6 +13,12 @@ export interface AppDiagnosticsInfo {
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
   readonly appBuildId: string;
+  /** Git commit SHA the app was built from, or 'unknown' when unavailable. */
+  readonly gitCommitSha: string;
+  /** Git branch the app was built from, or 'unknown' when unavailable. */
+  readonly gitBranch: string;
+  /** Whether the working tree was dirty at build time; null when unknown. */
+  readonly gitDirty: boolean | null;
   readonly deviceNameModel: string;
   readonly exportedAt: string;
   readonly modelDownloadStatus: string;
@@ -89,6 +95,8 @@ function sanitizeAppInfo(appInfo: AppDiagnosticsInfo): AppDiagnosticsInfo {
     generationConfigId: sanitizeSensitive(appInfo.generationConfigId),
     pipelineVariantId: sanitizeSensitive(appInfo.pipelineVariantId),
     appBuildId: sanitizeSensitive(appInfo.appBuildId),
+    gitCommitSha: sanitizeSensitive(appInfo.gitCommitSha),
+    gitBranch: sanitizeSensitive(appInfo.gitBranch),
     deviceNameModel: sanitizeSensitive(appInfo.deviceNameModel),
     activeResourceOperation:
       appInfo.activeResourceOperation === null
@@ -182,7 +190,34 @@ function toTurnJson(turn: DiagnosticTurnRecord): DiagnosticsTurnJson {
     refusalRecoveryTriggered: trace?.stages.some((stage) => stage.refusalRetry === true) ?? false,
     objectiveResult: turn.objectiveResult,
     contextDiagnostics: turn.contextDiagnostics,
-    summary: turn.summary ?? null,
+    summary: sanitizeSummary(turn.summary),
+  };
+}
+
+/**
+ * The production summary is mostly numeric/enumerated, but the image provenance can
+ * carry a local image path — run that identifier through the same secret/path
+ * sanitizer before it is written. Undefined optional fields pass through untouched
+ * so export still succeeds when they are unavailable.
+ */
+function sanitizeSummary(
+  summary: ProductionDiagnosticTurnSummary | undefined,
+): ProductionDiagnosticTurnSummary | null {
+  if (summary == null) {
+    return null;
+  }
+  if (summary.imageProvenance == null) {
+    return summary;
+  }
+  return {
+    ...summary,
+    imageProvenance: {
+      ...summary.imageProvenance,
+      imageIdentifier:
+        summary.imageProvenance.imageIdentifier === null
+          ? null
+          : sanitizeSensitive(summary.imageProvenance.imageIdentifier),
+    },
   };
 }
 

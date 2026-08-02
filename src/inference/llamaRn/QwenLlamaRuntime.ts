@@ -19,6 +19,7 @@ import {
   samplingProfileForRequestKind,
   type SamplingProfile,
 } from '../GenerationTuning';
+import type { NativeCompletionDiagnostics } from '../ObjectiveInferenceResultRecord';
 import { getResponseGenerationLimit, type ResponseMode } from '../ResponseMode';
 
 import {
@@ -151,6 +152,8 @@ export interface QwenGenerateResult {
   /** Set when the supplied input had to be shortened to fit the context window. */
   inputShortenedWarning: string | null;
   samplingProfile: SamplingProfile;
+  /** Raw native stop indicators + token counts, recorded verbatim (observe-only). */
+  nativeCompletion: NativeCompletionDiagnostics;
 }
 
 // ── Typed errors (surfaced to the queue/store boundary) ──────────────────────
@@ -460,8 +463,29 @@ export class QwenLlamaRuntime {
       finishReason: resolveFinishReason(result, generatedTokens, generationLimit),
       inputShortenedWarning,
       samplingProfile,
+      nativeCompletion: buildNativeCompletionDiagnostics(result, generatedTokens, generationLimit),
     };
   }
+}
+
+/**
+ * Captures llama.rn's raw stop indicators verbatim for diagnostics. A flag is
+ * `null` when the native runtime did not report it. This never affects the finish
+ * reason — {@link resolveFinishReason} owns that independently.
+ */
+function buildNativeCompletionDiagnostics(
+  result: QwenNativeCompletionResult,
+  generatedTokens: number,
+  generationLimit: number,
+): NativeCompletionDiagnostics {
+  return {
+    stoppedEos: result.stopped_eos ?? null,
+    stoppedWord: result.stopped_word ?? null,
+    stoppedLimit: result.stopped_limit ?? null,
+    truncated: result.truncated ?? null,
+    generatedTokenCount: generatedTokens,
+    generationLimit,
+  };
 }
 
 /**

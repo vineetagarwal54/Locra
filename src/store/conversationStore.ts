@@ -92,6 +92,7 @@ interface ActiveGeneration {
   conversationId: string;
   originatingUserMessageId: string;
   assistantMessageId: string;
+  createdAt: number;
   contextDiagnostics?: ContextSelectionDiagnostics;
   responseMode: ResponseMode;
   requestKind: DiagnosticRequestKind;
@@ -157,14 +158,19 @@ export class ConversationStore implements IConversationStore {
 
     const resolvedConversationId =
       conversationId === 'new' ? this.dependencies.createId('conversation') : conversationId;
-    const durableImagePath = request.imagePath === null
+    const currentAttachmentPath = request.imagePath === null
       ? null
       : await this.dependencies.persistImage(resolvedConversationId, request.imagePath);
-    const durableRequest = { ...request, imagePath: durableImagePath };
 
     const previousConversation = this.dependencies.historyStore.get(resolvedConversationId);
     const baseConversation =
       previousConversation ?? this.createEmptyConversation(resolvedConversationId);
+    const historicalImage = currentAttachmentPath === null
+      ? resolveHistoricalImageReference(request.question, baseConversation.messages)
+      : { kind: 'none' as const };
+    const inferenceImagePath = currentAttachmentPath
+      ?? (historicalImage.kind === 'resolved' ? historicalImage.path : null);
+    const durableRequest = { ...request, imagePath: inferenceImagePath };
     const timestamp = this.dependencies.now();
     const effectiveResponseMode = conversationId === 'new'
       ? this.getResponseMode('new')
@@ -172,6 +178,49 @@ export class ConversationStore implements IConversationStore {
     const requestId = this.dependencies.createId('request');
     const originatingUserMessageId = this.dependencies.createId('user-message');
     const assistantMessageId = this.dependencies.createId('assistant-message');
+    if (historicalImage.kind === 'unavailable' || historicalImage.kind === 'ambiguous') {
+      const clarification = historicalImage.kind === 'unavailable'
+        ? "I couldn't find that image in this conversation. Please attach it again or refer to an available image."
+        : 'I’m not sure which image you mean. Please specify the first, previous, latest, or numbered image.';
+      this.dependencies.historyStore.save({
+        ...baseConversation,
+        updatedAt: timestamp,
+        status: 'completed',
+        errorMessage: null,
+        messages: [
+          ...baseConversation.messages,
+          {
+            id: originatingUserMessageId,
+            role: 'user',
+            text: request.question,
+            attachments: [],
+            status: 'completed',
+            errorMessage: null,
+            createdAt: timestamp,
+          },
+          {
+            id: assistantMessageId,
+            role: 'assistant',
+            text: clarification,
+            attachments: [],
+            status: 'completed',
+            errorMessage: null,
+            createdAt: timestamp + 1,
+            finishReason: 'natural',
+          },
+        ],
+        responseMode: effectiveResponseMode,
+      });
+      this.setRuntimeState({
+        conversationId: resolvedConversationId,
+        originatingUserMessageId,
+        assistantMessageId,
+        streamingText: clarification,
+        isOwnerOfActiveInference: false,
+      });
+      this.clearDraft(conversationId);
+      return { conversationId: resolvedConversationId, originatingUserMessageId, assistantMessageId };
+    }
     const updatedConversation: Conversation = {
       ...baseConversation,
       updatedAt: timestamp,
@@ -184,7 +233,7 @@ export class ConversationStore implements IConversationStore {
           role: 'user',
           text: durableRequest.question,
           attachments:
-            durableRequest.imagePath === null ? [] : [{ kind: 'image', path: durableRequest.imagePath }],
+            currentAttachmentPath === null ? [] : [{ kind: 'image', path: currentAttachmentPath }],
           status: 'completed',
           errorMessage: null,
           createdAt: timestamp,
@@ -205,6 +254,7 @@ export class ConversationStore implements IConversationStore {
       conversationId: resolvedConversationId,
       originatingUserMessageId,
       assistantMessageId,
+      createdAt: timestamp + 1,
       responseMode: effectiveResponseMode,
       requestKind: durableRequest.imagePath === null ? 'text' : 'image',
       imageSupplied: durableRequest.imagePath !== null,
@@ -375,6 +425,7 @@ export class ConversationStore implements IConversationStore {
       conversationId: input.conversationId,
       originatingUserMessageId: input.userMessageId,
       assistantMessageId: replacementAssistantMessageId,
+      createdAt: now,
       responseMode: input.conversation.responseMode ?? this.dependencies.getDefaultResponseMode(),
       requestKind: 'retry',
       imageSupplied: input.imagePath !== null,
@@ -540,6 +591,27 @@ export class ConversationStore implements IConversationStore {
     const conversation = this.dependencies.historyStore.get(activeGeneration.conversationId);
     if (conversation !== null) {
       const errorMessage = state.status === 'errored' ? state.error ?? 'Inference failed.' : null;
+      const finishedText = state.status === 'completed'
+        ? (composedResponse !== '' ? composedResponse : activeGeneration.lastObservedText)
+        : activeGeneration.lastObservedText;
+      const existingAttempt = conversation.messages.find(
+        (message) => message.id === activeGeneration.assistantMessageId,
+      );
+      const finishedAttempt: ConversationMessage = {
+        id: activeGeneration.assistantMessageId,
+        role: 'assistant',
+        text: finishedText || existingAttempt?.text || '',
+        attachments: existingAttempt?.attachments ?? [],
+        status: messageStatus,
+        errorMessage,
+        createdAt: existingAttempt?.createdAt ?? activeGeneration.createdAt,
+        finishReason,
+      };
+      const messages = existingAttempt === undefined
+        ? [...conversation.messages, finishedAttempt]
+        : conversation.messages.map((message) =>
+            message.id === activeGeneration.assistantMessageId ? finishedAttempt : message
+          );
       this.dependencies.historyStore.save({
         ...conversation,
         updatedAt: this.dependencies.now(),
@@ -554,20 +626,7 @@ export class ConversationStore implements IConversationStore {
                 activeGeneration.originatingUserMessageId,
               )
             : conversation.contextMemory ?? null,
-        messages: conversation.messages.map((message) =>
-          message.id === activeGeneration.assistantMessageId
-            ? {
-                ...message,
-                text:
-                  state.status === 'completed'
-                    ? (composedResponse !== '' ? composedResponse : activeGeneration.lastObservedText)
-                    : activeGeneration.lastObservedText || message.text,
-                status: messageStatus,
-                errorMessage,
-                finishReason,
-              }
-            : message
-        ),
+        messages,
       });
       if (state.status === 'completed' && state.hiddenEvidence != null) {
         this.dependencies.persistEvidence(
@@ -664,6 +723,10 @@ export class ConversationStore implements IConversationStore {
       generationConfigId: objective?.generationConfigId ?? CURRENT_GENERATION_CONFIG_ID,
       pipelineVariantId: objective?.pipelineVariantId ?? CURRENT_PIPELINE_VARIANT_ID,
       appBuildId: objective?.appBuildId ?? 'unknown-build',
+      // Observe-only diagnostics; absent on a cancelled turn (no objective result).
+      imageProvenance: objective?.imageProvenance ?? null,
+      nativeCompletion: objective?.nativeCompletion ?? null,
+      cancellationStage: state.cancellationStage ?? null,
     };
 
     diagnosticsTraceStore.append({
@@ -976,6 +1039,72 @@ function findPairedUserMessage(
 
 function firstImagePath(message: ConversationMessage): string | null {
   return message.attachments.find((attachment) => attachment.kind === 'image')?.path ?? null;
+}
+
+type HistoricalImageResolution =
+  | { kind: 'none' }
+  | { kind: 'resolved'; path: string }
+  | { kind: 'unavailable' }
+  | { kind: 'ambiguous' };
+
+const ORDINAL_IMAGE_WORDS: Readonly<Record<string, number>> = {
+  first: 1,
+  second: 2,
+  third: 3,
+  fourth: 4,
+  fifth: 5,
+  sixth: 6,
+  seventh: 7,
+  eighth: 8,
+  ninth: 9,
+  tenth: 10,
+};
+
+function resolveHistoricalImageReference(
+  question: string,
+  messages: readonly ConversationMessage[],
+): HistoricalImageResolution {
+  const images = messages
+    .filter((message) => message.role === 'user')
+    .flatMap((message) => message.attachments.filter((attachment) => attachment.kind === 'image'));
+  const selectors: number[] = [];
+  const ordinalPattern = /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:image|photo|picture)\b/gi;
+  for (const match of question.matchAll(ordinalPattern)) {
+    const ordinal = ORDINAL_IMAGE_WORDS[match[1]?.toLowerCase() ?? ''];
+    if (ordinal !== undefined) selectors.push(ordinal - 1);
+  }
+  const numericPattern = /\b(\d+)(?:st|nd|rd|th)\s+(?:image|photo|picture)\b/gi;
+  for (const match of question.matchAll(numericPattern)) {
+    selectors.push(Number(match[1]) - 1);
+  }
+  if (/\b(?:latest|last|most recent)\s+(?:image|photo|picture)\b/i.test(question)) {
+    selectors.push(images.length - 1);
+  }
+  if (/\b(?:previous|prior)\s+(?:image|photo|picture)\b/i.test(question)) {
+    selectors.push(images.length - 2);
+  }
+
+  if (selectors.length > 1) {
+    return { kind: 'ambiguous' };
+  }
+  if (selectors.length === 0) {
+    const hasGenericReference =
+      /\b(?:the|that|this|earlier)\s+(?:image|photo|picture)\b/i.test(question) ||
+      /\b(?:image|photo|picture)\s+again\b/i.test(question);
+    if (!hasGenericReference) {
+      return { kind: 'none' };
+    }
+    if (images.length > 1) {
+      return { kind: 'ambiguous' };
+    }
+    selectors.push(0);
+  }
+
+  const selected = images[selectors[0] ?? -1];
+  if (selected === undefined || selected.available === false) {
+    return { kind: 'unavailable' };
+  }
+  return { kind: 'resolved', path: selected.path };
 }
 
 function isInProgressStatus(status: InferenceState['status']): boolean {

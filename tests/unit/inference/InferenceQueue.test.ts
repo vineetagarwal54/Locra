@@ -190,6 +190,92 @@ describe('InferenceQueue', () => {
     expect(state.metrics).toBeNull();
   });
 
+  it('records the cancellation stage as visible_generation without altering cancel behavior', async () => {
+    const gate = deferred<{ response: string; tokenCount: number }>();
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        onToken('partial ans');
+        return gate.promise;
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    const inFlight = queue.submit(request, {
+      turn: 'followUp',
+      conversationContext: createCanonicalConversationContext([]),
+    });
+    await flush();
+
+    queue.cancel();
+
+    // Diagnostics attribution is captured, and the cancel lifecycle is unchanged.
+    expect(queue.getState().status).toBe('cancelling');
+    expect(queue.getState().cancellationStage).toBe('visible_generation');
+
+    gate.resolve({ response: 'ignored', tokenCount: 9 });
+    await inFlight;
+    // Once settled to idle the stage is cleared again.
+    expect(queue.getState().status).toBe('idle');
+    expect(queue.getState().cancellationStage).toBeNull();
+  });
+
+  it('attributes a cancellation requested during model loading to the model_loading stage', async () => {
+    const loadGate = deferred<void>();
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => loadGate.promise,
+      generate: () => Promise.resolve({ response: 'unused', tokenCount: 1 }),
+    };
+    const queue = makeQueue({ engine });
+
+    const inFlight = queue.submit(request, {
+      turn: 'followUp',
+      conversationContext: createCanonicalConversationContext([]),
+    });
+    await flush();
+    expect(queue.getState().status).toBe('loading_model');
+
+    queue.cancel();
+    expect(queue.getState().cancellationStage).toBe('model_loading');
+
+    loadGate.resolve();
+    await inFlight;
+  });
+
+  it('records image execution provenance when image pixels are supplied', async () => {
+    const queue = makeQueue();
+
+    await queue.submit(request);
+
+    expect(queue.getState().objectiveResult?.imageProvenance).toEqual({
+      pixelsSupplied: true,
+      imageIdentifier: '/tmp/capture.jpg',
+      source: 'current-attachment',
+    });
+  });
+
+  it('records image provenance as no-pixels for a text-only follow-up', async () => {
+    const engine: InferenceEngineAdapter = {
+      loadModel: () => Promise.resolve(),
+      generate: (_req, onToken) => {
+        onToken('An answer.');
+        return Promise.resolve({ response: 'An answer.', tokenCount: 3 });
+      },
+    };
+    const queue = makeQueue({ engine });
+
+    await queue.submit(
+      { imagePath: null, question: 'Follow-up?' },
+      { turn: 'followUp', conversationContext: createCanonicalConversationContext([]) },
+    );
+
+    expect(queue.getState().objectiveResult?.imageProvenance).toEqual({
+      pixelsSupplied: false,
+      imageIdentifier: null,
+      source: 'none',
+    });
+  });
+
   it('rejects a follow-up before inference when canonical context is omitted', async () => {
     const generate = jest.fn(() => Promise.resolve({ response: 'unused', tokenCount: 1 }));
     const queue = makeQueue({

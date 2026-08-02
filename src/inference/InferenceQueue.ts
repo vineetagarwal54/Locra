@@ -48,7 +48,11 @@ import {
   type InferenceTrace,
   type InferenceTraceStageKind,
 } from './InferenceTrace';
-import type { ObjectiveInferenceResultRecord } from './ObjectiveInferenceResultRecord';
+import type {
+  CancellationStage,
+  ImageExecutionProvenance,
+  ObjectiveInferenceResultRecord,
+} from './ObjectiveInferenceResultRecord';
 import { DEFAULT_RESPONSE_MODE, getResponseModeConfig, type ResponseMode } from './ResponseMode';
 import {
   buildToolRefusalRecoveryMessages,
@@ -96,6 +100,12 @@ export interface InferenceQueueDeps {
 export interface DeviceBuildMetadata {
   deviceNameModel: string;
   appBuildId: string;
+  /** Full Git commit SHA the app was built from, or 'unknown' when unavailable. */
+  gitCommitSha?: string;
+  /** Git branch the app was built from, or 'unknown' when unavailable. */
+  gitBranch?: string;
+  /** Whether the working tree was dirty at build time; null when unknown. */
+  gitDirty?: boolean | null;
 }
 
 // 'cancelling' is in-flight: a stop was requested but the native call/lease have
@@ -118,6 +128,7 @@ const IDLE_STATE: InferenceState = {
   hiddenEvidence: null,
   objectiveResult: null,
   inferenceTrace: null,
+  cancellationStage: null,
 };
 
 interface ActiveRequest {
@@ -150,6 +161,10 @@ export class InferenceQueue implements IInferenceQueue {
   private readonly createRecorder: () => InferenceMetricsRecorder;
   private readonly activityLock: ActivityLock;
   private readonly resourcePolicy: DeviceResourcePolicy | null;
+  // Diagnostics-only: the stage the active turn is currently in, used to attribute
+  // a cancellation. Never influences routing, locking, or the visible answer.
+  private currentStage: CancellationStage | null = null;
+  private cancelledStage: CancellationStage | null = null;
 
   constructor(private readonly deps: InferenceQueueDeps) {
     this.createRecorder = deps.createRecorder ?? (() => new InferenceMetricsRecorder());
@@ -230,6 +245,9 @@ export class InferenceQueue implements IInferenceQueue {
       inferenceTrace: trace,
     });
 
+    this.currentStage = 'preprocessing';
+    this.cancelledStage = null;
+
     try {
       recorder.markRequestStart();
       recorder.markPreprocessingStart();
@@ -249,6 +267,7 @@ export class InferenceQueue implements IInferenceQueue {
         throw new Error('Model setup needs attention before inference can start.');
       }
 
+      this.currentStage = 'model_loading';
       this.setState({ status: 'loading_model' });
       recorder.markModelLoadStart();
       await this.deps.engine.loadModel();
@@ -256,6 +275,7 @@ export class InferenceQueue implements IInferenceQueue {
       recorder.markModelLoadEnd();
       if (active.cancelled) return;
 
+      this.currentStage = 'visible_generation';
       this.setState({ status: 'streaming' });
       recorder.markInferenceStart();
 
@@ -308,6 +328,7 @@ export class InferenceQueue implements IInferenceQueue {
           result,
           recorder,
           responseMode,
+          resolveImageProvenance(request, processed),
         ),
         inferenceTrace: active.trace,
       });
@@ -373,6 +394,9 @@ export class InferenceQueue implements IInferenceQueue {
     if (active === null || active.cancelled) return;
 
     active.cancelled = true;
+    // Diagnostics-only attribution of the stage the stop was requested in. Captured
+    // before any teardown so it reflects where the turn actually was.
+    this.cancelledStage = this.currentStage;
     active.controller.abort();
     this.lifecycleActor.send({ type: 'CANCEL' });
     if (this.lifecycleGates !== null) {
@@ -390,6 +414,7 @@ export class InferenceQueue implements IInferenceQueue {
       hiddenEvidence: null,
       objectiveResult: null,
       inferenceTrace: null,
+      cancellationStage: this.cancelledStage,
     });
   }
 
@@ -406,6 +431,7 @@ export class InferenceQueue implements IInferenceQueue {
       hiddenEvidence: null,
       objectiveResult: null,
       inferenceTrace: null,
+      cancellationStage: this.cancelledStage,
     });
     this.setState({ ...IDLE_STATE });
   }
@@ -434,6 +460,7 @@ export class InferenceQueue implements IInferenceQueue {
       );
     }
 
+    this.currentStage = 'perception';
     recorder.markPerceptionStart();
     const extractionRequest: EngineGenerateRequest = {
       messages: buildPerceptionModelMessages(
@@ -491,10 +518,10 @@ export class InferenceQueue implements IInferenceQueue {
     }
 
     if (extractionOutcome.hiddenEvidence === null) {
+      this.currentStage = 'visible_generation';
       lifecycleGates.contextAssembly.resolve(undefined);
       recorder.markAnswerStart();
-      recorder.markFirstToken();
-      recorder.markAnswerFirstToken();
+      recorder.markFirstVisibleToken(extractionOutcome.visibleAnswer);
       this.setState({ response: extractionOutcome.visibleAnswer });
       return {
         response: extractionOutcome.visibleAnswer,
@@ -504,6 +531,7 @@ export class InferenceQueue implements IInferenceQueue {
       };
     }
 
+    this.currentStage = 'context_assembly';
     const answerPrompt = buildAnswerPrompt({
       question: request.question,
       hiddenEvidence: extractionOutcome.hiddenEvidence,
@@ -572,6 +600,7 @@ export class InferenceQueue implements IInferenceQueue {
     recorder: InferenceMetricsRecorder,
     requestPatch: Partial<EngineGenerateRequest> = {}
   ): Promise<EngineGenerateResult> {
+    this.currentStage = 'visible_generation';
     recorder.markAnswerStart();
     const generateRequest: EngineGenerateRequest = { messages, responseMode, ...requestPatch };
     const stage: InferenceTraceStageKind =
@@ -583,8 +612,9 @@ export class InferenceQueue implements IInferenceQueue {
       if (active.cancelled) return;
       lastStreamedResponse = cumulative;
       lastGeneratedTokenCount = generatedTokenCount ?? lastGeneratedTokenCount;
-      recorder.markFirstToken();
-      recorder.markAnswerFirstToken();
+      // Only visible, non-empty cumulative text starts the first-token / TTFT
+      // clock — empty or control-only callbacks must not mark it (FR-008).
+      recorder.markFirstVisibleToken(cumulative);
       if (cumulative.length >= 200 && /[.!?…]\s*$/.test(cumulative)) {
         const streamedQuality = postProcessAnswer(cumulative);
         if (streamedQuality.verdict === 'looping') {
@@ -664,6 +694,7 @@ export class InferenceQueue implements IInferenceQueue {
     result: EngineGenerateResult,
     recorder: InferenceMetricsRecorder,
     responseMode: ResponseMode,
+    imageProvenance: ImageExecutionProvenance,
   ): ObjectiveInferenceResultRecord {
     const timings = recorder.buildObjectiveTimings();
     const metadata = this.resolveDeviceBuildMetadata();
@@ -686,9 +717,13 @@ export class InferenceQueue implements IInferenceQueue {
       generationLimit: getResponseModeConfig(responseMode).generationLimit,
       samplingProfile:
         result.samplingProfile ?? samplingProfileForRequestKind('answer'),
+      imageProvenance,
     };
     if (result.promptTokenCount !== undefined) {
       record.promptTokens = result.promptTokenCount;
+    }
+    if (result.nativeCompletion != null) {
+      record.nativeCompletion = result.nativeCompletion;
     }
     return record;
   }
@@ -852,6 +887,22 @@ function toMessage(error: unknown): string {
     return error.message;
   }
   return 'Inference failed for an unknown reason.';
+}
+
+// Diagnostics-only view of how the image reached inference. `processed` is non-null
+// exactly when preprocessed image pixels were supplied to the runtime this turn.
+// Historical-image resolution is unsupported, so the source is only ever the
+// current attachment (or none).
+function resolveImageProvenance(
+  request: InferenceRequest,
+  processed: PreprocessedImage | null,
+): ImageExecutionProvenance {
+  const pixelsSupplied = processed !== null;
+  return {
+    pixelsSupplied,
+    imageIdentifier: pixelsSupplied ? request.imagePath ?? processed?.path ?? null : null,
+    source: pixelsSupplied ? 'current-attachment' : 'none',
+  };
 }
 
 function hasStableAttribution(request: InferenceRequest): boolean {

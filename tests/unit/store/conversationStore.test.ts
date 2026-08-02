@@ -38,6 +38,11 @@ const ID_SEQUENCE = [
   'user-b',
   'assistant-b',
   'request-retry',
+  'user-reinspect',
+  'assistant-reinspect',
+  'request-extra',
+  'user-extra',
+  'assistant-extra',
 ];
 
 class FakeInferenceQueue implements IInferenceQueue {
@@ -312,6 +317,72 @@ describe('conversationStore', () => {
     });
   });
 
+  it('resolves a text-only previous-image follow-up to the durable path and preserves context', async () => {
+    const { store, queue, history } = makeStore();
+    const first = await store.submit('new', {
+      question: 'What is in the first image?',
+      imagePath: '/durable/first.jpg',
+    });
+    queue.emit(makeInferenceState('completed', 'The first image shows a price label.'));
+    await store.submit(first.conversationId, {
+      question: 'What is in this image?',
+      imagePath: '/durable/second.jpg',
+    });
+    queue.emit(makeInferenceState('completed', 'The second image shows a box.'));
+
+    const question = 'Look at the previous image again and read the small label.';
+    const followUp = await store.submit(first.conversationId, { question, imagePath: null });
+
+    expect(queue.submitted.at(-1)).toEqual(
+      expect.objectContaining({
+        assistantMessageId: followUp.assistantMessageId,
+        question,
+        imagePath: '/durable/first.jpg',
+      }),
+    );
+    expect(queue.submittedContexts.at(-1)?.recentTurns).toEqual(
+      expect.arrayContaining([
+        { question: 'What is in the first image?', answer: 'The first image shows a price label.' },
+        { question: 'What is in this image?', answer: 'The second image shows a box.' },
+      ]),
+    );
+    expect(
+      history.get(first.conversationId)?.messages.find((message) => message.id === followUp.originatingUserMessageId)
+        ?.attachments,
+    ).toEqual([]);
+  });
+
+  it('clarifies an unavailable image ordinal without guessing or invoking inference', async () => {
+    const { store, queue, history } = makeStore();
+    const first = await store.submit('new', {
+      question: 'What is this?',
+      imagePath: '/durable/only.jpg',
+    });
+    queue.emit(makeInferenceState('completed', 'It is a receipt.'));
+    const submissionsBefore = queue.submitted.length;
+
+    const question = 'Read the small text in the second image.';
+    const result = await store.submit(first.conversationId, { question, imagePath: null });
+
+    expect(queue.submitted).toHaveLength(submissionsBefore);
+    expect(history.get(first.conversationId)?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: result.originatingUserMessageId,
+          role: 'user',
+          text: question,
+          attachments: [],
+        }),
+        expect.objectContaining({
+          id: result.assistantMessageId,
+          role: 'assistant',
+          status: 'completed',
+          text: expect.stringMatching(/couldn't find.*image.*conversation/i),
+        }),
+      ]),
+    );
+  });
+
   it('persists image evidence and reuses it in a later follow-up context', async () => {
     const { store, queue, history } = makeStore();
     const first = await store.submit('new', {
@@ -566,6 +637,33 @@ describe('conversationStore', () => {
     expect(conversation?.messages.at(-1)?.text).toBe('');
     expect(store.getConversationRuntimeState('conversation-a')?.streamingText).toBe('');
     expect(queue.submitted.at(-1)?.question).toBe('Explain X');
+  });
+
+  it('uses the original completed answer for a follow-up after regeneration is cancelled', async () => {
+    const { store, queue, history } = makeStore();
+    const first = await store.submit('new', { question: 'Explain X', imagePath: null });
+    queue.emit(makeInferenceState('completed', 'Original completed answer'));
+
+    await store.regenerateResponse(first.conversationId, first.assistantMessageId);
+    queue.emit(makeInferenceState('streaming', 'replacement partial'));
+    queue.emit(makeInferenceState('cancelled'));
+
+    expect(history.get(first.conversationId)?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: first.assistantMessageId,
+          status: 'completed',
+          text: 'Original completed answer',
+        }),
+        expect.objectContaining({ status: 'interrupted', text: 'replacement partial' }),
+      ]),
+    );
+
+    await store.submit(first.conversationId, { question: 'What did you just answer?', imagePath: null });
+
+    expect(queue.submittedContexts.at(-1)?.recentTurns).toEqual([
+      { question: 'Explain X', answer: 'Original completed answer' },
+    ]);
   });
 
   it('persists a bounded diagnostic turn record when a dev trace completes', async () => {

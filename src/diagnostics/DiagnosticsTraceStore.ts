@@ -1,7 +1,12 @@
 import type { ContextSelectionDiagnostics } from '../inference/ContextOrchestrator';
 import type { SamplingProfile } from '../inference/GenerationTuning';
 import type { InferenceTrace } from '../inference/InferenceTrace';
-import type { ObjectiveInferenceResultRecord } from '../inference/ObjectiveInferenceResultRecord';
+import type {
+  CancellationStage,
+  ImageExecutionProvenance,
+  NativeCompletionDiagnostics,
+  ObjectiveInferenceResultRecord,
+} from '../inference/ObjectiveInferenceResultRecord';
 import type { ResponseMode } from '../inference/ResponseMode';
 import { storage } from '../storage/mmkv';
 import type { GenerationFinishReason } from '../types/models';
@@ -55,6 +60,12 @@ export interface ProductionDiagnosticTurnSummary {
   readonly generationConfigId: string;
   readonly pipelineVariantId: string;
   readonly appBuildId: string;
+  /** How the image reached inference this turn; null when unavailable. */
+  readonly imageProvenance?: ImageExecutionProvenance | null;
+  /** Raw native stop indicators for this turn; null when unavailable. */
+  readonly nativeCompletion?: NativeCompletionDiagnostics | null;
+  /** Stage a cancellation was requested in; null for non-cancelled turns. */
+  readonly cancellationStage?: CancellationStage | null;
 }
 
 interface DiagnosticsIndexEntry {

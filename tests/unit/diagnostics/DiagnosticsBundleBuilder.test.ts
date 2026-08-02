@@ -4,8 +4,45 @@ import {
   sanitizeSensitive,
   type AppDiagnosticsInfo,
 } from '../../../src/diagnostics/DiagnosticsBundleBuilder';
-import type { DiagnosticTurnRecord } from '../../../src/diagnostics/DiagnosticsTraceStore';
+import type {
+  DiagnosticTurnRecord,
+  ProductionDiagnosticTurnSummary,
+} from '../../../src/diagnostics/DiagnosticsTraceStore';
 import type { Conversation } from '../../../src/types/models';
+
+function makeSummary(
+  overrides: Partial<ProductionDiagnosticTurnSummary> = {},
+): ProductionDiagnosticTurnSummary {
+  return {
+    responseMode: 'Medium',
+    requestKind: 'image',
+    promptTokenCount: 44,
+    generatedTokenCount: 6,
+    firstTokenTimeMs: 120,
+    totalTimeMs: 700,
+    finishReason: 'natural',
+    looping: false,
+    truncated: false,
+    contextSelection: {
+      recentTurnsConsidered: 0,
+      recentTurnsSelected: 0,
+      mediaEvidenceSelected: 0,
+      factsSelected: 0,
+      summariesSelected: 0,
+      budgetMaximumUnits: 1000,
+      budgetUsedUnits: 0,
+    },
+    targetTokenCount: 320,
+    generationLimit: 512,
+    samplingProfile: { id: 'test-sampling-v1', temperature: 0.7, topP: 0.9, topK: 40 },
+    imageSupplied: true,
+    modelId: 'QWEN3_VL_2B_INSTRUCT_Q4_K_M',
+    generationConfigId: 'qwen3-vl-2b-instruct-llamarn-v1',
+    pipelineVariantId: 'qwen-visible-sampling-v2',
+    appBuildId: '1.0.0+1',
+    ...overrides,
+  };
+}
 
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
@@ -79,6 +116,9 @@ const APP_INFO: AppDiagnosticsInfo = {
   generationConfigId: 'recommended-lfm2-vl-v1',
   pipelineVariantId: 'recommended-sampling-v1',
   appBuildId: '1.0.0+1',
+  gitCommitSha: 'abc1234',
+  gitBranch: 'main',
+  gitDirty: false,
   deviceNameModel: 'Google Pixel 8',
   exportedAt: '2026-07-10T00:00:00.000Z',
   modelDownloadStatus: 'downloaded',
@@ -116,6 +156,81 @@ describe('DiagnosticsBundleBuilder', () => {
     expect(bundle.conversations[0]?.messages).toHaveLength(2);
     expect(bundle.turns).toHaveLength(1);
     expect(bundle.turns[0]?.stages).toHaveLength(2);
+  });
+
+  it('exports the git build-provenance fields in app info', () => {
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [],
+      turns: [],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.appInfo.gitCommitSha).toBe('abc1234');
+    expect(bundle.appInfo.gitBranch).toBe('main');
+    expect(bundle.appInfo.gitDirty).toBe(false);
+  });
+
+  it('passes through native completion, image provenance, and cancellation stage in the summary', () => {
+    const summary = makeSummary({
+      nativeCompletion: {
+        stoppedEos: true,
+        stoppedWord: false,
+        stoppedLimit: false,
+        truncated: false,
+        generatedTokenCount: 6,
+        generationLimit: 512,
+      },
+      imageProvenance: {
+        pixelsSupplied: true,
+        imageIdentifier: 'asset://image-123',
+        source: 'current-attachment',
+      },
+      cancellationStage: null,
+    });
+
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [],
+      turns: [makeTurn({ trace: null, summary })],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.turns[0]?.summary?.nativeCompletion).toEqual(summary.nativeCompletion);
+    expect(bundle.turns[0]?.summary?.imageProvenance?.pixelsSupplied).toBe(true);
+    expect(bundle.turns[0]?.summary?.imageProvenance?.imageIdentifier).toBe('asset://image-123');
+  });
+
+  it('sanitizes a local image path carried in the summary image provenance', () => {
+    const summary = makeSummary({
+      imageProvenance: {
+        pixelsSupplied: true,
+        imageIdentifier: 'file:///data/user/0/app/cache/photo.jpg',
+        source: 'current-attachment',
+      },
+    });
+
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [],
+      turns: [makeTurn({ trace: null, summary })],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.turns[0]?.summary?.imageProvenance?.imageIdentifier).toBe('[local path omitted]');
+    expect(JSON.stringify(bundle)).not.toContain('/data/user/0/app/cache/photo.jpg');
+  });
+
+  it('still exports a turn whose summary omits the optional diagnostic fields', () => {
+    const summary = makeSummary(); // no imageProvenance / nativeCompletion / cancellationStage
+
+    const bundle = buildDiagnosticsBundleJson({
+      conversations: [],
+      turns: [makeTurn({ trace: null, summary })],
+      appInfo: APP_INFO,
+    });
+
+    expect(bundle.turns).toHaveLength(1);
+    expect(bundle.turns[0]?.summary?.imageProvenance).toBeUndefined();
+    expect(bundle.turns[0]?.summary?.nativeCompletion).toBeUndefined();
+    expect(bundle.turns[0]?.summary?.modelId).toBe('QWEN3_VL_2B_INSTRUCT_Q4_K_M');
   });
 
   it('derives refusalRecoveryTriggered from a stage marked as a refusal retry', () => {
